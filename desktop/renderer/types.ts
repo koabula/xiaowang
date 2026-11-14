@@ -18,16 +18,23 @@ declare global {
       saveSettings: (patch: SettingsPatch) => Promise<SettingsView>;
       listModels: (patch: SettingsPatch) => Promise<string[]>;
       checkSettings: (patch: SettingsPatch) => Promise<string>;
+      openKeyPage: (service: string, region: string) => Promise<void>;
       browserBounds: (bounds: Bounds | null) => Promise<void>;
       browserGo: (url: string) => Promise<string>;
       browserBack: () => Promise<void>;
       browserForward: () => Promise<void>;
       browserHolder: (holder: "bot" | "user") => Promise<void>;
+      callStart: (slug: string) => Promise<void>;
+      callStop: () => Promise<void>;
+      previewVoice: (patch: SettingsPatch) => Promise<void>;
+      callAudio: (audio: string) => void;
+      callIdle: (serial: number) => void;
       onState: (callback: (state: AppState) => void) => () => void;
       onStep: (callback: (step: StepNote) => void) => () => void;
       onStage: (callback: (view: StageNote) => void) => () => void;
       onBrowser: (callback: (state: BrowserNote) => void) => () => void;
       onDownload: (callback: (note: DownloadNote) => void) => () => void;
+      onCall: (callback: (note: CallNote) => void) => () => void;
     };
   }
 }
@@ -48,10 +55,12 @@ export interface BotRow {
 
 export interface ChatItem {
   id: number;
-  kind: "user" | "assistant" | "tool" | "file" | "note";
+  kind: "user" | "assistant" | "tool" | "file" | "note" | "call";
   text: string;
   name?: string;
   isError?: boolean;
+  lines?: Array<{ who: "user" | "assistant"; text: string }>;
+  seconds?: number;
 }
 
 export interface LibraryItem {
@@ -68,6 +77,13 @@ export interface SettingsView {
   searchProvider: string;
   searchUrl: string;
   searchKeyHint: string;
+  realtimeModel: string;
+  realtimeUrl: string;
+  realtimeKeyHint: string;
+  realtimeService: string;
+  realtimeVoice: string;
+  realtimeRegion: string;
+  realtimeWorkspace: string;
   ready: boolean;
 }
 
@@ -79,6 +95,27 @@ export interface SettingsPatch {
   searchKey?: string;
   searchUrl?: string;
   searchProvider?: string;
+  realtimeModel?: string;
+  realtimeUrl?: string;
+  realtimeKey?: string;
+  realtimeService?: string;
+  realtimeVoice?: string;
+  realtimeRegion?: string;
+  realtimeWorkspace?: string;
+}
+
+export interface CallNote {
+  slug: string;
+  phase: "connecting" | "live" | "closed" | "audio" | "interrupt" | "line" | "saved";
+  detail?: string;
+  who?: "user" | "assistant";
+  text?: string;
+  partial?: boolean;
+  audio?: string;
+  serial?: number;
+  inputRate?: number;
+  outputRate?: number;
+  preview?: boolean;
 }
 
 export interface Bounds {

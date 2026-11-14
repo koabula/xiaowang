@@ -246,6 +246,27 @@ test("a turn wakes from the session, and spawn does not copy the parent transcri
   close();
 });
 
+test("a finished call is one record in the text context", () => {
+  const { runtime, close } = openRuntime();
+  const bot = runtime.activeBot();
+  runtime.store.append(bot.id, {
+    type: "call",
+    startedAt: "2026-11-14T08:00:00.000Z",
+    endedAt: "2026-11-14T08:00:15.000Z",
+    lines: [
+      { who: "assistant", text: "你好，我是小王同学。" },
+      { who: "user", text: "今天先看到这里。" },
+    ],
+  });
+  const projected = projectLlmContext(bot, runtime.store.getEvents(bot.id));
+  const flat = projected.messages.map((message) => message.content).join("\n");
+  assert.match(flat, /通话记录/);
+  assert.match(flat, /今天先看到这里/);
+  const brief = projectVoiceBrief(bot, runtime.store.getEvents(bot.id));
+  assert.equal(brief.recentTurns.some((turn) => turn.text.includes("今天先看到这里")), true);
+  close();
+});
+
 test("arxiv atom entries become compact citations", () => {
   const papers = parseArxivAtom(`<?xml version="1.0"?>
 <feed>

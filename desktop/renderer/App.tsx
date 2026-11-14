@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, Eye, FileText, Globe, Mic, MousePointer2, PanelRight, Plus, Presentation, Search, Settings, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, AudioLines, Check, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Eye, FileText, Globe, MessageSquareText, Mic, MicOff, MousePointer2, PanelRight, Phone, PhoneOff, Play, Plus, Presentation, RefreshCw, Search, Settings, Square, X } from "lucide-react";
+import * as Select from "@radix-ui/react-select";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Avatar, nextAvatarSeed } from "./avatar.tsx";
 import { INK_CHOICES, inkFor } from "./ink.ts";
-import type { AppState, BotRow, BrowserNote, ChatItem, LibraryItem, SettingsPatch, StageNote } from "./types.ts";
+import { createCallAudio } from "./call-audio.ts";
+import { REALTIME_SERVICES, modelsFor, resolveRealtime, voicesFor, type RealtimeRegion, type RealtimeServiceId } from "../../src/realtime-catalog.ts";
+import { mergeUtterance } from "../../src/realtime.ts";
+import type { AppState, BotRow, BrowserNote, CallNote, ChatItem, LibraryItem, SettingsPatch, StageNote } from "./types.ts";
 
 type StageSnap = {
   mode: "file" | "browser" | "slides" | "profile";
@@ -27,7 +31,11 @@ export function App() {
   const [creating, setCreating] = useState(false);
   const [botName, setBotName] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [callOpen, setCallOpen] = useState(false);
+  const [call, setCall] = useState<LiveCallView | null>(null);
+  const audioRef = useRef(createCallAudio(
+    (audio) => window.xiaowang.callAudio(audio),
+    (serial) => window.xiaowang.callIdle(serial),
+  ));
   const [toast, setToast] = useState("");
   const [rightWidth, setRightWidth] = useState(420);
   const [leftWidth, setLeftWidth] = useState(252);
@@ -49,7 +57,7 @@ export function App() {
   const current = state?.bots.find((bot) => bot.slug === active);
   const steward = state?.bots.find((bot) => bot.slug === "xiaowang");
   const ink = current?.avatarInk || inkFor(active || "xiaowang");
-  const covered = settingsOpen || callOpen || (state !== null && !state.settings.ready);
+  const covered = settingsOpen || (state !== null && !state.settings.ready);
 
   function patchStage(slug: string, patch: Partial<StageSnap>) {
     if (!slug) return;
@@ -69,6 +77,9 @@ export function App() {
         if (note.slug && note.slug === activeRef.current) void window.xiaowang.library(note.slug).then(setLibrary);
       }),
       window.xiaowang.onStage((view) => rememberStage(view)),
+      window.xiaowang.onCall((note) => {
+        void hearCall(note);
+      }),
       window.xiaowang.onStep((step) => {
         if (!step.activity?.trim()) return;
         setActivityBySlug((prev) => ({ ...prev, [step.slug]: step.activity!.trim() }));
@@ -162,6 +173,75 @@ export function App() {
     patchStage(slug, { open: true });
   }
 
+  async function hearCall(note: CallNote) {
+    if (note.preview) return;
+    if (note.phase === "live") {
+      setCall({ phase: "live", captions: [], muted: false });
+      try {
+        await audioRef.current.start(note.inputRate || 16_000, note.outputRate || 24_000);
+      } catch (error) {
+        audioRef.current.stop();
+        setCall(null);
+        setToast(plainError(error));
+        void window.xiaowang.callStop();
+      }
+      return;
+    }
+    if (note.phase === "audio" && note.audio) {
+      audioRef.current.play(note.audio, note.serial);
+      return;
+    }
+    if (note.phase === "interrupt") {
+      audioRef.current.interrupt();
+      return;
+    }
+    if (note.phase === "line" && note.text && note.who) {
+      const who = note.who;
+      const text = note.text;
+      const partial = Boolean(note.partial);
+      setCall((currentCall) => currentCall ? { ...currentCall, captions: foldCaption(currentCall.captions, who, text, partial) } : currentCall);
+      return;
+    }
+    if (note.phase === "saved" && note.slug === activeRef.current) {
+      setItems(await window.xiaowang.events(note.slug));
+      return;
+    }
+    if (note.phase === "closed") {
+      audioRef.current.stop();
+      setCall(null);
+      if (note.detail) setToast(note.detail);
+    }
+  }
+
+  async function endCall() {
+    audioRef.current.stop();
+    await window.xiaowang.callStop();
+    setCall(null);
+  }
+
+  function toggleMute() {
+    setCall((currentCall) => {
+      if (!currentCall) return currentCall;
+      const muted = !currentCall.muted;
+      audioRef.current.setMuted(muted);
+      return { ...currentCall, muted };
+    });
+  }
+
+  async function toggleCall() {
+    if (call) {
+      await endCall();
+      return;
+    }
+    setCall({ phase: "connecting", captions: [], muted: false });
+    try {
+      await window.xiaowang.callStart(activeRef.current);
+    } catch (error) {
+      setCall(null);
+      setToast(plainError(error));
+    }
+  }
+
   async function createBot() {
     const name = botName.trim();
     if (!name) return;
@@ -223,8 +303,21 @@ export function App() {
             <PanelRight size={16} />
           </button>
         </header>
+        {call ? (
+          <section className="call-stage">
+            <Avatar slug={active || "xiaowang"} seed={current?.avatarSeed} ink={current?.avatarInk} size={88} mood={callMood(call)} />
+            <p>{callStatus(call)}</p>
+            <CallLines lines={call.captions} ink={ink} />
+            <div className="call-controls">
+              <button type="button" title={call.muted ? "打开麦克风" : "静音"} onClick={toggleMute}>
+                {call.muted ? <MicOff size={16} /> : <Mic size={16} />}
+              </button>
+              <button className="end" type="button" title="挂断" onClick={() => void endCall()}><PhoneOff size={16} /></button>
+            </div>
+          </section>
+        ) : null}
         <div className="messages" ref={threadRef}>
-          {items.filter(isConversation).map((item) => <Message key={item.id} item={item} ink={ink} />)}
+          {items.filter(isConversation).map((item) => <Message key={item.id} item={item} ink={ink} name={current?.name || "小王同学"} />)}
           {busy ? (
             <div className="thinking">
               <Avatar slug={active || "xiaowang"} seed={current?.avatarSeed} ink={current?.avatarInk} size={28} mood="think" />
@@ -251,20 +344,11 @@ export function App() {
             }}
           />
           <button className="icon" type="button" title="听写还没接上"><Mic size={18} /></button>
-          {busy ? (
-            <button className="call stop" type="button" title="停下" onClick={() => void window.xiaowang.stop(active)}>停</button>
-          ) : (
-            <button className="call" style={{ background: ink }} type="button" title="通话" onClick={() => setCallOpen(true)}>
-              <span /><span /><span /><span />
-            </button>
-          )}
+          {busy ? <button className="call stop" type="button" title="停下" onClick={() => void window.xiaowang.stop(active)}><Square size={14} /></button> : null}
+          <button className={call ? "call stop" : "call"} style={call ? undefined : { background: ink }} type="button" title={call ? "挂断" : "通话"} onClick={() => void toggleCall()}>
+            {call ? <PhoneOff size={16} /> : <><span /><span /><span /><span /></>}
+          </button>
         </form>
-        {callOpen ? (
-          <div className="popover">
-            <p>实时通话下一阶段接通。文字、资料和浏览器现在就可以一起用。</p>
-            <button type="button" onClick={() => setCallOpen(false)}>知道了</button>
-          </div>
-        ) : null}
       </main>
 
       {stageOpen ? <div className="split" onPointerDown={(event) => dragSize(event, rightWidth, setRightWidth, -1)} /> : null}
@@ -335,7 +419,7 @@ export function App() {
 }
 
 function isConversation(item: ChatItem): boolean {
-  return (item.kind === "user" || item.kind === "assistant") && item.text.trim().length > 0;
+  return item.kind === "call" || ((item.kind === "user" || item.kind === "assistant") && item.text.trim().length > 0);
 }
 
 function plainError(error: unknown): string {
@@ -345,13 +429,79 @@ function plainError(error: unknown): string {
   return message.length > 160 ? `${message.slice(0, 160)}…` : message;
 }
 
-function Message({ item, ink }: { item: ChatItem; ink: string }) {
+function Message({ item, ink, name }: { item: ChatItem; ink: string; name: string }) {
+  if (item.kind === "call") return <CallCard item={item} name={name} ink={ink} />;
   if (item.kind === "user") return <div className="bubble user" style={{ background: ink }}>{item.text}</div>;
   return (
     <div className="bubble assistant">
       <Markdown remarkPlugins={[remarkGfm]}>{item.text}</Markdown>
     </div>
   );
+}
+
+function CallCard({ item, name, ink }: { item: ChatItem; name: string; ink: string }) {
+  const [open, setOpen] = useState(false);
+  const seconds = item.seconds ?? 0;
+  const clock = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  return (
+    <article className="call-card">
+      <button type="button" title={open ? "收起通话记录" : "展开通话记录"} onClick={() => setOpen((value) => !value)}>
+        <Phone size={14} />
+        <span>{name}</span>
+        <span>{clock}</span>
+        <ChevronDown size={14} />
+      </button>
+      {open ? <CallLines lines={item.lines ?? []} ink={ink} /> : null}
+    </article>
+  );
+}
+
+function CallLines({ lines, ink }: { lines: Array<{ who: "user" | "assistant"; text: string }>; ink: string }) {
+  return (
+    <div className="call-lines">
+      {lines.map((line, index) => (
+        <p key={`${line.who}-${index}`} className={line.who} style={line.who === "user" ? { background: ink } : undefined}>{line.text}</p>
+      ))}
+    </div>
+  );
+}
+
+interface LiveCaption {
+  who: "user" | "assistant";
+  text: string;
+  live: boolean;
+}
+
+interface LiveCallView {
+  phase: "connecting" | "live";
+  captions: LiveCaption[];
+  muted: boolean;
+}
+
+function foldCaption(captions: LiveCaption[], who: "user" | "assistant", text: string, partial: boolean): LiveCaption[] {
+  const next = captions.slice(-6);
+  const last = next[next.length - 1];
+  const revised = Boolean(last && !last.live && !partial && mergeUtterance(last.text, text) === text);
+  const same = last?.who === who && (last.live || text.startsWith(last.text) || last.text.startsWith(text) || revised);
+  if (last && same) {
+    next[next.length - 1] = { who, text, live: partial };
+  } else {
+    next.push({ who, text, live: partial });
+  }
+  return next.slice(-4);
+}
+
+function callStatus(call: LiveCallView): string {
+  if (call.phase === "connecting") return "正在接通";
+  const last = call.captions[call.captions.length - 1];
+  if (last?.live && last.who === "user") return "正在听";
+  if (last?.live && last.who === "assistant") return "正在说";
+  return "通话中";
+}
+
+function callMood(call: LiveCallView): "idle" | "think" {
+  const last = call.captions[call.captions.length - 1];
+  return last?.live && last.who === "assistant" ? "think" : "idle";
 }
 
 function FileStage({
@@ -420,6 +570,43 @@ function SlideStage({ slides, onIndex }: { slides: { title: string; pages: strin
   );
 }
 
+function FieldSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{ value: string; label: string }>;
+}) {
+  return (
+    <Select.Root value={value} onValueChange={onChange}>
+      <Select.Trigger className="field" aria-label={label}>
+        <Select.Value />
+        <Select.Icon>
+          <ChevronDown size={16} strokeWidth={1.75} />
+        </Select.Icon>
+      </Select.Trigger>
+      <Select.Portal>
+        <Select.Content className="menu" position="popper" sideOffset={6} collisionPadding={12}>
+          <Select.Viewport className="menu-scroll">
+            {options.map((option) => (
+              <Select.Item className="menu-item" key={option.value} value={option.value}>
+                <Select.ItemText>{option.label}</Select.ItemText>
+                <Select.ItemIndicator>
+                  <Check size={14} strokeWidth={1.75} />
+                </Select.ItemIndicator>
+              </Select.Item>
+            ))}
+          </Select.Viewport>
+        </Select.Content>
+      </Select.Portal>
+    </Select.Root>
+  );
+}
+
 function SettingsPanel({
   settings,
   forced,
@@ -431,14 +618,89 @@ function SettingsPanel({
   onClose: () => void;
   onSave: (patch: SettingsPatch) => Promise<void>;
 }) {
+  const saved = resolveRealtime({
+    service: settings?.realtimeService,
+    model: settings?.realtimeModel,
+    voice: settings?.realtimeVoice,
+    region: settings?.realtimeRegion,
+    workspace: settings?.realtimeWorkspace,
+    url: settings?.realtimeUrl,
+  });
   const [model, setModel] = useState(settings?.model ?? "");
   const [models, setModels] = useState<string[]>([]);
   const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? "");
   const [apiStyle, setApiStyle] = useState(settings?.apiStyle ?? "");
   const [apiKey, setApiKey] = useState("");
+  const [service, setService] = useState<RealtimeServiceId>(saved.service);
+  const [realtimeModel, setRealtimeModel] = useState(saved.model);
+  const [voice, setVoice] = useState(saved.voice);
+  const [region, setRegion] = useState<RealtimeRegion>(saved.region);
+  const [workspace, setWorkspace] = useState(saved.workspace);
+  const [realtimeKey, setRealtimeKey] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
-  const patch = { model, baseUrl, apiStyle, apiKey };
+  const [previewing, setPreviewing] = useState(false);
+  const previewAudio = useRef(createCallAudio(() => {}));
+  const patch: SettingsPatch = {
+    model,
+    baseUrl,
+    apiStyle,
+    apiKey,
+    realtimeService: service,
+    realtimeModel,
+    realtimeVoice: voice,
+    realtimeRegion: region,
+    realtimeWorkspace: workspace,
+    realtimeKey,
+  };
+  const voiceChoices = voicesFor(service, realtimeModel);
+  const modelChoices = modelsFor(service);
+  const needsWorkspace = service === "qwen" && realtimeModel.startsWith("qwen3.8");
+
+  useEffect(() => {
+    const audio = previewAudio.current;
+    return window.xiaowang.onCall((note) => {
+      if (!note.preview) return;
+      if (note.phase === "live") {
+        setPreviewing(true);
+        void audio.startPlayback(note.outputRate ?? 24_000);
+      }
+      if (note.phase === "audio" && note.audio) audio.play(note.audio);
+      if (note.phase === "closed") {
+        setPreviewing(false);
+        if (note.detail) setNotice(note.detail);
+      }
+    });
+  }, []);
+  useEffect(() => () => previewAudio.current.stop(), []);
+
+  function chooseService(next: RealtimeServiceId) {
+    const nextModel = modelsFor(next)[0]?.id ?? "";
+    setService(next);
+    setRealtimeModel(nextModel);
+    setVoice(voicesFor(next, nextModel)[0]?.id ?? "");
+  }
+
+  function chooseRealtimeModel(next: string) {
+    setRealtimeModel(next);
+    const nextVoices = voicesFor(service, next);
+    if (!nextVoices.some((item) => item.id === voice)) setVoice(nextVoices[0]?.id ?? "");
+  }
+
+  async function preview() {
+    if (previewing) {
+      await window.xiaowang.callStop();
+      previewAudio.current.interrupt();
+      setPreviewing(false);
+      return;
+    }
+    setNotice("");
+    try {
+      await window.xiaowang.previewVoice(patch);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    }
+  }
 
   async function loadModels() {
     setBusy(true);
@@ -469,35 +731,72 @@ function SettingsPanel({
 
   return (
     <div className="modal">
-      <form onSubmit={(event) => { event.preventDefault(); void onSave({ model, baseUrl, apiStyle, apiKey }); }}>
+      <form onSubmit={(event) => { event.preventDefault(); void onSave(patch); }}>
         <header>
           <strong>{forced ? "先接上模型" : "设置"}</strong>
-          {forced ? null : <button type="button" onClick={onClose}><X size={16} /></button>}
+          {forced ? null : <button type="button" aria-label="关闭" onClick={onClose}><X size={16} strokeWidth={1.75} /></button>}
         </header>
-        <label>接口风格
-          <select value={apiStyle} onChange={(event) => setApiStyle(event.target.value)}>
-            <option value="">自动</option>
-            <option value="openai">OpenAI 兼容</option>
-            <option value="anthropic">Anthropic</option>
-          </select>
-        </label>
-        <label>接口地址<input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.deepseek.com/v1" /></label>
-        <label>模型密钥<input value={apiKey} type="password" onChange={(event) => setApiKey(event.target.value)} placeholder={settings?.keyHint || "只显示末四位"} /></label>
-        <div className="row">
-          <button type="button" disabled={busy} onClick={() => void loadModels()}>获取模型</button>
-          <button type="button" disabled={busy} onClick={() => void check()}>检查</button>
+        <div className="columns">
+        <section>
+          <h2><MessageSquareText size={16} strokeWidth={1.75} />文字</h2>
+          <label>接口风格
+            <FieldSelect label="接口风格" value={apiStyle || "auto"} onChange={(value) => setApiStyle(value === "auto" ? "" : value)} options={[
+              { value: "auto", label: "自动" },
+              { value: "openai", label: "OpenAI 兼容" },
+              { value: "anthropic", label: "Anthropic" },
+            ]} />
+          </label>
+          <label>接口地址<input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.deepseek.com/v1" /></label>
+          <label>模型密钥<input value={apiKey} type="password" onChange={(event) => setApiKey(event.target.value)} placeholder={settings?.keyHint || "只显示末四位"} /></label>
+          <div className="row">
+            <button type="button" disabled={busy} onClick={() => void loadModels()}><RefreshCw size={15} strokeWidth={1.75} />获取模型</button>
+            <button type="button" disabled={busy} onClick={() => void check()}><Check size={15} strokeWidth={1.75} />检查</button>
+          </div>
+          <label>模型
+            {models.length > 0 ? (
+              <FieldSelect label="模型" value={model} onChange={setModel} options={models.map((id) => ({ value: id, label: id }))} />
+            ) : (
+              <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="deepseek-chat" />
+            )}
+          </label>
+        </section>
+        <section>
+          <h2><AudioLines size={16} strokeWidth={1.75} />通话</h2>
+          <div className="field-block">
+            <span>服务</span>
+            <div className="with-action">
+              <FieldSelect label="服务" value={service} onChange={(value) => chooseService(value as RealtimeServiceId)} options={REALTIME_SERVICES.map((item) => ({ value: item.id, label: item.name }))} />
+              <button type="button" onClick={() => void window.xiaowang.openKeyPage(service, region)}><ExternalLink size={15} strokeWidth={1.75} />获取密钥</button>
+            </div>
+          </div>
+          {service === "qwen" ? (
+            <label>地域
+              <FieldSelect label="地域" value={region} onChange={(value) => setRegion(value as RealtimeRegion)} options={[
+                { value: "beijing", label: "北京" },
+                { value: "singapore", label: "新加坡" },
+              ]} />
+            </label>
+          ) : null}
+          {needsWorkspace ? (
+            <label>工作空间<input value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder="工作空间 ID，或完整 wss 地址" /></label>
+          ) : null}
+          <label>密钥<input value={realtimeKey} type="password" onChange={(event) => setRealtimeKey(event.target.value)} placeholder={settings?.realtimeKeyHint || "这一家的密钥"} /></label>
+          <label>模型
+            <FieldSelect label="模型" value={realtimeModel} onChange={chooseRealtimeModel} options={modelChoices.map((item) => ({ value: item.id, label: `${item.name} · ${item.id}` }))} />
+          </label>
+          <div className="field-block">
+            <span>音色</span>
+            <div className="with-action">
+              <FieldSelect label="音色" value={voice} onChange={setVoice} options={voiceChoices.map((item) => ({ value: item.id, label: `${item.name} · ${item.id}` }))} />
+              <button type="button" onClick={() => void preview()}>{previewing ? <Square size={14} strokeWidth={1.75} /> : <Play size={15} strokeWidth={1.75} />}{previewing ? "停止" : "试听"}</button>
+            </div>
+          </div>
+        </section>
         </div>
-        <label>模型
-          {models.length > 0 ? (
-            <select value={model} onChange={(event) => setModel(event.target.value)}>
-              {models.map((id) => <option key={id} value={id}>{id}</option>)}
-            </select>
-          ) : (
-            <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="deepseek-chat" />
-          )}
-        </label>
-        {notice ? <p>{notice}</p> : <p>密钥写入系统钥匙串，不会进入会话。</p>}
-        <button className="primary" type="submit">保存并进入</button>
+        <footer>
+          {notice ? <p>{notice}</p> : null}
+          <button className="primary" type="submit">保存并进入</button>
+        </footer>
       </form>
     </div>
   );

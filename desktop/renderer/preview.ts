@@ -1,4 +1,5 @@
-import type { AppState, BrowserNote, ChatItem, DownloadNote, LibraryItem, SettingsPatch, SettingsView, StageNote, StepNote } from "./types.ts";
+import { realtimeKeyPage } from "../../src/realtime-catalog.ts";
+import type { AppState, BrowserNote, CallNote, ChatItem, DownloadNote, LibraryItem, SettingsPatch, SettingsView, StageNote, StepNote } from "./types.ts";
 
 /** 普通浏览器里预览界面。桌面端有 preload 时不会装上。 */
 export function installPreviewBridge(): void {
@@ -13,6 +14,13 @@ export function installPreviewBridge(): void {
       searchProvider: "",
       searchUrl: "",
       searchKeyHint: "",
+      realtimeModel: "",
+      realtimeUrl: "",
+      realtimeKeyHint: "",
+      realtimeService: "",
+      realtimeVoice: "",
+      realtimeRegion: "",
+      realtimeWorkspace: "",
       ready: true,
     },
     bots: [
@@ -39,6 +47,7 @@ export function installPreviewBridge(): void {
     stage: new Set<(view: StageNote) => void>(),
     browser: new Set<(state: BrowserNote) => void>(),
     download: new Set<(note: DownloadNote) => void>(),
+    call: new Set<(note: CallNote) => void>(),
   };
   const publish = () => listeners.state.forEach((callback) => callback(state));
   window.xiaowang = {
@@ -86,11 +95,48 @@ export function installPreviewBridge(): void {
       return next;
     },
     async stop(_slug?: string) {},
+    async callStart(slug) {
+      const note = (phase: CallNote["phase"], extra: Partial<CallNote> = {}) => {
+        listeners.call.forEach((callback) => callback({ slug, phase, ...extra }));
+      };
+      note("live", { inputRate: 16_000, outputRate: 24_000 });
+      note("line", { who: "assistant", text: "你好，我是小王同学。", partial: false });
+      note("line", { who: "user", text: "今天先看到这里。", partial: true });
+      note("line", { who: "user", text: "今天先看到这里。", partial: false });
+    },
+    async previewVoice() {
+      throw new Error("预览里没有接通实时模型。");
+    },
+    async callStop() {
+      const slug = state.activeSlug;
+      const next = [...(chats.get(slug) ?? []), {
+        id: Date.now(),
+        kind: "call" as const,
+        text: "你好，我是小王同学。",
+        seconds: 15,
+        lines: [
+          { who: "assistant" as const, text: "你好，我是小王同学。" },
+          { who: "user" as const, text: "今天先看到这里。" },
+        ],
+      }];
+      chats.set(slug, next);
+      listeners.call.forEach((callback) => callback({ slug, phase: "closed" }));
+      listeners.call.forEach((callback) => callback({ slug, phase: "saved" }));
+    },
+    callAudio() {},
+    callIdle() {},
+    onCall(callback) {
+      listeners.call.add(callback);
+      return () => listeners.call.delete(callback);
+    },
     async saveSettings(patch: SettingsPatch) {
-      const settings: SettingsView = { ...state.settings, model: patch.model || state.settings.model, baseUrl: patch.baseUrl ?? state.settings.baseUrl, apiStyle: patch.apiStyle ?? state.settings.apiStyle, ready: true };
+      const settings: SettingsView = { ...state.settings, model: patch.model || state.settings.model, baseUrl: patch.baseUrl ?? state.settings.baseUrl, apiStyle: patch.apiStyle ?? state.settings.apiStyle, realtimeService: patch.realtimeService ?? state.settings.realtimeService, realtimeModel: patch.realtimeModel ?? state.settings.realtimeModel, realtimeVoice: patch.realtimeVoice ?? state.settings.realtimeVoice, realtimeRegion: patch.realtimeRegion ?? state.settings.realtimeRegion, realtimeWorkspace: patch.realtimeWorkspace ?? state.settings.realtimeWorkspace, ready: true };
       state = { ...state, settings };
       publish();
       return settings;
+    },
+    async openKeyPage(service: string, region: string) {
+      window.open(realtimeKeyPage(service, region), "_blank", "noopener,noreferrer");
     },
     async listModels() {
       return ["deepseek-chat", "qwen-plus"];

@@ -68,6 +68,11 @@ export function projectVoiceBrief(
       turns.push({ role: "user", text: clip(event.text, 180) });
     } else if (event.type === "assistant_turn" && event.text.trim()) {
       turns.push({ role: "assistant", text: clip(event.text, 180) });
+    } else if (event.type === "call") {
+      for (const line of event.lines) {
+        if (!line.text.trim()) continue;
+        turns.push({ role: line.who === "user" ? "user" : "assistant", text: clip(line.text, 180) });
+      }
     }
   }
   const artifacts = events
@@ -174,6 +179,14 @@ function groupUnits(events: StoredEvent[]): Unit[] {
       units.push(toUnit([{ role: "user", content: event.text }]));
       continue;
     }
+    if (event.type === "call") {
+      const body = event.lines
+        .filter((line) => line.text.trim())
+        .map((line) => `${line.who === "user" ? "用户" : "助手"}：${line.text.trim()}`)
+        .join("\n");
+      if (body) units.push(toUnit([{ role: "user", content: `通话记录：\n${body}` }]));
+      continue;
+    }
     if (event.type !== "assistant_turn") continue;
     if (!event.text.trim() && event.toolCalls.length === 0) continue;
 
@@ -195,7 +208,7 @@ function groupUnits(events: StoredEvent[]): Unit[] {
       const seen = new Set<string>();
       while (i + 1 < events.length) {
         const next = events[i + 1]?.event;
-        if (!next || next.type === "user_text" || next.type === "assistant_turn") break;
+        if (!next || next.type === "user_text" || next.type === "assistant_turn" || next.type === "call") break;
         i += 1;
         if (next.type !== "tool_result") continue;
         seen.add(next.callId);

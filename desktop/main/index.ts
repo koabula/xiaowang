@@ -1,11 +1,16 @@
-import { app, BrowserWindow, dialog, ipcMain, protocol, session } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, protocol, session, shell } from "electron";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { LiveCall } from "./call.ts";
 import { runTurn } from "../../src/harness.ts";
+import { formatVoiceBrief, projectVoiceBrief } from "../../src/project.ts";
 import { checkModel, configFromEnv, createProvider, listModels } from "../../src/provider.ts";
+import { keyForService, realtimeKeyPage, resolveRealtime } from "../../src/realtime-catalog.ts";
+import { PREVIEW_LINE, doubaoSession, realtimeEndpoint, realtimeInstructions, sessionUpdate, socketUrl, voiceTools } from "../../src/realtime.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { resolveHome } from "../../src/store.ts";
+import { executeTool, toolSchemas } from "../../src/tools.ts";
 import type { BrowserDriver, StageView } from "../../src/stage.ts";
 import { BROWSER_BUSY } from "../../src/stage.ts";
 import type { SessionEvent } from "../../src/types.ts";
@@ -33,14 +38,23 @@ let secrets: SecretRecord = {
   searchKey: "",
   searchUrl: "",
   searchProvider: "",
+  realtimeModel: "",
+  realtimeUrl: "",
+  realtimeKey: "",
+  realtimeService: "",
+  realtimeVoice: "",
+  realtimeRegion: "",
+  realtimeWorkspace: "",
 };
 
 interface ChatItem {
   id: number;
-  kind: "user" | "assistant" | "tool" | "file" | "note";
+  kind: "user" | "assistant" | "tool" | "file" | "note" | "call";
   text: string;
   name?: string;
   isError?: boolean;
+  lines?: Array<{ who: "user" | "assistant"; text: string }>;
+  seconds?: number;
 }
 
 interface BotRow {
@@ -93,6 +107,16 @@ function present(id: number, event: SessionEvent): ChatItem | null {
   }
   if (event.type === "assistant_turn" && event.text.trim()) {
     return { id, kind: "assistant", text: event.text };
+  }
+  if (event.type === "call" && event.lines.some((line) => line.text.trim())) {
+    const elapsed = Math.round((Date.parse(event.endedAt) - Date.parse(event.startedAt)) / 1000);
+    return {
+      id,
+      kind: "call",
+      text: event.lines.map((line) => line.text).join("\n"),
+      lines: event.lines,
+      seconds: Number.isFinite(elapsed) ? Math.max(1, elapsed) : 1,
+    };
   }
   if (event.type === "tool_result") {
     return {
@@ -176,6 +200,7 @@ async function ask(slug: string, text: string, signal: AbortSignal): Promise<voi
 }
 
 let turns = new Map<string, AbortController>();
+let live: LiveCall | null = null;
 
 function browserFor(slug: string): BrowserDriver {
   const claim = (): string | null => {
@@ -281,10 +306,46 @@ function registerIpc(): void {
     if (!draft.apiKey && !/localhost|127\.0\.0\.1/.test(draft.baseUrl)) throw new Error("请先填写模型密钥。");
     return checkModel(configFromEnv(envFromRecord(draft)));
   });
+  ipcMain.handle("link:key", (_event, service: string, region: string) => {
+    return shell.openExternal(realtimeKeyPage(typeof service === "string" ? service : "", typeof region === "string" ? region : ""));
+  });
   ipcMain.handle("settings:save", (_event, patch: SecretPatch) => {
-    secrets = mergeSecrets(secrets, patch);
+    const choice = resolveRealtime({
+      service: patch.realtimeService,
+      model: patch.realtimeModel,
+      voice: patch.realtimeVoice,
+      region: patch.realtimeRegion,
+      workspace: patch.realtimeWorkspace,
+      url: secrets.realtimeUrl,
+    });
+    secrets = mergeSecrets(secrets, {
+      ...patch,
+      realtimeService: choice.service,
+      realtimeModel: choice.model,
+      realtimeVoice: choice.voice,
+      realtimeRegion: choice.region,
+      realtimeWorkspace: choice.model.startsWith("qwen3.8") ? choice.workspace : "",
+      realtimeUrl: choice.url,
+    });
     publish();
     return publicSettings(secrets);
+  });
+  ipcMain.handle("call:start", (_event, slug: string) => {
+    startCall(slug);
+  });
+  ipcMain.handle("call:preview", (_event, patch: SecretPatch) => {
+    startPreview(patch);
+  });
+  ipcMain.handle("call:stop", () => {
+    live?.hangup();
+    live = null;
+  });
+  ipcMain.on("call:audio", (_event, audio: string) => {
+    if (typeof audio !== "string" || !audio) return;
+    live?.sendAudio(Buffer.from(audio, "base64"));
+  });
+  ipcMain.on("call:idle", (_event, serial: number) => {
+    live?.noteSpeakerIdle(serial);
   });
   ipcMain.handle("browser:bounds", (_event, bounds: { x: number; y: number; width: number; height: number } | null) => {
     browser.setBounds(bounds);
@@ -348,8 +409,152 @@ async function createWindow(): Promise<void> {
   });
 }
 
+function realtimeChoice() {
+  return resolveRealtime({
+    service: secrets.realtimeService,
+    model: secrets.realtimeModel,
+    voice: secrets.realtimeVoice,
+    region: secrets.realtimeRegion,
+    workspace: secrets.realtimeWorkspace,
+    url: secrets.realtimeUrl,
+  });
+}
+
+function startPreview(patch: SecretPatch): void {
+  if (live) throw new Error("正在通话。挂断后再试听。");
+  const choice = resolveRealtime({
+    service: patch.realtimeService,
+    model: patch.realtimeModel,
+    voice: patch.realtimeVoice,
+    region: patch.realtimeRegion,
+    workspace: patch.realtimeWorkspace,
+  });
+  if (!choice.url) throw new Error("先填写通义千问的工作空间。");
+  const key = patch.realtimeKey?.trim() || keyForService(choice.service, secrets.realtimeKey, secrets.apiKey, secrets.baseUrl);
+  if (!key) throw new Error("先填写这一家的密钥。");
+  const endpoint = realtimeEndpoint({ url: choice.url, model: choice.model });
+  const session = endpoint.family === "doubao"
+    ? doubaoSession({ instructions: "试听音色。", tools: [], voice: choice.voice })
+    : sessionUpdate({
+      instructions: "试听音色。用户要求说一句时，只说那一句。",
+      tools: [],
+      audioFormat: endpoint.audioFormat,
+      transcriptionModel: endpoint.transcriptionModel,
+      voice: choice.voice,
+    });
+  openCall(socketUrl(endpoint), key, session, endpoint.inputRate, endpoint.outputRate, "", PREVIEW_LINE);
+}
+
+function startCall(slug: string): void {
+  const choice = realtimeChoice();
+  const key = keyForService(choice.service, secrets.realtimeKey, secrets.apiKey, secrets.baseUrl);
+  if (!key) throw new Error("先在设置里填写这一家的密钥。");
+  if (!choice.url) throw new Error("先填写通义千问的工作空间。");
+  const endpoint = realtimeEndpoint({ url: choice.url, model: choice.model });
+  const bot = runtime.store.requireBot(slug);
+  const person = runtime.ensureSteward().name;
+  const library = runtime.store.listLibrary(bot.id).map((ref) => ({ id: ref.id, filename: ref.filename }));
+  const brief = formatVoiceBrief(projectVoiceBrief(bot, runtime.store.getEvents(bot.id), { library }), person);
+  const instructions = realtimeInstructions(person, brief);
+  const tools = voiceTools(toolSchemas());
+  const session = endpoint.family === "doubao"
+    ? doubaoSession({ instructions, tools, voice: choice.voice })
+    : sessionUpdate({
+      instructions,
+      tools,
+      audioFormat: endpoint.audioFormat,
+      transcriptionModel: endpoint.transcriptionModel,
+      voice: choice.voice,
+    });
+  openCall(socketUrl(endpoint), key, session, endpoint.inputRate, endpoint.outputRate, slug, "", {
+    async runTool(name, args) {
+      let input: unknown = {};
+      try {
+        input = args.trim() ? JSON.parse(args) : {};
+      } catch {
+        input = null;
+      }
+      const outcome = await executeTool(name, input, {
+        store: runtime.store,
+        bot,
+        enqueueKickoff: (job) => runtime.enqueueKickoff(job),
+        env: envFromSecrets(),
+        browser: browserFor(slug),
+        stage: {
+          show(view) {
+            send("stage", { slug: bot.slug, ...view });
+            publish();
+          },
+        },
+      });
+      runtime.store.append(bot.id, {
+        type: "tool_result",
+        callId: `voice_${Date.now()}`,
+        name,
+        output: outcome.output,
+        isError: outcome.isError,
+      });
+      publish();
+      return outcome.output;
+    },
+  });
+}
+
+function openCall(
+  url: string,
+  key: string,
+  session: Record<string, unknown>,
+  inputRate: number,
+  outputRate: number,
+  slug: string,
+  previewText: string,
+  extra?: {
+    onTranscript?: (who: "user" | "assistant", text: string) => void;
+    runTool?: (name: string, args: string) => Promise<string>;
+  },
+): void {
+  const preview = Boolean(previewText);
+  live?.hangup();
+  let call: LiveCall;
+  call = new LiveCall(url, key, session, {
+    onPhase(phase, detail) {
+      if (phase === "closed" && !preview && slug) {
+        const lines = call.transcript();
+        if (lines.length > 0) {
+          const bot = runtime.store.requireBot(slug);
+          runtime.store.append(bot.id, { type: "call", startedAt: call.startedAt(), endedAt: new Date().toISOString(), lines });
+          publish();
+          send("call", { slug, phase: "saved" });
+        }
+      }
+      send("call", { slug, phase, detail: detail ?? "", preview, inputRate, outputRate });
+      if (phase === "closed") live = null;
+    },
+    onAudio(pcm, serial) {
+      send("call", { slug, phase: "audio", preview, audio: pcm.toString("base64"), serial });
+    },
+    onInterrupt() {
+      if (!preview) send("call", { slug, phase: "interrupt" });
+    },
+    onLine(who, text, partial) {
+      if (!preview) send("call", { slug, phase: "line", who, text, partial });
+    },
+    onTranscript(who, text) {
+      extra?.onTranscript?.(who, text);
+    },
+    runTool(name, args) {
+      return extra?.runTool?.(name, args) ?? Promise.resolve("");
+    },
+  }, undefined, previewText);
+  live = call;
+  call.start();
+}
+
 app.whenReady().then(async () => {
   runtime = Runtime.open(resolveHome());
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === "media");
+  });
   protocol.handle("xwlib", (request) => {
     try {
       const url = new URL(request.url);

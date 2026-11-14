@@ -10,6 +10,13 @@ export interface SecretRecord {
   searchKey: string;
   searchUrl: string;
   searchProvider: string;
+  realtimeModel: string;
+  realtimeUrl: string;
+  realtimeKey: string;
+  realtimeService: string;
+  realtimeVoice: string;
+  realtimeRegion: string;
+  realtimeWorkspace: string;
 }
 
 export interface SecretPatch {
@@ -20,6 +27,13 @@ export interface SecretPatch {
   searchKey?: string;
   searchUrl?: string;
   searchProvider?: string;
+  realtimeModel?: string;
+  realtimeUrl?: string;
+  realtimeKey?: string;
+  realtimeService?: string;
+  realtimeVoice?: string;
+  realtimeRegion?: string;
+  realtimeWorkspace?: string;
 }
 
 export interface SettingsView {
@@ -30,6 +44,13 @@ export interface SettingsView {
   searchProvider: string;
   searchUrl: string;
   searchKeyHint: string;
+  realtimeModel: string;
+  realtimeUrl: string;
+  realtimeKeyHint: string;
+  realtimeService: string;
+  realtimeVoice: string;
+  realtimeRegion: string;
+  realtimeWorkspace: string;
   ready: boolean;
 }
 
@@ -41,6 +62,13 @@ const EMPTY: SecretRecord = {
   searchKey: "",
   searchUrl: "",
   searchProvider: "",
+  realtimeModel: "",
+  realtimeUrl: "",
+  realtimeKey: "",
+  realtimeService: "",
+  realtimeVoice: "",
+  realtimeRegion: "",
+  realtimeWorkspace: "",
 };
 
 function filePath(): string {
@@ -64,7 +92,7 @@ export function mergeSecrets(current: SecretRecord, patch: SecretPatch): SecretR
   for (const key of Object.keys(patch) as (keyof SecretPatch)[]) {
     const value = patch[key];
     if (typeof value !== "string") continue;
-    if ((key === "apiKey" || key === "searchKey") && !value.trim()) continue;
+    if ((key === "apiKey" || key === "searchKey" || key === "realtimeKey") && !value.trim()) continue;
     next[key] = value.trim();
   }
   const payload = JSON.stringify(next);
@@ -83,6 +111,13 @@ export function publicSettings(secrets: SecretRecord): SettingsView {
     searchProvider: secrets.searchProvider,
     searchUrl: secrets.searchUrl,
     searchKeyHint: hint(secrets.searchKey),
+    realtimeModel: secrets.realtimeModel,
+    realtimeUrl: secrets.realtimeUrl,
+    realtimeKeyHint: hint(secrets.realtimeKey),
+    realtimeService: secrets.realtimeService,
+    realtimeVoice: secrets.realtimeVoice,
+    realtimeRegion: secrets.realtimeRegion,
+    realtimeWorkspace: secrets.realtimeWorkspace,
     ready: Boolean(secrets.model) && (Boolean(secrets.apiKey) || local),
   };
 }

@@ -32,6 +32,7 @@ export interface ToolCall {
 export type SessionEvent =
   | { type: "user_text"; channel: Channel; text: string }
   | { type: "assistant_turn"; channel: Channel; text: string; toolCalls: ToolCall[] }
+  | { type: "call"; startedAt: string; endedAt: string; lines: Array<{ who: "user" | "assistant"; text: string }> }
   | { type: "tool_result"; callId: string; name: string; output: string; isError: boolean }
   | { type: "baseline"; text: string; fromBotId?: string }
   | { type: "artifact"; path: string; bytes: number };
