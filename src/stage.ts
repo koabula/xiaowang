@@ -47,4 +47,5 @@ export function splitSlides(markdown: string): string[] {
 }
 
 export const BROWSER_ABSENT = "应用内浏览器还没接上。请在桌面端打开右栏的浏览器。";
+export const BROWSER_BUSY = "另一个任务正在使用浏览器。等它用完再打开。";
 export const USER_HAS_BROWSER = "用户正在控制浏览器。等用户点「停止」交还之后再操作。页面可以先用 browser_snapshot 看。";

@@ -265,7 +265,7 @@ const TOOLS: Tool[] = [
         if (!host.browser) return { isError: true, output: BROWSER_ABSENT };
         const blocked = botBlocked(host.browser);
         if (blocked) return { isError: true, output: blocked };
-        return { isError: false, output: await host.browser.navigate(url) };
+        return browserOutcome(await host.browser.navigate(url));
       }
       if (mode === "slides") {
         const pathArg = requireString(input, "path");
@@ -296,7 +296,7 @@ const TOOLS: Tool[] = [
       const url = assertHttpUrl(requireOk(input.url));
       if (typeof url !== "string") return { isError: true, output: url.error };
       host.stage?.show({ mode: "browser", url });
-      return { isError: false, output: await driver.navigate(url) };
+      return browserOutcome(await driver.navigate(url));
     },
   },
   {
@@ -307,7 +307,7 @@ const TOOLS: Tool[] = [
     },
     async run(_input, host) {
       if (!host.browser) return { isError: true, output: BROWSER_ABSENT };
-      return { isError: false, output: await host.browser.snapshot() };
+      return browserOutcome(await host.browser.snapshot());
     },
   },
   {
@@ -325,7 +325,7 @@ const TOOLS: Tool[] = [
       if (isSensitiveBrowserTarget(target)) {
         return { isError: true, output: `「${target}」像是付款、提交或删除。请让用户取得控制权，在页面里自己完成。` };
       }
-      return { isError: false, output: await ready.click(target) };
+      return browserOutcome(await ready.click(target));
     },
   },
   {
@@ -349,7 +349,7 @@ const TOOLS: Tool[] = [
       if (isSensitiveBrowserTarget(target) || /password|密码/i.test(target)) {
         return { isError: true, output: "密码只在页面里由用户输入。请让用户取得控制权。" };
       }
-      return { isError: false, output: await ready.type(target, input.text) };
+      return browserOutcome(await ready.type(target, input.text));
     },
   },
   {
@@ -363,7 +363,7 @@ const TOOLS: Tool[] = [
       if (typeof ready !== "object" || !("scroll" in ready)) return ready;
       const direction = input.direction === "up" ? "up" : input.direction === "down" ? "down" : "";
       if (!direction) return { isError: true, output: "direction 只能是 up 或 down。" };
-      return { isError: false, output: await ready.scroll(direction) };
+      return browserOutcome(await ready.scroll(direction));
     },
   },
   {
@@ -375,7 +375,7 @@ const TOOLS: Tool[] = [
     async run(_input, host) {
       const ready = readyBrowser(host);
       if (typeof ready !== "object" || !("back" in ready)) return ready;
-      return { isError: false, output: await ready.back() };
+      return browserOutcome(await ready.back());
     },
   },
   {
@@ -570,6 +570,10 @@ const TOOLS: Tool[] = [
     },
   },
 ];
+
+function browserOutcome(output: string): ToolOutcome {
+  return { isError: output.startsWith("另一个任务正在使用浏览器"), output };
+}
 
 function requireOk(value: unknown): string {
   return typeof value === "string" ? value : "";

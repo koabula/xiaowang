@@ -73,7 +73,7 @@ export function installPreviewBridge(): void {
       chats.set(slug, next);
       return next;
     },
-    async stop() {},
+    async stop(_slug?: string) {},
     async saveSettings(patch: SettingsPatch) {
       const settings: SettingsView = { ...state.settings, model: patch.model || state.settings.model, baseUrl: patch.baseUrl ?? state.settings.baseUrl, apiStyle: patch.apiStyle ?? state.settings.apiStyle, ready: true };
       state = { ...state, settings };

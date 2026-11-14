@@ -59,6 +59,13 @@ test("tool transcripts become openai and anthropic messages", () => {
   assert.equal(anthropic[1]?.role, "assistant");
   assert.equal(anthropic[2]?.role, "user");
   assert.equal(Array.isArray(anthropic[2]?.content), true);
+  const skipped = toOpenAIMessages("系统", [
+    { role: "user", content: "上一问" },
+    { role: "assistant", content: "  " },
+    { role: "user", content: "分析一下" },
+  ]);
+  assert.equal(skipped.some((item) => (item as { role?: string }).role === "assistant"), false);
+  assert.equal(JSON.stringify(skipped).includes('"content":null'), false);
 });
 
 test("providers parse tool calls and redact keys from errors", async () => {

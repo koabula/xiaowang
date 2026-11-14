@@ -6,13 +6,23 @@ import { Avatar } from "./avatar.tsx";
 import { inkFor } from "./ink.ts";
 import type { AppState, BrowserNote, ChatItem, LibraryItem, SettingsPatch, StageNote } from "./types.ts";
 
+type StageSnap = {
+  mode: "file" | "browser" | "slides";
+  open: boolean;
+  file: { id: string; filename: string; page: number } | null;
+  slides: { title: string; pages: string[]; index: number } | null;
+};
+
+const EMPTY_STAGE: StageSnap = { mode: "file", open: true, file: null, slides: null };
+
 export function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [items, setItems] = useState<ChatItem[]>([]);
   const [library, setLibrary] = useState<LibraryItem[]>([]);
-  const [mode, setMode] = useState<"file" | "browser" | "slides">("file");
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [draftBySlug, setDraftBySlug] = useState<Record<string, string>>({});
+  const [busyBySlug, setBusyBySlug] = useState<Record<string, boolean>>({});
+  const [activityBySlug, setActivityBySlug] = useState<Record<string, string>>({});
+  const [stageBySlug, setStageBySlug] = useState<Record<string, StageSnap>>({});
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
   const [botName, setBotName] = useState("");
@@ -21,17 +31,29 @@ export function App() {
   const [toast, setToast] = useState("");
   const [rightWidth, setRightWidth] = useState(420);
   const [leftWidth, setLeftWidth] = useState(252);
-  const [stageOpen, setStageOpen] = useState(true);
-  const [file, setFile] = useState<{ id: string; filename: string; page: number } | null>(null);
-  const [slides, setSlides] = useState<{ title: string; pages: string[]; index: number } | null>(null);
   const [browser, setBrowser] = useState<BrowserNote>({ url: "", title: "", holder: "bot", loading: false });
   const [address, setAddress] = useState("");
   const holeRef = useRef<HTMLDivElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
+  const activeRef = useRef("");
   const active = state?.activeSlug ?? "";
+  activeRef.current = active;
+  const stage = stageBySlug[active] ?? EMPTY_STAGE;
+  const mode = stage.mode;
+  const file = stage.file;
+  const slides = stage.slides;
+  const stageOpen = stage.open;
+  const busy = Boolean(busyBySlug[active]);
+  const draft = draftBySlug[active] ?? "";
+  const activity = activityBySlug[active] ?? "";
   const current = state?.bots.find((bot) => bot.slug === active);
   const ink = inkFor(active || "xiaowang");
   const covered = settingsOpen || callOpen || (state !== null && !state.settings.ready);
+
+  function patchStage(slug: string, patch: Partial<StageSnap>) {
+    if (!slug) return;
+    setStageBySlug((prev) => ({ ...prev, [slug]: { ...EMPTY_STAGE, ...prev[slug], ...patch } }));
+  }
 
   useEffect(() => {
     void window.xiaowang.getState().then(setState);
@@ -43,9 +65,13 @@ export function App() {
       }),
       window.xiaowang.onDownload((note) => {
         setToast(note.error ? note.error : `已放入资料库 ${note.filename ?? ""}`);
-        if (note.slug) void window.xiaowang.library(note.slug).then(setLibrary);
+        if (note.slug && note.slug === activeRef.current) void window.xiaowang.library(note.slug).then(setLibrary);
       }),
-      window.xiaowang.onStage((view) => applyStage(view)),
+      window.xiaowang.onStage((view) => rememberStage(view)),
+      window.xiaowang.onStep((step) => {
+        if (!step.activity?.trim()) return;
+        setActivityBySlug((prev) => ({ ...prev, [step.slug]: step.activity!.trim() }));
+      }),
     ];
     return () => stops.forEach((stop) => stop());
   }, []);
@@ -81,44 +107,46 @@ export function App() {
     };
   }, [mode, covered, rightWidth, leftWidth, stageOpen]);
 
-  function applyStage(view: StageNote) {
-    if (view.mode === "file") {
-      setMode("file");
-      setFile(view);
-    } else if (view.mode === "browser") {
-      setMode("browser");
-      if (view.url) setAddress(view.url);
-    } else {
-      setMode("slides");
-      setSlides({ title: view.title, pages: view.pages, index: 0 });
-    }
+  function rememberStage(view: StageNote) {
+    if (!view.slug) return;
+    if (view.mode === "file") patchStage(view.slug, { mode: "file", open: true, file: { id: view.id, filename: view.filename, page: view.page } });
+    else if (view.mode === "browser") {
+      patchStage(view.slug, { mode: "browser", open: true });
+      if (view.url && view.slug === activeRef.current) setAddress(view.url);
+    } else patchStage(view.slug, { mode: "slides", open: true, slides: { title: view.title, pages: view.pages, index: 0 } });
   }
 
   async function sendMessage() {
-    const text = draft.trim();
-    if (!text || !active || busy) return;
-    setDraft("");
-    setBusy(true);
+    const slug = activeRef.current;
+    const text = (draftBySlug[slug] ?? "").trim();
+    if (!text || !slug || busyBySlug[slug]) return;
+    setDraftBySlug((prev) => ({ ...prev, [slug]: "" }));
+    setBusyBySlug((prev) => ({ ...prev, [slug]: true }));
+    setActivityBySlug((prev) => ({ ...prev, [slug]: "" }));
     setItems((currentItems) => [...currentItems, { id: -Date.now(), kind: "user", text }]);
     try {
-      const next = await window.xiaowang.ask(active, text);
-      setItems(next);
-      setLibrary(await window.xiaowang.library(active));
+      const next = await window.xiaowang.ask(slug, text);
+      if (activeRef.current === slug) {
+        setItems(next);
+        setLibrary(await window.xiaowang.library(slug));
+      }
     } catch (error) {
-      setToast(error instanceof Error ? error.message : String(error));
+      setToast(plainError(error));
     } finally {
-      setBusy(false);
+      setBusyBySlug((prev) => ({ ...prev, [slug]: false }));
     }
   }
 
   function toggleStage() {
-    if (stageOpen) {
-      setStageOpen(false);
+    const slug = activeRef.current;
+    const open = stageBySlug[slug]?.open ?? true;
+    if (open) {
+      patchStage(slug, { open: false });
       return;
     }
     const max = Math.max(360, window.innerWidth - leftWidth - 420);
     setRightWidth((width) => Math.min(Math.max(width, 360), max));
-    setStageOpen(true);
+    patchStage(slug, { open: true });
   }
 
   async function createBot() {
@@ -152,7 +180,7 @@ export function App() {
         ) : null}
         <nav>
           {bots.filter((bot) => bot.slug !== "xiaowang").map((bot) => (
-            <button className={bot.slug === active ? "bot on" : "bot"} key={bot.slug} type="button" onClick={() => void window.xiaowang.setActive(bot.slug)}>
+            <button className={["bot", bot.slug === active ? "on" : "", busyBySlug[bot.slug] ? "working" : ""].filter(Boolean).join(" ")} key={bot.slug} type="button" onClick={() => void window.xiaowang.setActive(bot.slug)}>
               <Avatar slug={bot.slug} live={bot.slug === active} />
               <span>
                 <strong>{bot.name}</strong>
@@ -173,7 +201,7 @@ export function App() {
 
       <main className="thread">
         <header>
-          <span className="pill"><Avatar slug={active || "xiaowang"} size={22} live />{current?.name ?? "小王同学"}</span>
+          <span className="pill"><Avatar slug={active || "xiaowang"} size={22} mood={busy ? "think" : "idle"} />{current?.name ?? "小王同学"}</span>
           <button className="icon stage-toggle" type="button" title={stageOpen ? "收起右栏" : "展开右栏"} onClick={toggleStage}>
             <PanelRight size={16} />
           </button>
@@ -182,8 +210,8 @@ export function App() {
           {items.filter(isConversation).map((item) => <Message key={item.id} item={item} ink={ink} />)}
           {busy ? (
             <div className="thinking">
-              <Avatar slug={active || "xiaowang"} size={22} live />
-              <span>思考中</span>
+              <Avatar slug={active || "xiaowang"} size={28} mood="think" />
+              {activity ? <em key={activity}>{activity}</em> : <span className="dots" aria-hidden="true"><i /><i /><i /></span>}
             </div>
           ) : null}
         </div>
@@ -193,7 +221,11 @@ export function App() {
             rows={1}
             value={draft}
             placeholder={current ? `给 ${current.name} 发消息` : "发消息"}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              const slug = activeRef.current;
+              const value = event.target.value;
+              setDraftBySlug((prev) => ({ ...prev, [slug]: value }));
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
@@ -203,7 +235,7 @@ export function App() {
           />
           <button className="icon" type="button" title="听写还没接上"><Mic size={18} /></button>
           {busy ? (
-            <button className="call stop" type="button" title="停下" onClick={() => void window.xiaowang.stop()}>停</button>
+            <button className="call stop" type="button" title="停下" onClick={() => void window.xiaowang.stop(active)}>停</button>
           ) : (
             <button className="call" style={{ background: ink }} type="button" title="通话" onClick={() => setCallOpen(true)}>
               <span /><span /><span /><span />
@@ -223,14 +255,14 @@ export function App() {
       {stageOpen ? (
       <aside className="stage" style={{ width: rightWidth }}>
         <div className="stage-tabs">
-          <button className={mode === "file" ? "on" : ""} type="button" onClick={() => setMode("file")}><FileText size={15} /> 文件</button>
-          <button className={mode === "browser" ? "on" : ""} type="button" onClick={() => setMode("browser")}><Globe size={15} /> 浏览器</button>
-          <button className={mode === "slides" ? "on" : ""} type="button" onClick={() => setMode("slides")}><Presentation size={15} /> 幻灯片</button>
+          <button className={mode === "file" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "file" })}><FileText size={15} /> 文件</button>
+          <button className={mode === "browser" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "browser" })}><Globe size={15} /> 浏览器</button>
+          <button className={mode === "slides" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "slides" })}><Presentation size={15} /> 幻灯片</button>
         </div>
         {mode === "file" ? (
-          <FileStage slug={active} library={library} file={file} onPick={(entry) => setFile({ ...entry, page: 1 })} />
+          <FileStage slug={active} library={library} file={file} onPick={(entry) => patchStage(active, { file: { ...entry, page: 1 } })} />
         ) : null}
-        {mode === "slides" ? <SlideStage slides={slides} onIndex={(index) => setSlides((currentSlides) => currentSlides ? { ...currentSlides, index } : currentSlides)} /> : null}
+        {mode === "slides" ? <SlideStage slides={slides} onIndex={(index) => patchStage(active, { slides: slides ? { ...slides, index } : slides })} /> : null}
         {mode === "browser" ? (
           <div className="browser-stage">
             <form className="url" onSubmit={(event) => { event.preventDefault(); void window.xiaowang.browserGo(address.startsWith("http") ? address : `https://${address}`); }}>
@@ -276,6 +308,13 @@ export function App() {
 
 function isConversation(item: ChatItem): boolean {
   return (item.kind === "user" || item.kind === "assistant") && item.text.trim().length > 0;
+}
+
+function plainError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const message = raw.replace(/^Error invoking remote method '[^']+': Error: /, "");
+  if (message.includes("content or tool_calls")) return "模型服务拒绝了一条空的助手记录。再发一次就可以。";
+  return message.length > 160 ? `${message.slice(0, 160)}…` : message;
 }
 
 function Message({ item, ink }: { item: ChatItem; ink: string }) {

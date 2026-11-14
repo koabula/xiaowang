@@ -7,13 +7,6 @@ export function inkFor(slug: string): string {
   return INKS[hash % INKS.length] ?? INKS[0];
 }
 
-export function faceFor(slug: string): number {
-  if (slug === "xiaowang") return 0;
-  let hash = 0;
-  for (const char of slug) hash = (hash * 33 + char.charCodeAt(0)) >>> 0;
-  return (hash % 5) + 1;
-}
-
 export function shadeId(slug: string): string {
   let hash = 0;
   for (const char of slug) hash = (hash * 33 + char.charCodeAt(0)) >>> 0;

@@ -13,6 +13,7 @@ export interface StepEvent {
   text: string;
   name?: string;
   isError?: boolean;
+  activity?: string;
 }
 
 export interface TurnResult {
@@ -89,13 +90,27 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
     });
     lastText = result.text;
     const toolCalls = normalizeToolCalls(result, step);
+    if (!result.text.trim() && toolCalls.length === 0) {
+      return {
+        bot: runtime.store.requireBot(bot.id),
+        finalText: lastText,
+        steps: step,
+        kickoffs: [],
+        skippedKickoffs: 0,
+      };
+    }
     runtime.store.append(bot.id, {
       type: "assistant_turn",
       channel: "text",
       text: result.text,
       toolCalls,
     });
-    options.onStep?.({ bot: current, kind: "assistant", text: result.text });
+    options.onStep?.({
+      bot: current,
+      kind: "assistant",
+      text: result.text,
+      activity: toolCalls.length > 0 ? result.text.trim() || undefined : undefined,
+    });
 
     if (options.signal?.aborted || toolCalls.length === 0) {
       return {

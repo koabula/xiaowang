@@ -172,6 +172,7 @@ function groupUnits(events: StoredEvent[]): Unit[] {
       continue;
     }
     if (event.type !== "assistant_turn") continue;
+    if (!event.text.trim() && event.toolCalls.length === 0) continue;
 
     const messages: ModelMessage[] = [
       {

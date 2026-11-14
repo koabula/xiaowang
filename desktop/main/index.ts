@@ -6,7 +6,8 @@ import { runTurn } from "../../src/harness.ts";
 import { checkModel, configFromEnv, createProvider, listModels } from "../../src/provider.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { resolveHome } from "../../src/store.ts";
-import type { StageView } from "../../src/stage.ts";
+import type { BrowserDriver, StageView } from "../../src/stage.ts";
+import { BROWSER_BUSY } from "../../src/stage.ts";
 import type { SessionEvent } from "../../src/types.ts";
 import { BrowserPane } from "./browser.ts";
 import { loadSecrets, mergeSecrets, publicSettings, type SecretPatch, type SecretRecord } from "./secrets.ts";
@@ -142,7 +143,6 @@ function libraryOf(slug: string) {
 
 async function ask(slug: string, text: string, signal: AbortSignal): Promise<void> {
   const bot = runtime.store.requireBot(slug);
-  runtime.store.setActiveBot(bot.id);
   const provider = createProvider(configFromEnv(envFromSecrets()));
   await runTurn(runtime, {
     botId: bot.id,
@@ -150,10 +150,10 @@ async function ask(slug: string, text: string, signal: AbortSignal): Promise<voi
     provider,
     env: envFromSecrets(),
     signal,
-    browser: browser.driver,
+    browser: browserFor(slug),
     stage: {
       show(view: StageView) {
-        send("stage", view);
+        send("stage", { slug: bot.slug, ...view });
         publish();
       },
     },
@@ -164,13 +164,39 @@ async function ask(slug: string, text: string, signal: AbortSignal): Promise<voi
         name: step.name ?? "",
         text: step.text,
         isError: Boolean(step.isError),
+        activity: step.activity ?? "",
       });
     },
   });
   publish();
 }
 
-let turnAbort: AbortController | null = null;
+let turns = new Map<string, AbortController>();
+
+function browserFor(slug: string): BrowserDriver {
+  const claim = (): string | null => {
+    const owner = browser.ownerSlug;
+    if (owner && owner !== slug && turns.has(owner)) return BROWSER_BUSY;
+    browser.actingSlug = slug;
+    browser.ownerSlug = slug;
+    return null;
+  };
+  const run = async (action: () => Promise<string>): Promise<string> => {
+    const blocked = claim();
+    if (blocked) return blocked;
+    return action();
+  };
+  const real = browser.driver;
+  return {
+    holder: () => real.holder(),
+    navigate: (url) => run(() => real.navigate(url)),
+    snapshot: () => run(() => real.snapshot()),
+    click: (target) => run(() => real.click(target)),
+    type: (target, text) => run(() => real.type(target, text)),
+    scroll: (direction) => run(() => real.scroll(direction)),
+    back: () => run(() => real.back()),
+  };
+}
 
 function registerIpc(): void {
   ipcMain.handle("state:get", () => ({
@@ -215,18 +241,18 @@ function registerIpc(): void {
     publish();
   });
   ipcMain.handle("chat:ask", async (_event, slug: string, text: string) => {
-    turnAbort?.abort();
+    turns.get(slug)?.abort();
     const controller = new AbortController();
-    turnAbort = controller;
+    turns.set(slug, controller);
     try {
       await ask(slug, text, controller.signal);
     } finally {
-      if (turnAbort === controller) turnAbort = null;
+      if (turns.get(slug) === controller) turns.delete(slug);
     }
     return chatItems(slug);
   });
-  ipcMain.handle("chat:stop", () => {
-    turnAbort?.abort();
+  ipcMain.handle("chat:stop", (_event, slug: string) => {
+    if (typeof slug === "string") turns.get(slug)?.abort();
   });
   ipcMain.handle("settings:models", async (_event, patch: SecretPatch) => {
     const draft = draftSecrets(patch);
@@ -246,7 +272,10 @@ function registerIpc(): void {
   ipcMain.handle("browser:bounds", (_event, bounds: { x: number; y: number; width: number; height: number } | null) => {
     browser.setBounds(bounds);
   });
-  ipcMain.handle("browser:go", async (_event, url: string) => browser.driver.navigate(url));
+  ipcMain.handle("browser:go", async (_event, url: string) => {
+    browser.actingSlug = runtime.activeBot().slug;
+    return browser.driver.navigate(url);
+  });
   ipcMain.handle("browser:back", () => browser.back());
   ipcMain.handle("browser:forward", () => browser.forward());
   ipcMain.handle("browser:holder", (_event, holder: "bot" | "user") => {

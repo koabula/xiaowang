@@ -49,6 +49,7 @@ const SHIELD_OFF = `(() => {
 export class BrowserPane {
   readonly driver: BrowserDriver;
   ownerSlug = "";
+  actingSlug = "";
   private view: WebContentsView | null = null;
   private holder: "bot" | "user" = "bot";
   private state: BrowserViewState = { url: "", title: "", holder: "bot", loading: false };
@@ -132,7 +133,7 @@ export class BrowserPane {
   async navigate(raw: string): Promise<string> {
     const url = assertHttpUrl(raw);
     if (typeof url !== "string") return url.error;
-    this.ownerSlug = this.currentSlug();
+    this.ownerSlug = this.actingSlug || this.currentSlug();
     this.patch({ url, loading: true });
     await this.contents().loadURL(url);
     const saved = await this.capturePdf(this.contents().getURL());

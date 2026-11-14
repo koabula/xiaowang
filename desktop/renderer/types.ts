@@ -11,7 +11,7 @@ declare global {
       readFile: (slug: string, id: string) => Promise<Uint8Array>;
       addFiles: () => Promise<void>;
       ask: (slug: string, text: string) => Promise<ChatItem[]>;
-      stop: () => Promise<void>;
+      stop: (slug: string) => Promise<void>;
       saveSettings: (patch: SettingsPatch) => Promise<SettingsView>;
       listModels: (patch: SettingsPatch) => Promise<string[]>;
       checkSettings: (patch: SettingsPatch) => Promise<string>;
@@ -89,12 +89,14 @@ export interface StepNote {
   name: string;
   text: string;
   isError: boolean;
+  activity?: string;
 }
 
-export type StageNote =
+export type StageNote = { slug: string } & (
   | { mode: "file"; id: string; filename: string; page: number }
   | { mode: "browser"; url: string }
-  | { mode: "slides"; title: string; pages: string[] };
+  | { mode: "slides"; title: string; pages: string[] }
+);
 
 export interface BrowserNote {
   url: string;

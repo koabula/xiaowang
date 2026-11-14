@@ -69,12 +69,15 @@ export function toOpenAIMessages(system: string, messages: ModelMessage[]): unkn
       continue;
     }
     if (message.role === "assistant") {
+      const calls = message.toolCalls ?? [];
+      const text = message.content.trim();
+      if (!text && calls.length === 0) continue;
       const body: Record<string, unknown> = {
         role: "assistant",
-        content: message.content.trim() ? message.content : null,
+        content: text,
       };
-      if (message.toolCalls && message.toolCalls.length > 0) {
-        body.tool_calls = message.toolCalls.map((call) => ({
+      if (calls.length > 0) {
+        body.tool_calls = calls.map((call) => ({
           id: call.id,
           type: "function",
           function: { name: call.name, arguments: call.arguments },
@@ -128,7 +131,7 @@ export function toAnthropicMessages(messages: ModelMessage[]): unknown[] {
           input: parseObject(call.arguments),
         });
       }
-      if (content.length === 0) content.push({ type: "text", text: "…" });
+      if (content.length === 0) continue;
       out.push({ role: "assistant", content });
       continue;
     }
@@ -255,6 +258,9 @@ function argumentString(value: unknown): string {
 function formatHttpError(status: number, body: string, apiKey: string): string {
   let snippet = body.replace(/\s+/g, " ").slice(0, 500);
   if (apiKey) snippet = snippet.replaceAll(apiKey, "[redacted]");
+  if (snippet.includes("content or tool_calls must be set")) {
+    return "模型服务拒绝了一条空的助手记录。再发一次就可以。";
+  }
   if (status === 401 || status === 403) {
     return `模型服务拒绝了密钥（HTTP ${status}）。请检查 XIAOWANG_API_KEY。响应：${snippet}`;
   }

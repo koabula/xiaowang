@@ -15,7 +15,7 @@ contextBridge.exposeInMainWorld("xiaowang", {
   readFile: (slug, id) => ipcRenderer.invoke("library:text", slug, id),
   addFiles: () => ipcRenderer.invoke("library:add"),
   ask: (slug, text) => ipcRenderer.invoke("chat:ask", slug, text),
-  stop: () => ipcRenderer.invoke("chat:stop"),
+  stop: (slug) => ipcRenderer.invoke("chat:stop", slug),
   saveSettings: (patch) => ipcRenderer.invoke("settings:save", patch),
   listModels: (patch) => ipcRenderer.invoke("settings:models", patch),
   checkSettings: (patch) => ipcRenderer.invoke("settings:check", patch),

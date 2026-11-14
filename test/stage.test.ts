@@ -3,7 +3,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { activityLine } from "../src/activity.ts";
 import { runTurn } from "../src/harness.ts";
+import { projectLlmContext } from "../src/project.ts";
+import { toOpenAIMessages } from "../src/provider.ts";
 import { Runtime } from "../src/runtime.ts";
 import { isSensitiveBrowserTarget, splitSlides, type BrowserDriver, type StageView } from "../src/stage.ts";
 import { executeTool } from "../src/tools.ts";
@@ -127,6 +130,24 @@ test("a tool loop that does not stop ends quietly", async () => {
     const raw = JSON.stringify(runtime.store.getEvents(runtime.activeBot().id));
     assert.equal(raw.includes("上限"), false);
     assert.equal(turn.steps, 3);
+  } finally {
+    close();
+  }
+});
+
+test("an empty assistant turn is left out of the next request", () => {
+  const { runtime, close } = openRuntime();
+  try {
+    const bot = runtime.activeBot();
+    runtime.store.append(bot.id, { type: "user_text", channel: "text", text: "上一问" });
+    runtime.store.append(bot.id, { type: "assistant_turn", channel: "text", text: "", toolCalls: [] });
+    runtime.store.append(bot.id, { type: "user_text", channel: "text", text: "分析一下他们的实验结果" });
+    const projected = projectLlmContext(bot, runtime.store.getEvents(bot.id), { library: [] });
+    assert.equal(projected.messages.some((message) => message.role === "assistant"), false);
+    const packed = JSON.stringify(toOpenAIMessages(projected.system, projected.messages));
+    assert.equal(packed.includes('"content":null'), false);
+    assert.match(activityLine("search_literature", { query: "realtime model" }), /查询相关论文 · realtime model/);
+    assert.match(activityLine("read_document", { file: "2609.09420v2.pdf", start_page: 3 }), /第 3 页/);
   } finally {
     close();
   }
