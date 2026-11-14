@@ -234,12 +234,12 @@ const TOOLS: Tool[] = [
     schema: {
       name: "show_stage",
       description:
-        "把内容放到桌面右栏给用户看。mode=file 打开当前任务资料库里的 PDF 或文本并翻到 page；mode=browser 打开右栏浏览器；mode=canvas 打开工作区里一份自包含的 HTML。用户说到 canvas、ppt、slides、幻灯片、演示或汇报时用 mode=canvas。Open that page with mode=canvas.",
+        "把内容放到桌面右栏给用户看。mode=file 打开当前任务资料库里的 PDF 或文本并翻到 page；mode=browser 打开右栏浏览器；mode=canvas 打开工作区里一份自包含的 HTML，并翻到第 page 页（从 1 开始）。用户说到 canvas、ppt、slides、幻灯片、演示或汇报时用 mode=canvas；按页讲解时每讲一页调用一次并传入 page。Open or flip to a page with mode=canvas and page.",
       parameters: objectSchema(
         {
           mode: { type: "string", description: "file、browser 或 canvas。" },
           file: { type: "string", description: "mode=file 时的资料 id 或文件名。" },
-          page: { type: "integer", description: "PDF 页码，从 1 开始。" },
+          page: { type: "integer", description: "PDF 或 Canvas 的页码，从 1 开始。" },
           path: { type: "string", description: "mode=canvas 时工作区里的 HTML 相对路径。" },
           url: { type: "string", description: "mode=browser 时要打开的地址，可省略。" },
         },
@@ -277,8 +277,10 @@ const TOOLS: Tool[] = [
         if (!stat?.isFile()) return { isError: true, output: missingFile(host.bot.workspaceDir, resolved.rel) };
         if (stat.size > CANVAS_HTML_CAP) return { isError: true, output: "这份 HTML 太大，右栏放不下。" };
         const html = readFileSync(resolved.abs, "utf8");
-        host.stage?.show({ mode: "canvas", title: resolved.rel, html });
-        return { isError: false, output: host.stage ? `右栏已打开 ${resolved.rel}。` : `桌面右栏还没接上。页面在 ${resolved.rel}。` };
+        const page = Math.max(1, integer(input.page, 1));
+        host.stage?.show({ mode: "canvas", title: resolved.rel, html, page });
+        const where = input.page !== undefined ? `，第 ${page} 页` : "";
+        return { isError: false, output: host.stage ? `右栏已打开 ${resolved.rel}${where}。` : `桌面右栏还没接上。页面在 ${resolved.rel}${where}。` };
       }
       if (mode === "slides") return { isError: true, output: "请把页面写成自包含的 HTML，再用 mode=canvas 打开。" };
       return { isError: true, output: "mode 只能是 file、browser 或 canvas。" };

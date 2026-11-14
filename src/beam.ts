@@ -25,21 +25,46 @@ export function beamPalette(name: string, slab: string): string[] {
 export const APP_ICON_NAME = "xiaowang";
 export const APP_ICON_INK = "#18181B";
 
-/** 应用图标铺满整张方块，眼睛和嘴放在正中。程序坞会把方块裁成圆角。 */
+/** 按 macOS 程序坞规格导出透明底圆角方块，内放微侧墨滴小脸，边缘与其他应用图标齐平。 */
 export function beamSvg(name: string, colors: string[], pixels = 1024): string {
   const face = beamFace(name, colors);
-  const size = 36;
   const mouth = face.isMouthOpen
-    ? `<path d="M12.2 21.6c1.8 1.7 3.6 2.5 5.8 2.5s4-.8 5.8-2.5" stroke="#FFFFFF" stroke-width="1.8" fill="none" stroke-linecap="round"/>`
-    : `<path d="M11.4 21.2c2.6 3.3 10.6 3.3 13.2 0" stroke="#FFFFFF" stroke-width="1.8" fill="none" stroke-linecap="round"/>`;
+    ? `<path d="M454 574C490 604 544 606 582 574" stroke="${face.faceColor}" stroke-width="34" fill="none" stroke-linecap="round"/>`
+    : `<path d="M438 560A92 70 0 0 0 602 560" fill="${face.faceColor}"/>`;
   return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="${pixels}" height="${pixels}" viewBox="0 0 ${size} ${size}" fill="none">
-  <rect width="${size}" height="${size}" fill="${face.wrapperColor}"/>
-  <g transform="translate(18 18) scale(1.45) translate(-18 -18)">
-    <rect x="10.1" y="11" width="3.2" height="4.3" rx="1.6" fill="#FFFFFF"/>
-    <rect x="22.7" y="11" width="3.2" height="4.3" rx="1.6" fill="#FFFFFF"/>
-    ${mouth}
+<svg xmlns="http://www.w3.org/2000/svg" width="${pixels}" height="${pixels}" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <linearGradient id="xw-paper" x1="512" y1="100" x2="512" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#ECECEF"/>
+    </linearGradient>
+    <linearGradient id="xw-ink" x1="260" y1="180" x2="780" y2="860" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#27272C"/>
+      <stop offset="1" stop-color="${face.wrapperColor}"/>
+    </linearGradient>
+    <filter id="xw-drop" x="40" y="56" width="944" height="944" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="20" stdDeviation="22" flood-color="#0A0A0E" flood-opacity="0.24"/>
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0A0A0E" flood-opacity="0.12"/>
+    </filter>
+    <clipPath id="xw-squircle">
+      <rect x="100" y="100" width="824" height="824" rx="185"/>
+    </clipPath>
+  </defs>
+  <g filter="url(#xw-drop)">
+    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#xw-paper)"/>
   </g>
+  <g clip-path="url(#xw-squircle)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#xw-paper)"/>
+    <g transform="translate(36 44) rotate(-8 512 512)">
+      <rect x="146" y="148" width="760" height="760" rx="340" fill="url(#xw-ink)"/>
+    </g>
+    <g transform="translate(26 16) rotate(-5 512 512)">
+      <rect x="404" y="424" width="42" height="58" rx="21" fill="${face.faceColor}"/>
+      <rect x="590" y="424" width="42" height="58" rx="21" fill="${face.faceColor}"/>
+      ${mouth}
+    </g>
+  </g>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" stroke="#141416" stroke-opacity="0.08" stroke-width="3"/>
 </svg>
 `;
 }

@@ -14,7 +14,7 @@ import {
   type RealtimeNotice,
 } from "../../src/realtime.ts";
 
-const DOUBAO_FRAME = 640;
+const DOUBAO_CHUNK = 3_200;
 
 export interface CallHandlers {
   onPhase: (phase: "connecting" | "live" | "closed", detail?: string) => void;
@@ -51,8 +51,6 @@ export class LiveCall {
   private endReady = false;
   private readonly lines: Array<{ who: "user" | "assistant"; text: string }> = [];
   private begunAt = "";
-  private pendingAudio: Buffer = Buffer.alloc(0);
-  private pace: ReturnType<typeof setInterval> | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private readonly url: string;
   private readonly key: string;
@@ -118,9 +116,10 @@ export class LiveCall {
       this.send(audioAppend(pcm.toString("base64")));
       return;
     }
-    this.pendingAudio = Buffer.concat([this.pendingAudio, pcm]);
-    if (this.pace) return;
-    this.pace = setInterval(() => this.drainFrame(), 20);
+    for (let offset = 0; offset < pcm.length; offset += DOUBAO_CHUNK) {
+      const slice = pcm.subarray(offset, Math.min(pcm.length, offset + DOUBAO_CHUNK));
+      this.send(audioAppend(Buffer.from(slice).toString("base64")));
+    }
   }
 
   noteSpeakerIdle(serial: number): void {
@@ -143,7 +142,6 @@ export class LiveCall {
     if (this.closed) return;
     if (this.family === "doubao" && this.open) this.send({ type: "session.close" });
     this.closed = true;
-    this.stopPace();
     if (this.timer) clearTimeout(this.timer);
     this.socket?.close();
     this.socket = null;
@@ -256,11 +254,12 @@ export class LiveCall {
       });
       return;
     }
-    this.send(functionOutput(callId, TOOL_ACCEPTED, this.family));
+    const silent = name === "show_stage";
+    this.send(functionOutput(callId, silent ? "已翻到这一页。接着用两三句口语讲这一页，不要提翻页动作。" : TOOL_ACCEPTED, this.family));
     if (this.family !== "doubao") this.send(responseCreate());
     this.speaking = true;
     void this.handlers.runTool(name, args).then((output) => {
-      if (this.closed) return;
+      if (this.closed || silent) return;
       this.briefs.push(output);
       this.flush();
     }).catch((error: unknown) => {
@@ -286,7 +285,7 @@ export class LiveCall {
       this.handlers.onLine(who, next, true);
       return;
     }
-    const finalText = text.trim();
+    const finalText = mergeUtterance("", text);
     if (who === "user") this.userPartial = "";
     else this.assistantPartial = "";
     if (finalText) this.revise(who, finalText);
@@ -347,19 +346,6 @@ export class LiveCall {
     for (const event of previewCue(this.family, this.previewText)) this.send(event);
   }
 
-  private drainFrame(): void {
-    if (this.closed || !this.open || this.pendingAudio.length < DOUBAO_FRAME) return;
-    const frame = this.pendingAudio.subarray(0, DOUBAO_FRAME);
-    this.pendingAudio = this.pendingAudio.subarray(DOUBAO_FRAME);
-    this.send(audioAppend(Buffer.from(frame).toString("base64")));
-  }
-
-  private stopPace(): void {
-    if (this.pace) clearInterval(this.pace);
-    this.pace = null;
-    this.pendingAudio = Buffer.alloc(0);
-  }
-
   private send(payload: Record<string, unknown>): void {
     if (!this.open || this.closed) return;
     this.socket?.send(JSON.stringify(payload));
@@ -368,7 +354,6 @@ export class LiveCall {
   private fail(message: string): void {
     if (this.closed) return;
     this.closed = true;
-    this.stopPace();
     if (this.timer) clearTimeout(this.timer);
     this.socket?.close();
     this.socket = null;

@@ -15,7 +15,7 @@ type StageSnap = {
   mode: "file" | "browser" | "canvas" | "profile";
   open: boolean;
   file: { id: string; filename: string; page: number } | null;
-  canvas: { title: string; html: string } | null;
+  canvas: { title: string; html: string; page: number } | null;
 };
 
 const EMPTY_STAGE: StageSnap = { mode: "file", open: true, file: null, canvas: null };
@@ -148,7 +148,7 @@ export function App() {
     else if (view.mode === "browser") {
       patchStage(view.slug, { mode: "browser", open: true });
       if (view.url && view.slug === activeRef.current) setAddress(view.url);
-    } else patchStage(view.slug, { mode: "canvas", open: true, canvas: { title: view.title, html: view.html } });
+    } else patchStage(view.slug, { mode: "canvas", open: true, canvas: { title: view.title, html: view.html, page: view.page ?? 1 } });
   }
 
   async function sendMessage() {
@@ -508,14 +508,17 @@ interface LiveCallView {
 }
 
 function foldCaption(captions: LiveCaption[], who: "user" | "assistant", text: string, partial: boolean): LiveCaption[] {
+  const clean = who === "user" ? mergeUtterance("", text) : text.trim();
+  if (!clean) return captions;
   const next = captions.slice(-6);
   const last = next[next.length - 1];
-  const revised = Boolean(last && !last.live && !partial && mergeUtterance(last.text, text) === text);
-  const same = last?.who === who && (last.live || text.startsWith(last.text) || last.text.startsWith(text) || revised);
+  const merged = last && who === "user" ? mergeUtterance(last.text, clean) : clean;
+  const revised = Boolean(last && who === "user" && merged === clean);
+  const same = last?.who === who && (last.live || clean.startsWith(last.text) || last.text.startsWith(clean) || revised);
   if (last && same) {
-    next[next.length - 1] = { who, text, live: partial };
+    next[next.length - 1] = { who, text: who === "user" ? merged : clean, live: partial };
   } else {
-    next.push({ who, text, live: partial });
+    next.push({ who, text: clean, live: partial });
   }
   return next.slice(-4);
 }
@@ -584,11 +587,74 @@ function Reader({ slug, file }: { slug: string; file: { id: string; filename: st
   return <pre className="plain">{text}</pre>;
 }
 
-function CanvasStage({ canvas, copy }: { canvas: { title: string; html: string } | null; copy: Copy }) {
+const CANVAS_PAGER_SHIM = `<script>(function(){
+function flip(page){
+  var n=Number(page); if(!Number.isFinite(n)||n<1)return;
+  var idx=Math.round(n)-1;
+  var hooks=["goToSlide","goTo","showSlide","setSlide","go"];
+  for(var i=0;i<hooks.length;i++){
+    var fn=window[hooks[i]];
+    if(typeof fn==="function"){ try{ fn(idx); return; }catch(_){} }
+  }
+  var groups=["section.slide",".slide","[data-slide]","main > section","body > section","article > section"];
+  var slides=null;
+  for(var g=0;g<groups.length;g++){
+    var list=document.querySelectorAll(groups[g]);
+    if(list.length>1){ slides=list; break; }
+  }
+  if(!slides||!slides.length)return;
+  var target=Math.min(slides.length-1,Math.max(0,idx));
+  var current=-1;
+  for(var s=0;s<slides.length;s++){
+    var el=slides[s], cs=getComputedStyle(el);
+    if(el.classList.contains("active")||el.classList.contains("current")||el.getAttribute("aria-hidden")==="false"){ current=s; break; }
+    if(current<0&&cs.display!=="none"&&cs.visibility!=="hidden"&&Number(cs.opacity||1)>0.1) current=s;
+  }
+  if(current>=0&&current!==target){
+    var delta=target-current, key=delta>0?"ArrowRight":"ArrowLeft", code=delta>0?39:37, steps=Math.abs(delta);
+    for(var k=0;k<steps;k++){
+      var ev=new KeyboardEvent("keydown",{key:key,code:key,keyCode:code,which:code,bubbles:true,cancelable:true});
+      document.dispatchEvent(ev); window.dispatchEvent(ev);
+    }
+  }
+  var chosen=slides[target];
+  if(chosen&&getComputedStyle(chosen).display==="none"){
+    for(var h=0;h<slides.length;h++){
+      slides[h].classList.toggle("active",h===target);
+      slides[h].style.display=h===target?"":"none";
+    }
+  } else if(chosen&&chosen.scrollIntoView){
+    chosen.scrollIntoView({behavior:"smooth",block:"start"});
+  }
+}
+window.addEventListener("message",function(e){
+  if(e&&e.data&&e.data.type==="xiaowang:page") flip(e.data.page);
+});
+})();</script>`;
+
+function withCanvasPager(html: string): string {
+  if (html.includes("xiaowang:page")) return html;
+  return html.includes("</body>") ? html.replace("</body>", `${CANVAS_PAGER_SHIM}</body>`) : `${html}${CANVAS_PAGER_SHIM}`;
+}
+
+function CanvasStage({ canvas, copy }: { canvas: { title: string; html: string; page: number } | null; copy: Copy }) {
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const page = canvas?.page ?? 1;
+  useEffect(() => {
+    if (!canvas) return;
+    frameRef.current?.contentWindow?.postMessage({ type: "xiaowang:page", page }, "*");
+  }, [canvas?.title, canvas?.html, page]);
   if (!canvas) return <p className="empty">{copy.emptyCanvas}</p>;
   return (
     <div className="canvas-stage">
-      <iframe className="canvas-frame" title={canvas.title} sandbox="allow-scripts" srcDoc={canvas.html} />
+      <iframe
+        ref={frameRef}
+        className="canvas-frame"
+        title={canvas.title}
+        sandbox="allow-scripts"
+        srcDoc={withCanvasPager(canvas.html)}
+        onLoad={() => frameRef.current?.contentWindow?.postMessage({ type: "xiaowang:page", page }, "*")}
+      />
     </div>
   );
 }

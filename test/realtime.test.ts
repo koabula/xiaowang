@@ -330,6 +330,14 @@ test("transcript snapshots replace the line instead of repeating it", () => {
     mergeUtterance("嗯 ok 汇报一下刚刚这么一个工作OK，", "汇报一下刚刚这么一个工作。"),
     "汇报一下刚刚这么一个工作。",
   );
+  assert.equal(
+    mergeUtterance("嗯你把这个 ppt 完整的讲一遍", "你把这个 PPT 完整的讲一遍。"),
+    "你把这个 PPT 完整的讲一遍。",
+  );
+  assert.equal(
+    mergeUtterance("", "嗯你把这个 ppt 完整的讲一遍你把这个 PPT 完整的讲一遍。"),
+    "你把这个 PPT 完整的讲一遍。",
+  );
   assert.equal(mergeUtterance("你好", "世界"), "你好世界");
 });
 
@@ -506,4 +514,31 @@ test("ask_text starts the written work without reading it aloud", async () => {
   assert.match(follow, /已经开始/);
   assert.doesNotMatch(follow, /结果好了/);
   assert.equal(askTextResult("busy", "en").includes("previous piece"), true);
+
+  let flipped = 0;
+  const deckCall = new LiveCall("wss://example.test/realtime", "key", { type: "session.update" }, {
+    onPhase() {},
+    onAudio() {},
+    onInterrupt() {},
+    onLine() {},
+    onTranscript() {},
+    async runTool(name, args) {
+      assert.equal(name, "show_stage");
+      flipped = (JSON.parse(args) as { page?: number }).page ?? 0;
+      return "右栏已打开 slides.html，第 2 页。";
+    },
+  }, () => socket);
+  deckCall.start();
+  const deckMessage = listeners.get("message")?.at(-1);
+  assert.ok(deckMessage);
+  deckMessage({ data: JSON.stringify({ type: "session.created" }) });
+  deckMessage({ data: JSON.stringify({ type: "session.updated" }) });
+  deckCall.sendAudio(Buffer.alloc(640));
+  const beforeFlip = sent.length;
+  deckMessage({ data: JSON.stringify({ type: "response.function_call_arguments.done", call_id: "flip_2", name: "show_stage", arguments: "{\"mode\":\"canvas\",\"path\":\"slides.html\",\"page\":2}" }) });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(flipped, 2);
+  const flipEvents = sent.slice(beforeFlip).join("\n");
+  assert.match(flipEvents, /已翻到这一页/);
+  assert.doesNotMatch(flipEvents, /结果好了/);
 });

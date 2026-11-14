@@ -146,7 +146,7 @@ export interface StepNote {
 export type StageNote = { slug: string } & (
   | { mode: "file"; id: string; filename: string; page: number }
   | { mode: "browser"; url: string }
-  | { mode: "canvas"; title: string; html: string }
+  | { mode: "canvas"; title: string; html: string; page?: number }
 );
 
 export interface BrowserNote {

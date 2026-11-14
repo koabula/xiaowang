@@ -83,7 +83,7 @@ export function askTextTool(locale: Locale = "zh"): ToolSchema {
   if (locale === "en") {
     return {
       name: "ask_text",
-      description: "Use this when the user wants a page or something written down: canvas, ppt, slides, a talk, a report, or a note. Say one short line first, then call it. Put their words in task. Do not say you handed it off, and do not write the long piece yourself.",
+      description: "Use this when the user wants a new or edited page or note: make a canvas/ppt/slides, write a report, or save a note. Say one short line first, then call it. Put their words in task. If the deck already exists and the user asks you to present or walk through it, present it yourself page by page with read_file and show_stage instead of calling ask_text.",
       parameters: {
         type: "object",
         properties: { task: { type: "string", description: "What to make, in the user's words." } },
@@ -94,7 +94,7 @@ export function askTextTool(locale: Locale = "zh"): ToolSchema {
   }
   return {
     name: "ask_text",
-    description: "用户要一份页面或写下来的东西时调用：canvas、ppt、slides、幻灯片、演示、汇报或笔记。先用一句口语接住，再调用。task 用用户的原话。不要说把事情转交了，也不要自己写长文。",
+    description: "用户要新做或修改一份页面、汇报或笔记时调用（新建/改写 canvas、ppt、slides、幻灯片、报告、笔记）。先用一句口语接住，再调用，task 用用户的原话。如果工作区已有现成 HTML 页面而用户让你讲一遍，直接用 read_file 和 show_stage 按页翻页讲解，不要调用 ask_text。",
     parameters: {
       type: "object",
       properties: { task: { type: "string", description: "要做的事，用用户的原话。" } },
@@ -128,7 +128,8 @@ export function realtimeInstructions(personName: string, brief: string, locale: 
     return [
       `You are "${personName}". This is a voice call. Speak in short sentences.`,
       "The user only hears your voice. When you look something up or read, say one short line first, then use the tool. Do not narrate the tool, and do not say you handed the work off.",
-      "When the user wants a canvas, ppt, slides, a talk, a report, or a written note, say one short line, then call ask_text and put their words in task. Do not write the long piece yourself.",
+      "When the user wants a new or edited canvas, ppt, slides, report, or written note, say one short line, then call ask_text and put their words in task. Do not write the long piece yourself.",
+      "When the user asks you to present or walk through an existing canvas/ppt/slides HTML file, read it with read_file if needed, then present one slide at a time: call show_stage(mode='canvas', path=..., page=N) as you move to each slide, speak 2-3 sentences for that slide, and flip to page N+1 before talking about the next one. Do not recite the whole deck on page 1.",
       "When the user wants to end the call, say a short goodbye, then call end_call. The call hangs up after the goodbye.",
       "Do not invent numbers that are not in the abstract or the text.",
       "",
@@ -138,7 +139,8 @@ export function realtimeInstructions(personName: string, brief: string, locale: 
   return [
     `你是「${personName}」。这是一次语音通话，用口语短句。`,
     "用户只听见你的声音。要查文献或读资料时，先接一句再调用工具。不要念工具过程，也不要说自己把事情转交了。",
-    "用户要 canvas、ppt、slides、幻灯片、演示、汇报或写下来的笔记时，先接一句，再调用 ask_text，把原话放进 task。不要自己写长文。",
+    "用户要新做或修改一份 canvas、ppt、slides、幻灯片、演示、汇报或写下来的笔记时，先接一句，再调用 ask_text，把原话放进 task。不要自己写长文。",
+    "用户让你讲一遍已有的 canvas/ppt/幻灯片时，先看已有文件（必要时 read_file），再一页一页边翻边讲：讲第 N 页前调用 show_stage(mode='canvas', path=..., page=N) 把右栏翻过去，每页只讲两三句核心结论，讲下一页时再调 page=N+1 翻页，不要停在第一页一口气背完。",
     "用户要结束通话时，先说一句简短的再见，然后调用 end_call。道别说完就会挂断。",
     "摘要和正文里没有的数字不要编。",
     "",
@@ -160,7 +162,7 @@ export function sessionUpdate(options: {
       input_audio_format: options.audioFormat,
       output_audio_format: options.audioFormat,
       instructions: options.instructions,
-      turn_detection: { type: "server_vad" },
+      turn_detection: { type: "server_vad", threshold: 0.5, prefix_padding_ms: 240, silence_duration_ms: 320 },
       input_audio_transcription: options.transcriptionModel ? { model: options.transcriptionModel } : undefined,
       ...(options.voice ? { voice: options.voice } : {}),
       tools: options.tools.map((tool) => ({
@@ -199,19 +201,56 @@ export function foldTranscript(current: string, incoming: string): string {
   if (current.startsWith(incoming)) return current;
   const limit = Math.min(current.length, incoming.length);
   for (let size = limit; size >= 2; size -= 1) {
-    if (current.slice(-size) === incoming.slice(0, size)) return current + incoming.slice(size);
+    if (current.slice(-size).toLowerCase() === incoming.slice(0, size).toLowerCase()) {
+      return current.slice(0, current.length - size) + incoming;
+    }
   }
   return current + incoming;
 }
 
 export function mergeUtterance(current: string, incoming: string): string {
-  const next = incoming.trim();
+  const next = collapseRepeat(incoming.trim());
   if (!next) return current;
-  if (!current || next.startsWith(current)) return next;
-  if (current.startsWith(next)) return current;
-  const shared = commonRun(current, next);
-  if (shared >= 6 && shared >= Math.min(current.length, next.length) * 0.6) return next;
-  return foldTranscript(current, next);
+  const prev = collapseRepeat(current.trim());
+  if (!prev) return next;
+  const left = spokenKey(prev);
+  const right = spokenKey(next);
+  if (!left || right.startsWith(left)) return next;
+  if (left.startsWith(right)) return prev;
+  const shared = commonRun(left, right);
+  if (shared >= 5 && shared >= Math.min(left.length, right.length) * 0.55) return next;
+  return collapseRepeat(foldTranscript(prev, next));
+}
+
+function spokenKey(value: string): string {
+  return value.toLowerCase().replace(/[\s,.!?;:'"()[\]{}，。！？；：、“”‘’（）【】·…—\-]/g, "");
+}
+
+function collapseRepeat(value: string): string {
+  const text = value.trim();
+  if (text.length < 10) return text;
+  const chars = Array.from(text);
+  const items = chars.map((char) => ({ char, key: spokenKey(char) }));
+  const total = items.map((item) => item.key).join("");
+  if (total.length < 8) return text;
+  const minHalf = Math.max(4, Math.floor(total.length * 0.4));
+  let bestScore = -1;
+  let bestText = "";
+  for (let cut = Math.floor(items.length * 0.35); cut <= Math.ceil(items.length * 0.65); cut += 1) {
+    const first = items.slice(0, cut).map((item) => item.key).join("");
+    const second = items.slice(cut).map((item) => item.key).join("");
+    if (first.length < minHalf || second.length < minHalf) continue;
+    const shorter = Math.min(first.length, second.length);
+    const shared = commonRun(first, second);
+    const matches = first === second || second.includes(first) || first.includes(second) || shared >= Math.ceil(shorter * 0.8);
+    if (!matches) continue;
+    const score = shared * 100 - Math.abs(first.length - second.length);
+    if (score > bestScore) {
+      bestScore = score;
+      bestText = chars.slice(cut).join("").trim();
+    }
+  }
+  return bestText || text;
 }
 
 function commonRun(left: string, right: string): number {

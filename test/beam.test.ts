@@ -33,11 +33,11 @@ test("a new face keeps the slab color, and a new color keeps the same slots for 
   }
 });
 
-test("the app icon fills the tile with the steward ink", () => {
+test("the app icon is a rounded dock tile with the tilted steward beam", () => {
   const svg = beamSvg(APP_ICON_NAME, beamPalette(APP_ICON_NAME, APP_ICON_INK));
   assert.equal(svg, beamSvg(APP_ICON_NAME, beamPalette(APP_ICON_NAME, APP_ICON_INK)));
   assert.match(svg, new RegExp(APP_ICON_INK));
   assert.match(svg, /#FFFFFF/);
-  assert.doesNotMatch(svg, /#F4F4F5/);
-  assert.doesNotMatch(svg, /<mask/);
+  assert.match(svg, /rx="185"/);
+  assert.doesNotMatch(svg, /<rect width="1024" height="1024"/);
 });

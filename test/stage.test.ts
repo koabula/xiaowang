@@ -104,10 +104,13 @@ test("show_stage opens a referenced file and a canvas page", async () => {
     if (shown[0]?.mode === "file") assert.equal(shown[0].page, 2);
 
     writeFileSync(path.join(bot.workspaceDir, "deck.html"), "<!doctype html><title>Deck</title><style>section{height:100vh}</style>");
-    const canvas = await executeTool("show_stage", { mode: "canvas", path: "deck.html" }, host);
-    assert.match(canvas.output, /deck\.html/);
+    const canvas = await executeTool("show_stage", { mode: "canvas", path: "deck.html", page: 3 }, host);
+    assert.match(canvas.output, /deck\.html.*第 3 页/);
     assert.equal(shown[1]?.mode, "canvas");
-    if (shown[1]?.mode === "canvas") assert.match(shown[1].html, /Deck/);
+    if (shown[1]?.mode === "canvas") {
+      assert.match(shown[1].html, /Deck/);
+      assert.equal(shown[1].page, 3);
+    }
     const markdown = await executeTool("show_stage", { mode: "slides", path: "deck.html" }, host);
     assert.match(markdown.output, /mode=canvas/);
     const system = projectLlmContext(bot, [], { personName: "Wang", locale: "en" }).system;

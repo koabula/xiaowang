@@ -9,10 +9,35 @@ export interface CallAudio {
   setMuted(muted: boolean): void;
 }
 
+const MIC_WORKLET_CODE = `class XiaoWangMic extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.buf = new Float32Array(960);
+    this.off = 0;
+  }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (!ch) return true;
+    let i = 0;
+    while (i < ch.length) {
+      const take = Math.min(this.buf.length - this.off, ch.length - i);
+      this.buf.set(ch.subarray(i, i + take), this.off);
+      this.off += take;
+      i += take;
+      if (this.off >= this.buf.length) {
+        this.port.postMessage(this.buf.slice(0));
+        this.off = 0;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor("xiaowang-mic", XiaoWangMic);`;
+
 export function createCallAudio(send: (audio: string) => void, onIdle?: (serial: number) => void): CallAudio {
   let mic: MediaStream | null = null;
   let capture: AudioContext | null = null;
-  let processor: ScriptProcessorNode | null = null;
+  let processor: AudioNode | null = null;
   let playback: AudioContext | null = null;
   let outputRate = 24_000;
   let nextAt = 0;
@@ -38,15 +63,29 @@ export function createCallAudio(send: (audio: string) => void, onIdle?: (serial:
           autoGainControl: true,
         },
       });
-      capture = new AudioContext();
+      capture = new AudioContext({ latencyHint: "interactive" });
       const source = capture.createMediaStreamSource(mic);
-      processor = capture.createScriptProcessor(4096, 1, 1);
       const rate = capture.sampleRate;
-      processor.onaudioprocess = (event) => {
+      const emit = (samples: Float32Array) => {
         if (micMuted) return;
-        const pcm = pcm16FromFloat(event.inputBuffer.getChannelData(0), rate, inputRate);
+        const pcm = pcm16FromFloat(samples, rate, inputRate);
         if (pcm.length > 0) send(base64FromBytes(pcm));
       };
+      if (capture.audioWorklet && typeof Blob !== "undefined" && typeof URL.createObjectURL === "function") {
+        const url = URL.createObjectURL(new Blob([MIC_WORKLET_CODE], { type: "application/javascript" }));
+        try {
+          await capture.audioWorklet.addModule(url);
+          const worklet = new AudioWorkletNode(capture, "xiaowang-mic", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+          worklet.port.onmessage = (event: MessageEvent<Float32Array>) => emit(event.data);
+          processor = worklet;
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      } else {
+        const script = capture.createScriptProcessor(1024, 1, 1);
+        script.onaudioprocess = (event) => emit(event.inputBuffer.getChannelData(0));
+        processor = script;
+      }
       const mute = capture.createGain();
       mute.gain.value = 0;
       source.connect(processor);
@@ -107,7 +146,7 @@ export function createCallAudio(send: (audio: string) => void, onIdle?: (serial:
       const node = playback.createBufferSource();
       node.buffer = buffer;
       node.connect(playback.destination);
-      const start = Math.max(playback.currentTime + 0.05, nextAt);
+      const start = Math.max(playback.currentTime + 0.018, nextAt);
       node.start(start);
       nextAt = start + buffer.duration;
       playing.push(node);
