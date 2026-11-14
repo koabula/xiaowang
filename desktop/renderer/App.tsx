@@ -9,6 +9,9 @@ import { createCallAudio } from "./call-audio.ts";
 import { VoicePanel, type LiveCallView, type LiveCaption } from "./voice-panel.tsx";
 import { TaskPanel } from "./task-panel.tsx";
 import { RichText } from "./rich-text.tsx";
+import { FileBrowser, rememberOpenedFile } from "./file-browser.tsx";
+import { ModalDialog } from "./modal-dialog.tsx";
+import { hasUnsavedSettings } from "./settings-draft.ts";
 const DocumentReader = lazy(() => import("./document-reader.tsx").then(module => ({ default: module.DocumentReader })));
 import { withCanvasPager } from "./canvas-pager.ts";
 import { copyFor, localeOf, type Copy, type Locale } from "./copy.ts";
@@ -19,8 +22,8 @@ import type { AppState, BotRow, BrowserNote, CallNote, CanvasPage, ChatItem, Lib
 type StageSnap = {
   mode: "file" | "browser" | "canvas" | "profile";
   open: boolean;
-  file: { id: string; filename: string; page: number; requestId?: string } | null;
-  canvas: { title: string; html: string; page: number; requestId?: string } | null;
+  file: { id: string; filename: string; page: number; requestId?: string; restore?: boolean } | null;
+  canvas: { title: string; html: string; page: number; requestId?: string; restore?: boolean } | null;
 };
 
 const EMPTY_STAGE: StageSnap = { mode: "file", open: true, file: null, canvas: null };
@@ -56,6 +59,7 @@ export function App() {
   const [creating, setCreating] = useState(false);
   const [botName, setBotName] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [fileBrowser, setFileBrowser] = useState<{ slug: string; mode: "file" | "canvas" } | null>(null);
   const [call, setCall] = useState<LiveCallView | null>(null);
   const [streamBySlug, setStreamBySlug] = useState<Record<string, { jobId: string; text: string }>>({});
   const audioRef = useRef(createCallAudio(
@@ -89,7 +93,7 @@ export function App() {
   const current = state?.bots.find((bot) => bot.slug === active);
   const steward = state?.bots.find((bot) => bot.slug === "xiaowang");
   const ink = current?.avatarInk || inkFor(active || "xiaowang");
-  const covered = settingsOpen || (state !== null && !state.settings.ready);
+  const covered = Boolean(fileBrowser) || settingsOpen || (state !== null && !state.settings.ready);
 
   function patchStage(slug: string, patch: Partial<StageSnap>) {
     if (!slug) return;
@@ -215,12 +219,15 @@ export function App() {
     if (!view.slug) return;
     if (view.mode === "file") {
       pinTab(view.slug, "files", view.id);
-      patchStage(view.slug, { mode: "file", open: true, file: { id: view.id, filename: view.filename, page: view.page, requestId: view.requestId } });
+      rememberOpenedFile(view.slug, `library:${view.id}`);
+      void window.xiaowang.library(view.slug).then(refs => { if (activeRef.current === view.slug) setLibrary(refs); });
+      patchStage(view.slug, { mode: "file", open: true, file: { id: view.id, filename: view.filename, page: view.page, requestId: view.requestId, restore: view.restore } });
     } else if (view.mode === "browser") {
       patchStage(view.slug, { mode: "browser", open: true });
       if (view.url && view.slug === activeRef.current) setAddress(view.url);
     } else {
       pinTab(view.slug, "pages", view.title);
+      rememberOpenedFile(view.slug, view.title.startsWith("library:") ? `library:${view.title.slice(8).split("/")[0]}` : `workspace:${view.title}`);
       patchStage(view.slug, { mode: "canvas", open: true, canvas: { title: view.title, html: view.html, page: view.page ?? 1, requestId: view.requestId } });
     }
   }
@@ -488,13 +495,15 @@ export function App() {
           <FileStage
             slug={active}
             library={library}
+            onBrowse={() => setFileBrowser({ slug: active, mode: "file" })}
+            locale={localeOf(state?.settings.locale)}
             file={file}
             openIds={openTabs[active]?.files ?? []}
             menu={stageMenu}
             copy={copy}
             onPick={(entry) => {
               pinTab(active, "files", entry.id);
-              patchStage(active, { file: { ...entry, page: 1 } });
+              patchStage(active, { file: { ...entry, page: 1, restore: true } });
             }}
             onClose={(id) => {
               closeTab(active, "files", id);
@@ -505,13 +514,15 @@ export function App() {
         {mode === "canvas" ? (
           <CanvasStage
             slug={active}
-            pages={pages}
+            pages={[...pages, ...library.filter(item => /\.html?$/i.test(item.filename)).map(item => ({ path: `library:${item.id}/${item.filename}`, name: item.filename }))]}
+            onBrowse={() => setFileBrowser({ slug: active, mode: "canvas" })}
             canvas={canvas}
             openPaths={openTabs[active]?.pages ?? []}
             menu={stageMenu}
             copy={copy}
             onPick={(path) => {
               pinTab(active, "pages", path);
+              if (path.startsWith("library:")) { void window.xiaowang.openReference(active, path.slice(8).split("/")[0]!, 1).catch(error => setToast(plainError(error))); return; }
               void window.xiaowang.openPage(active, path, 1).then((view) => {
                 patchStage(active, { mode: "canvas", open: true, canvas: { title: view.title, html: view.html, page: view.page } });
               }).catch((error) => setToast(plainError(error)));
@@ -547,6 +558,13 @@ export function App() {
         ) : null}
       </aside>
       ) : null}
+
+      {fileBrowser ? <FileBrowser key={`${fileBrowser.slug}:${fileBrowser.mode}`} slug={fileBrowser.slug} name={state?.bots.find(bot => bot.slug === fileBrowser.slug)?.name || fileBrowser.slug} mode={fileBrowser.mode} locale={localeOf(state?.settings.locale)} onClose={() => setFileBrowser(null)} onOpen={async entry => {
+        if (entry.source === "library" && entry.refId) {
+          if (entry.preview === "canvas") await window.xiaowang.openReference(fileBrowser.slug, entry.refId, 1);
+          else { pinTab(fileBrowser.slug, "files", entry.refId); patchStage(fileBrowser.slug, { mode: "file", open: true, file: { id: entry.refId, filename: entry.name, page: 1, restore: true } }); }
+        } else await window.xiaowang.openArtifact(fileBrowser.slug, entry.path);
+      }} /> : null}
 
       {settingsOpen || (state !== null && !state.settings.ready) ? (
         <SettingsPanel
@@ -641,82 +659,15 @@ function leafName(label: string): string {
   return name || label;
 }
 
-function OpenStrip({
-  openItems,
-  catalog,
-  activeKey,
-  placeholder,
-  addLabel,
-  closeLabel,
-  onOpen,
-  onClose,
-}: {
-  openItems: Array<{ key: string; label: string }>;
-  catalog: Array<{ key: string; label: string }>;
-  activeKey: string | null;
-  placeholder: string;
-  addLabel: string;
-  closeLabel: string;
-  onOpen: (key: string) => void;
-  onClose: (key: string) => void;
+function OpenStrip({ openItems, activeKey, addLabel, closeLabel, onOpen, onClose, onBrowse }: {
+  openItems: Array<{ key: string; label: string }>; activeKey: string | null;
+  addLabel: string; closeLabel: string; onOpen(key: string): void; onClose(key: string): void; onBrowse(): void;
 }) {
-  const [picking, setPicking] = useState(false);
-  const [query, setQuery] = useState("");
-  const openKeys = new Set(openItems.map((item) => item.key));
-  const closed = catalog.filter((item) => !openKeys.has(item.key));
-  const needle = query.trim().toLowerCase();
-  const choices = needle
-    ? closed.filter((item) => item.label.toLowerCase().includes(needle) || item.key.toLowerCase().includes(needle))
-    : closed;
-  return (
-    <div className="open-strip">
-      <div className="open-row">
-        <div className="open-scroll">
-          {openItems.map((item) => (
-            <span className={item.key === activeKey ? "open-chip on" : "open-chip"} key={item.key}>
-              <button className="name" type="button" title={item.label} onClick={() => onOpen(item.key)}>{leafName(item.label)}</button>
-              <button className="close" type="button" title={closeLabel} onClick={() => onClose(item.key)}><X size={13} /></button>
-            </span>
-          ))}
-          {picking ? (
-            <input
-              className="open-find"
-              value={query}
-              placeholder={placeholder}
-              autoFocus
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          ) : null}
-          {picking ? choices.map((item) => (
-            <button
-              className="open-choice"
-              key={item.key}
-              type="button"
-              title={item.label}
-              onClick={() => { onOpen(item.key); setPicking(false); setQuery(""); }}
-            >{leafName(item.label)}</button>
-          )) : null}
-        </div>
-        <button
-          className={picking ? "open-add on" : "open-add"}
-          type="button"
-          title={addLabel}
-          onClick={() => {
-            if (picking) {
-              setPicking(false);
-              setQuery("");
-              return;
-            }
-            if (closed.length === 0) return;
-            setPicking(true);
-          }}
-        ><Plus size={15} /></button>
-      </div>
-    </div>
-  );
+  return <div className="open-strip"><div className="open-row"><div className="open-scroll">{openItems.map(item => <span className={item.key === activeKey ? "open-chip on" : "open-chip"} key={item.key}><button className="name" type="button" title={item.label} onClick={() => onOpen(item.key)}>{leafName(item.label)}</button><button className="close" type="button" title={closeLabel} onClick={() => onClose(item.key)}><X size={13} /></button></span>)}</div><button className="open-add" type="button" title={addLabel} aria-label={addLabel} onClick={onBrowse}><Plus size={15} /></button></div></div>;
 }
 
 function FileStage({
+  locale,
   slug,
   library,
   file,
@@ -724,15 +675,18 @@ function FileStage({
   menu,
   copy,
   onPick,
+  onBrowse,
   onClose,
 }: {
   slug: string;
   library: LibraryItem[];
-  file: { id: string; filename: string; page: number; requestId?: string } | null;
+  file: { id: string; filename: string; page: number; requestId?: string; restore?: boolean } | null;
   openIds: string[];
   menu: boolean;
   copy: Copy;
+  locale: Locale;
   onPick: (file: LibraryItem) => void;
+  onBrowse: () => void;
   onClose: (id: string) => void;
 }) {
   const byId = new Map(library.map((entry) => [entry.id, entry]));
@@ -744,9 +698,8 @@ function FileStage({
           const entry = byId.get(id);
           return entry ? [{ key: entry.id, label: entry.filename }] : [];
         })}
-        catalog={library.map((entry) => ({ key: entry.id, label: entry.filename }))}
         activeKey={file?.id ?? null}
-        placeholder={copy.findFile}
+        onBrowse={onBrowse}
         addLabel={copy.openFromLibrary}
         closeLabel={copy.closeTab}
         onOpen={(key) => {
@@ -756,7 +709,7 @@ function FileStage({
         onClose={onClose}
       />
       ) : null}
-      {file && slug ? <Suspense fallback={<p className="empty">Loading…</p>}><DocumentReader slug={slug} file={file} /></Suspense> : <p className="empty">{copy.pickFile}</p>}
+      {file && slug ? <Suspense fallback={<p className="empty">Loading…</p>}><DocumentReader slug={slug} file={file} locale={locale} /></Suspense> : <p className="empty">{copy.pickFile}</p>}
     </div>
   );
 }
@@ -769,22 +722,24 @@ function CanvasStage({
   menu,
   copy,
   onPick,
+  onBrowse,
   onClose,
 }: {
   slug: string;
   pages: CanvasPage[];
-  canvas: { title: string; html: string; page: number; requestId?: string } | null;
+  canvas: { title: string; html: string; page: number; requestId?: string; restore?: boolean } | null;
   openPaths: string[];
   menu: boolean;
   copy: Copy;
   onPick: (path: string) => void;
+  onBrowse: () => void;
   onClose: (path: string) => void;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [page, setPage] = useState(canvas?.page ?? 1);
   const [totalPages, setTotalPages] = useState(0);
   const [pageError, setPageError] = useState("");
-  useEffect(() => { setPage(canvas?.page ?? 1); setPageError(""); }, [canvas?.title, canvas?.page, canvas?.requestId]);
+  useEffect(() => { setPage(canvas?.page ?? 1); setPageError(""); }, [canvas]);
   useEffect(() => { setTotalPages(0); }, [canvas?.title, canvas?.html]);
   useEffect(() => {
     if (!canvas) return;
@@ -808,15 +763,14 @@ function CanvasStage({
   useEffect(() => {
     if (canvas) frameRef.current?.contentWindow?.postMessage({ type: "xiaowang:page", page, requestId: canvas.requestId }, "*");
   }, [canvas?.title, canvas?.html, canvas?.requestId, page]);
-  const openItems = openPaths.map((path) => ({ key: path, label: path }));
+  const openItems = openPaths.map((path) => ({ key: path, label: pages.find(item => item.path === path)?.name || path }));
   return (
     <div className="canvas-stage">
       {menu ? (
       <OpenStrip
         openItems={openItems}
-        catalog={pages.map((entry) => ({ key: entry.path, label: entry.path }))}
         activeKey={canvas?.title ?? null}
-        placeholder={copy.findPage}
+        onBrowse={onBrowse}
         addLabel={copy.openFromLibrary}
         closeLabel={copy.closeTab}
         onOpen={onPick}
@@ -909,9 +863,6 @@ function SettingsPanel({
   const [region, setRegion] = useState<RealtimeRegion>(saved.region);
   const [workspace, setWorkspace] = useState(saved.workspace);
   const [realtimeKey, setRealtimeKey] = useState("");
-  const [searchProvider, setSearchProvider] = useState(settings?.searchProvider || "none");
-  const [searchUrl, setSearchUrl] = useState(settings?.searchUrl || "");
-  const [searchKey, setSearchKey] = useState("");
   const [locale, setLocale] = useState<Locale>(localeOf(settings?.locale));
   const [notice, setNotice] = useState("");
   const copy = copyFor(locale);
@@ -929,10 +880,46 @@ function SettingsPanel({
     realtimeRegion: region,
     realtimeWorkspace: workspace,
     realtimeKey,
-    searchProvider,
-    searchUrl, searchKey,
     locale,
   };
+  const initial = useRef(patch);
+  const dirty = hasUnsavedSettings(patch, initial.current);
+  const [exitIntent, setExitIntent] = useState<"panel" | "window" | "quit" | null>(null);
+  const [saving, setSaving] = useState(false);
+  const closeHandler = useRef<(intent: "panel" | "window" | "quit") => void>(() => {});
+  closeHandler.current = requestClose;
+  useEffect(() => { void window.xiaowang.settingsDirty(dirty); }, [dirty]);
+  useEffect(() => {
+    const stop = window.xiaowang.onSettingsClose(intent => closeHandler.current(intent));
+    return () => { stop(); void window.xiaowang.settingsDirty(false); };
+  }, []);
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (exitIntent) { setExitIntent(null); return; }
+      if (!forced) closeHandler.current("panel");
+    };
+    window.addEventListener("keydown", escape); return () => window.removeEventListener("keydown", escape);
+  }, [exitIntent, forced]);
+  function requestClose(intent: "panel" | "window" | "quit") {
+    if (saving) return;
+    if (dirty) setExitIntent(intent);
+    else void closeSettings(intent);
+  }
+  async function closeSettings(intent: "panel" | "window" | "quit") {
+    await window.xiaowang.settingsDirty(false);
+    if (intent !== "panel") await window.xiaowang.finishSettingsClose(intent);
+    onClose();
+  }
+  async function save(intent: "panel" | "window" | "quit" = "panel") {
+    setSaving(true); setNotice("");
+    try {
+      await onSave(patch);
+      await window.xiaowang.settingsDirty(false);
+      if (intent !== "panel") await window.xiaowang.finishSettingsClose(intent);
+    } catch (reason) { setNotice(plainError(reason)); setExitIntent(null); }
+    finally { setSaving(false); }
+  }
   const voiceChoices = voicesFor(service, realtimeModel);
   const modelChoices = modelsFor(service);
   const needsWorkspace = service === "qwen";
@@ -1014,15 +1001,15 @@ function SettingsPanel({
   }
 
   return (
-    <div className="modal">
-      <form onSubmit={(event) => { event.preventDefault(); void onSave(patch); }}>
+    <div className="modal" onMouseDown={event => { if (event.target === event.currentTarget && !forced) requestClose("panel"); }}>
+      <form aria-label={copy.settings} onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <header>
           <strong>{forced ? copy.connectModel : copy.settings}</strong>
           <div className="lang" role="group" aria-label={copy.language}>
             <button type="button" className={locale === "zh" ? "on" : ""} onClick={() => setLocale("zh")}>中文</button>
             <button type="button" className={locale === "en" ? "on" : ""} onClick={() => setLocale("en")}>English</button>
           </div>
-          {forced ? null : <button type="button" aria-label={copy.close} onClick={onClose}><X size={16} strokeWidth={1.75} /></button>}
+          {forced ? null : <button type="button" aria-label={copy.close} onClick={() => requestClose("panel")}><X size={16} strokeWidth={1.75} /></button>}
         </header>
         <div className="columns">
         <section>
@@ -1047,11 +1034,7 @@ function SettingsPanel({
               <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="deepseek-chat" />
             )}
           </label>
-          <div className="search-config">
-            <h2><Search size={16} strokeWidth={1.75} />{locale === "en" ? "Web search" : "网页搜索"}</h2>
-            <label>{locale === "en" ? "Provider" : "搜索服务"}<FieldSelect label="Search provider" value={searchProvider} onChange={setSearchProvider} options={[{ value: "none", label: locale === "en" ? "Not configured" : "暂不配置" }, { value: "brave", label: "Brave" }, { value: "searxng", label: "SearxNG" }]} /></label>
-            {searchProvider !== "none" ? <><label>{locale === "en" ? "Search URL" : "搜索地址"}<input value={searchUrl} onChange={event => setSearchUrl(event.target.value)} placeholder={searchProvider === "brave" ? "https://api.search.brave.com/res/v1/web/search" : "https://your-searxng.example"} /></label><label>{locale === "en" ? "Search key" : "搜索密钥"}<input type="password" value={searchKey} onChange={event => setSearchKey(event.target.value)} placeholder={settings?.searchKeyHint || "····"} /></label></> : null}
-          </div>
+
         </section>
         <section>
           <h2><AudioLines size={16} strokeWidth={1.75} />{copy.callSection}</h2>
@@ -1088,9 +1071,14 @@ function SettingsPanel({
         </div>
         <footer>
           {notice ? <p>{notice}</p> : null}
-          <button className="primary" type="submit">{copy.save}</button>
+          <button className="primary" type="submit" disabled={saving}>{saving ? (locale === "en" ? "Saving…" : "正在保存…") : copy.save}</button>
         </footer>
       </form>
+      {exitIntent ? <ModalDialog className="unsaved-dialog" label={locale === "en" ? "Save your changes?" : "保存设置更改？"} onCancel={() => { if (!saving) setExitIntent(null); }}><div role="alertdialog" aria-labelledby="unsaved-title" aria-describedby="unsaved-description">
+        <h2 id="unsaved-title">{locale === "en" ? "Save your changes?" : "保存设置更改？"}</h2>
+        <p id="unsaved-description">{locale === "en" ? "Your settings have unsaved changes. You can save them before leaving, or keep editing." : "设置中有尚未保存的更改。你可以保存后退出，或返回继续编辑。"}</p>
+        <div><button autoFocus type="button" disabled={saving} onClick={() => setExitIntent(null)}>{locale === "en" ? "Keep editing" : "继续编辑"}</button><button type="button" disabled={saving} onClick={() => void closeSettings(exitIntent)}>{locale === "en" ? "Discard changes" : "放弃修改"}</button><button className="primary" type="button" disabled={saving} onClick={() => void save(exitIntent)}>{locale === "en" ? "Save and close" : "保存并关闭"}</button></div>
+      </div></ModalDialog> : null}
     </div>
   );
 }

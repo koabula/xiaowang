@@ -7,9 +7,6 @@ export interface SecretRecord {
   baseUrl: string;
   apiStyle: string;
   apiKey: string;
-  searchKey: string;
-  searchUrl: string;
-  searchProvider: string;
   realtimeModel: string;
   realtimeUrl: string;
   realtimeKey: string;
@@ -25,9 +22,6 @@ export interface SecretPatch {
   baseUrl?: string;
   apiStyle?: string;
   apiKey?: string;
-  searchKey?: string;
-  searchUrl?: string;
-  searchProvider?: string;
   realtimeModel?: string;
   realtimeUrl?: string;
   realtimeKey?: string;
@@ -43,9 +37,6 @@ export interface SettingsView {
   baseUrl: string;
   apiStyle: string;
   keyHint: string;
-  searchProvider: string;
-  searchUrl: string;
-  searchKeyHint: string;
   realtimeModel: string;
   realtimeUrl: string;
   realtimeKeyHint: string;
@@ -62,9 +53,6 @@ const EMPTY: SecretRecord = {
   baseUrl: "",
   apiStyle: "",
   apiKey: "",
-  searchKey: "",
-  searchUrl: "",
-  searchProvider: "",
   realtimeModel: "",
   realtimeUrl: "",
   realtimeKey: "",
@@ -85,7 +73,8 @@ export function loadSecrets(): SecretRecord {
   try {
     const raw = readFileSync(filePath());
     const json = safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(raw) : raw.toString("utf8");
-    return { ...EMPTY, ...(JSON.parse(json) as Partial<SecretRecord>) };
+    const loaded = JSON.parse(json) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(EMPTY).map(([key, fallback]) => [key, typeof loaded[key] === "string" ? loaded[key] : fallback])) as unknown as SecretRecord;
   } catch {
     return { ...EMPTY };
   }
@@ -94,9 +83,10 @@ export function loadSecrets(): SecretRecord {
 export function mergeSecrets(current: SecretRecord, patch: SecretPatch): SecretRecord {
   const next: SecretRecord = { ...current };
   for (const key of Object.keys(patch) as (keyof SecretPatch)[]) {
+    if (!Object.hasOwn(EMPTY, key)) continue;
     const value = patch[key];
     if (typeof value !== "string") continue;
-    if ((key === "apiKey" || key === "searchKey" || key === "realtimeKey") && !value.trim()) continue;
+    if ((key === "apiKey" || key === "realtimeKey") && !value.trim()) continue;
     if (key === "locale") {
       next.locale = value.trim() === "en" ? "en" : "zh";
       continue;
@@ -116,9 +106,6 @@ export function publicSettings(secrets: SecretRecord): SettingsView {
     baseUrl: secrets.baseUrl,
     apiStyle: secrets.apiStyle,
     keyHint: hint(secrets.apiKey),
-    searchProvider: secrets.searchProvider,
-    searchUrl: secrets.searchUrl,
-    searchKeyHint: hint(secrets.searchKey),
     realtimeModel: secrets.realtimeModel,
     realtimeUrl: secrets.realtimeUrl,
     realtimeKeyHint: hint(secrets.realtimeKey),

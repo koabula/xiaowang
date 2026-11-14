@@ -1,83 +1,121 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, FileText, LoaderCircle } from "lucide-react";
+import { ChevronLeft, ChevronRight, FileText, LoaderCircle, Minus, Plus, Search, X } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy, type PDFDocumentLoadingTask } from "pdfjs-dist";
+import { AnnotationMode, GlobalWorkerOptions, getDocument, type PDFDocumentLoadingTask } from "pdfjs-dist";
+import { EventBus, PDFViewer, PDFLinkService, PDFFindController, ScrollMode } from "pdfjs-dist/web/pdf_viewer.mjs";
+import "pdfjs-dist/web/pdf_viewer.css";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
-export function DocumentReader({ slug, file }: { slug: string; file: { id: string; filename: string; page: number; requestId?: string } }) {
-  const [text, setText] = useState("");
-  const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
-  const [page, setPage] = useState(file.page);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const area = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(600);
-  const isPdf = /\.pdf$/i.test(file.filename);
-  useEffect(() => { setPage(file.page); }, [file.page, file.requestId]);
-  useEffect(() => {
-    if (!area.current) return;
-    const observer = new ResizeObserver(entries => { const next = entries[0]?.contentRect.width; if (next) setWidth(Math.max(200, next - 40)); });
-    observer.observe(area.current); return () => observer.disconnect();
-  }, []);
+export interface ReaderFile { id: string; filename: string; page: number; requestId?: string; restore?: boolean }
+export function DocumentReader({ slug, file, locale = "zh" }: { slug: string; file: ReaderFile; locale?: "zh" | "en" }) {
+  return /\.pdf$/i.test(file.filename) ? <PdfReader key={`${slug}:${file.id}`} slug={slug} file={file} locale={locale} /> : <TextReader key={`${slug}:${file.id}`} slug={slug} file={file} />;
+}
+
+function TextReader({ slug, file }: { slug: string; file: ReaderFile }) {
+  const [text, setText] = useState(""); const [error, setError] = useState(""); const [loading, setLoading] = useState(true);
   useEffect(() => {
     let stopped = false;
-    let document: PDFDocumentProxy | null = null;
-    let task: PDFDocumentLoadingTask | null = null;
-    setLoading(true); setError(""); setPdf(null); setText("");
+    void window.xiaowang.readFile(slug, file.id).then(bytes => { if (!stopped) { setText(new TextDecoder().decode(new Uint8Array(bytes))); setLoading(false); } }).catch(reason => { if (!stopped) { setError(String(reason)); setLoading(false); } });
+    return () => { stopped = true; };
+  }, [slug, file.id]);
+  useEffect(() => {
+    if (loading) return;
+    if (file.requestId) void window.xiaowang.stageAck(slug, file.requestId, { page: 1, totalPages: 1, error: error || undefined });
+    if (!error) void window.xiaowang.stagePosition(slug, { path: file.id, page: 1, totalPages: 1, mode: "file" });
+  }, [slug, file.id, file.requestId, error, loading]);
+  return <div className="document-reader"><div className="reader-toolbar"><FileText size={14} /><span>{file.filename}</span></div>{loading ? <Loading /> : null}{error ? <p className="reader-error" role="alert">{error}</p> : null}{/\.(md|markdown)$/i.test(file.filename) ? <div className="prose"><Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown></div> : <pre className="plain">{text}</pre>}</div>;
+}
+function Loading() { return <div className="reader-loading" role="status" aria-label="Loading document / 正在载入文档"><LoaderCircle size={18} className="spin" /></div>; }
+
+function PdfReader({ slug, file, locale }: { slug: string; file: ReaderFile; locale: "zh" | "en" }) {
+  const en = locale === "en";
+  const container = useRef<HTMLDivElement>(null); const viewerElement = useRef<HTMLDivElement>(null);
+  const engine = useRef<PDFViewer | null>(null); const bus = useRef<EventBus | null>(null);
+  const latest = useRef(file); latest.current = file;
+  const navigation = useRef<(file: ReaderFile) => void>(() => {});
+  const [page, setPage] = useState(1); const [pages, setPages] = useState(0); const [zoom, setZoom] = useState("page-width");
+  const [error, setError] = useState(""); const [loading, setLoading] = useState(true);
+  const [findOpen, setFindOpen] = useState(false); const [query, setQuery] = useState(""); const [matches, setMatches] = useState({ current: 0, total: 0 });
+  const [pageInput, setPageInput] = useState("1");
+  const positionKey = `xiaowang.pdfPosition:${slug}:${file.id}`;
+  useEffect(() => { setPageInput(String(page)); }, [page]);
+  useEffect(() => {
+    const area = container.current; const element = viewerElement.current; if (!area || !element) return;
+    const ac = new AbortController(); const events = new EventBus(); bus.current = events;
+    const link = new PDFLinkService({ eventBus: events, externalLinkTarget: 2, externalLinkRel: "noopener noreferrer" });
+    const find = new PDFFindController({ linkService: link, eventBus: events });
+    const options: ConstructorParameters<typeof PDFViewer>[0] & { abortSignal: AbortSignal } = {
+      container: area, viewer: element, eventBus: events, linkService: link, findController: find,
+      textLayerMode: 1, annotationMode: AnnotationMode.ENABLE, maxCanvasPixels: 12_000_000, abortSignal: ac.signal,
+    };
+    const viewer = new PDFViewer(options); engine.current = viewer; link.setViewer(viewer); viewer.scrollMode = ScrollMode.VERTICAL;
+    let task: PDFDocumentLoadingTask | null = null; let ready = false; let pending: ReaderFile | null = null;
+    const rendered = new Set<number>(); const acknowledged = new Set<string>();
+    let savedPage = 0; try { savedPage = Number(localStorage.getItem(positionKey)); } catch { /* Optional reading position. */ }
+    const ack = (requested: ReaderFile, reason?: string) => {
+      if (!requested.requestId || acknowledged.has(requested.requestId)) return;
+      acknowledged.add(requested.requestId);
+      void window.xiaowang.stageAck(slug, requested.requestId, { page: requested.page, totalPages: viewer.pagesCount || 1, title: requested.filename, ...(reason ? { error: reason } : {}) });
+    };
+    const navigate = (requested: ReaderFile) => {
+      pending = requested; if (!ready) return;
+      let target = requested.page;
+      if (requested.restore && !requested.requestId && savedPage >= 1 && savedPage <= viewer.pagesCount) target = savedPage;
+      if (!Number.isSafeInteger(target) || target < 1 || target > viewer.pagesCount) { const message = `页码超出范围：${target} / ${viewer.pagesCount}`; setError(message); setLoading(false); ack(requested, message); return; }
+      setError(""); viewer.scrollPageIntoView({ pageNumber: target });
+      // A receipt means the requested page is painted, not just present as an empty placeholder.
+      if (rendered.has(target)) { setLoading(false); ack(requested); } else setLoading(true);
+    };
+    navigation.current = navigate;
+    events.on("pagesinit", () => { if (ac.signal.aborted) return; ready = true; setPages(viewer.pagesCount); viewer.currentScaleValue = "page-width"; navigate(latest.current); }, { signal: ac.signal });
+    events.on("pagechanging", ({ pageNumber }: { pageNumber: number }) => {
+      if (!ready || ac.signal.aborted) return;
+      setPage(pageNumber); try { localStorage.setItem(positionKey, String(pageNumber)); } catch { /* Optional reading position. */ }
+      void window.xiaowang.stagePosition(slug, { path: file.id, page: pageNumber, totalPages: viewer.pagesCount, mode: "file" });
+    }, { signal: ac.signal });
+    events.on("pagerendered", ({ pageNumber, error: renderError }: { pageNumber: number; error?: Error }) => {
+      if (ac.signal.aborted) return;
+      if (renderError) { const message = renderError.message || String(renderError); setError(message); setLoading(false); if (pending?.page === pageNumber) ack(pending, message); return; }
+      rendered.add(pageNumber);
+      if (pageNumber === viewer.currentPageNumber) setLoading(false);
+      if (pending?.page === pageNumber) ack(pending);
+    }, { signal: ac.signal });
+    events.on("scalechanging", ({ scale, presetValue }: { scale: number; presetValue?: string }) => setZoom(presetValue || String(Math.round(scale * 100))), { signal: ac.signal });
+    events.on("updatefindmatchescount", ({ matchesCount }: { matchesCount: { current: number; total: number } }) => setMatches(matchesCount), { signal: ac.signal });
+    events.on("updatefindcontrolstate", ({ matchesCount }: { matchesCount?: { current: number; total: number } }) => { if (matchesCount) setMatches(matchesCount); }, { signal: ac.signal });
+    // Route PDF links through the same deliberate external-link action as chat citations.
+    const links = (event: MouseEvent) => { const anchor = (event.target as Element).closest<HTMLAnchorElement>("a[href]"); if (!anchor || !/^https?:/i.test(anchor.href)) return; event.preventDefault(); event.stopPropagation(); void window.xiaowang.openLink(anchor.href); };
+    area.addEventListener("click", links, { capture: true, signal: ac.signal });
+    const resources = new URL(`${import.meta.env.BASE_URL}pdfjs/`, window.location.href).href;
     void window.xiaowang.readFile(slug, file.id).then(async bytes => {
-      const data = new Uint8Array(bytes);
-      if (isPdf) {
-        task = getDocument({ data, useSystemFonts: true });
-        document = await task.promise;
-        if (stopped) { await task.destroy(); return; }
-        setPdf(document);
-      } else if (!stopped) { setText(new TextDecoder().decode(data)); setLoading(false); }
-    }).catch((reason: unknown) => { if (!stopped) { setError(reason instanceof Error ? reason.message : String(reason)); setLoading(false); } });
-    return () => { stopped = true; void task?.destroy(); };
-  }, [slug, file.id, isPdf]);
-  useEffect(() => {
-    if (!pdf || !canvas.current) return;
-    let stopped = false;
-    let task: { cancel(): void; promise: Promise<void> } | null = null;
-    setLoading(true); setError("");
-    if (page < 1 || page > pdf.numPages) { setError(`页码超出范围：${page} / ${pdf.numPages}`); setLoading(false); return; }
-    void pdf.getPage(page).then(item => {
-      if (stopped || !canvas.current) return;
-      const base = item.getViewport({ scale: 1 });
-      const scale = width / base.width;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const viewport = item.getViewport({ scale: scale * dpr });
-      const node = canvas.current;
-      node.width = viewport.width; node.height = viewport.height;
-      node.style.width = `${viewport.width / dpr}px`; node.style.height = `${viewport.height / dpr}px`;
-      task = item.render({ canvas: node, viewport });
-      return task.promise;
-    }).then(() => {
-      if (stopped) return;
-      setLoading(false);
-      void window.xiaowang.stagePosition(slug, { path: file.id, page, totalPages: pdf.numPages, mode: "file" });
-      if (file.requestId) void window.xiaowang.stageAck(slug, file.requestId, { page, totalPages: pdf.numPages, title: file.filename });
-    }).catch((reason: unknown) => {
-      if (stopped) return;
-      setError(reason instanceof Error ? reason.message : String(reason)); setLoading(false);
-    });
-    return () => { stopped = true; task?.cancel(); };
-  }, [pdf, page, width, slug, file.id, file.requestId, file.filename]);
-  useEffect(() => {
-    if (!file.requestId) return;
-    if (error) void window.xiaowang.stageAck(slug, file.requestId, { page, totalPages: pdf?.numPages ?? 1, error });
-    else if (!isPdf && !loading) {
-      void window.xiaowang.stagePosition(slug, { path: file.id, page: 1, totalPages: 1, mode: "file" });
-      void window.xiaowang.stageAck(slug, file.requestId, { page: 1, totalPages: 1 });
-    }
-  }, [error, file.requestId, isPdf, loading, slug, file.id, page, pdf]);
-  return <div className="document-reader" ref={area}>
-    <div className="reader-toolbar"><FileText size={14} /><span>{file.filename}</span>{isPdf ? <div className="reader-pager"><button type="button" aria-label="Previous page / 上一页" disabled={page <= 1} onClick={() => setPage(page - 1)}><ChevronLeft size={16} /></button><span>{page} / {pdf?.numPages || "…"}</span><button type="button" aria-label="Next page / 下一页" disabled={!pdf || page >= pdf.numPages} onClick={() => setPage(page + 1)}><ChevronRight size={16} /></button></div> : null}</div>
-    {loading ? <div className="reader-loading" role="status"><LoaderCircle size={18} className="spin" /></div> : null}
+      if (ac.signal.aborted) return;
+      task = getDocument({ data: new Uint8Array(bytes), useSystemFonts: true, cMapUrl: `${resources}cmaps/`, cMapPacked: true, standardFontDataUrl: `${resources}standard_fonts/`, wasmUrl: `${resources}wasm/`, iccUrl: `${resources}iccs/` });
+      const pdf = await task.promise; if (ac.signal.aborted) return;
+      link.setDocument(pdf); viewer.setDocument(pdf);
+    }).catch(reason => { if (!ac.signal.aborted) { const message = reason instanceof Error ? reason.message : String(reason); setError(message); setLoading(false); ack(latest.current, message); } });
+    const resize = new ResizeObserver(() => { if (ready && ["page-width", "page-fit", "auto"].includes(viewer.currentScaleValue)) viewer.currentScaleValue = viewer.currentScaleValue; });
+    resize.observe(area);
+    return () => { ac.abort(); resize.disconnect(); navigation.current = () => {}; engine.current = null; bus.current = null; viewer.setDocument(null as unknown as Parameters<PDFViewer["setDocument"]>[0]); link.setDocument(null as unknown as Parameters<PDFLinkService["setDocument"]>[0]); void task?.destroy(); void viewer.l10n?.destroy(); };
+  }, [slug, file.id, positionKey]);
+  useEffect(() => { navigation.current(file); }, [file]);
+  function go(target: number) { const viewer = engine.current; if (viewer && target >= 1 && target <= pages) viewer.scrollPageIntoView({ pageNumber: target }); }
+  function scale(value: string) { if (engine.current) engine.current.currentScaleValue = /^\d+$/.test(value) ? String(Number(value) / 100) : value; }
+  function search(value: string, again = false, previous = false) { setQuery(value); bus.current?.dispatch("find", { source: container.current, type: again ? "again" : "", query: value, caseSensitive: false, entireWord: false, highlightAll: true, findPrevious: previous, matchDiacritics: false }); }
+  return <div className="document-reader">
+    <div className="reader-toolbar pdf-title"><FileText size={14} /><span title={file.filename}>{file.filename}</span><button type="button" aria-label="Search PDF / 搜索文档" aria-pressed={findOpen} onClick={() => setFindOpen(!findOpen)}><Search size={16} /></button></div>
+    <div className="pdf-controls">
+      <button type="button" aria-label="Previous page / 上一页" disabled={page <= 1} onClick={() => go(page - 1)}><ChevronLeft size={16} /></button>
+      <form onSubmit={event => { event.preventDefault(); go(Number(pageInput)); }}><input aria-label="PDF page / PDF页码" inputMode="numeric" value={pageInput} onChange={event => setPageInput(event.target.value)} onBlur={() => { go(Number(pageInput)); setPageInput(String(engine.current?.currentPageNumber || page)); }} /><span>/ {pages || "…"}</span></form>
+      <button type="button" aria-label="Next page / 下一页" disabled={!pages || page >= pages} onClick={() => go(page + 1)}><ChevronRight size={16} /></button><span className="control-divider" />
+      <button type="button" aria-label="Zoom out / 缩小" onClick={() => scale(String(Math.max(25, Math.round((engine.current?.currentScale || 1) * 80))))}><Minus size={15} /></button>
+      <select aria-label="PDF zoom / PDF缩放" value={zoom} onChange={event => scale(event.target.value)}><option value="page-width">{en ? "Fit width" : "适应宽度"}</option><option value="page-fit">{en ? "Fit page" : "适应页面"}</option>{!["page-width", "page-fit", "50", "75", "100", "125", "150", "200"].includes(zoom) ? <option value={zoom}>{zoom}%</option> : null}{[50,75,100,125,150,200].map(value => <option key={value} value={value}>{value}%</option>)}</select>
+      <button type="button" aria-label="Zoom in / 放大" onClick={() => scale(String(Math.min(400, Math.round((engine.current?.currentScale || 1) * 125))))}><Plus size={15} /></button>
+    </div>
+    {findOpen ? <form className="pdf-find" onSubmit={event => { event.preventDefault(); search(query, true); }}><input aria-label="Find in PDF / 在PDF中查找" autoFocus value={query} onChange={event => search(event.target.value)} placeholder={en ? "Find in document" : "搜索文档"} /><span aria-live="polite">{matches.current} / {matches.total}</span><button type="button" aria-label="Previous match / 上一个匹配" onClick={() => search(query, true, true)}><ChevronLeft size={14} /></button><button type="submit" aria-label="Next match / 下一个匹配"><ChevronRight size={14} /></button><button type="button" aria-label="Close PDF search / 关闭文档搜索" onClick={() => { setFindOpen(false); bus.current?.dispatch("findbarclose", {}); }}><X size={14} /></button></form> : null}
     {error ? <p className="reader-error" role="alert">{error}</p> : null}
-    {isPdf ? <div className="pdf-scroll"><canvas ref={canvas} aria-label={`${file.filename}, page ${page}`} /></div> : /\.md|\.markdown$/i.test(file.filename) ? <div className="prose"><Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown></div> : <pre className="plain">{text}</pre>}
+    <div className="pdf-viewer-host"><div ref={container} className="pdf-scroll" tabIndex={0} aria-label={`PDF: ${file.filename}`}><div ref={viewerElement} className="pdfViewer" /></div></div>
+    {loading ? <Loading /> : null}
   </div>;
 }

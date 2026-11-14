@@ -11,7 +11,6 @@ export type { ProviderConfig } from "./provider.ts";
 export { Runtime } from "./runtime.ts";
 export { resolveHome, slugify, Store } from "./store.ts";
 export type { LibraryAddResult, LibraryRef } from "./store.ts";
-export { searchConfigFromEnv, webSearch } from "./websearch.ts";
 export { executeTool, toolSchemas } from "./tools.ts";
 export type {
   Bot,

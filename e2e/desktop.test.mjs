@@ -43,19 +43,20 @@ async function launchPackaged(executablePath, args, env) {
   };
 }
 
-function tinyPdf(sentence) {
-  const content = `BT /F1 18 Tf 72 720 Td (${sentence}) Tj ET`;
-  const objects = [
-    "<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
-    `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`,
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-  ];
-  let pdf = "%PDF-1.4\n"; const offsets = [0];
-  objects.forEach((object, i) => { offsets.push(Buffer.byteLength(pdf)); pdf += `${i+1} 0 obj\n${object}\nendobj\n`; });
-  const xref = Buffer.byteLength(pdf); pdf += "xref\n0 6\n0000000000 65535 f \n";
-  offsets.slice(1).forEach(offset => { pdf += `${String(offset).padStart(10, "0")} 00000 n \n`; });
-  return Buffer.from(pdf + `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+function tinyPdf(sentence, pages = 3) {
+  const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"];
+  const kids=[];
+  for(let page=1;page<=pages;page++) {
+    const id=objects.length+1; kids.push(`${id} 0 R`);
+    const content=`BT /F1 18 Tf 72 720 Td (${page===1?sentence:`PAGE-${page}-UNIQUE-SEARCH`}) Tj ET`;
+    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${id+1} 0 R /Resources << /Font << /F1 3 0 R >> >> >>`, `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`);
+  }
+  objects[1]=`<< /Type /Pages /Kids [${kids.join(' ')}] /Count ${pages} >>`;
+  let pdf="%PDF-1.4\n";const offsets=[0];
+  objects.forEach((object,i)=>{offsets.push(Buffer.byteLength(pdf));pdf+=`${i+1} 0 obj\n${object}\nendobj\n`;});
+  const xref=Buffer.byteLength(pdf);pdf+=`xref\n0 ${objects.length+1}\n0000000000 65535 f \n`;
+  offsets.slice(1).forEach(offset=>{pdf+=`${String(offset).padStart(10,'0')} 00000 n \n`;});
+  return Buffer.from(pdf+`trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
 }
 
 test("desktop: microphone, automatic slide walkthrough, actual playback, tasks and saved state", { timeout: 60000 }, async t => {
@@ -64,6 +65,7 @@ test("desktop: microphone, automatic slide walkthrough, actual playback, tasks a
   await mkdir(userData, { recursive: true });
   const seed = Runtime.open(home);
   const reference = seed.store.addLibraryBytes(seed.activeBot().id, "paper.pdf", tinyPdf("EVIDENCE-SENTENCE-42")).ref;
+  seed.store.addLibraryBytes(seed.activeBot().id, "notes.md", Buffer.from("# Notes\nA short research note."));
   seed.close();
   const model = createServer(async (request, response) => {
     let body = ""; for await (const chunk of request) body += chunk;
@@ -174,6 +176,21 @@ test("desktop: microphone, automatic slide walkthrough, actual playback, tasks a
   await page.waitForFunction(() => document.querySelector(".pdf-scroll canvas")?.width > 0);
   await until(async () => await page.locator(".reader-loading").count() === 0);
   assert.equal(await page.locator(".reader-error").count(), 0);
+  assert.equal(await page.locator('.pdfViewer .page').count(),3);
+  await page.locator('.pdfViewer .textLayer').first().waitFor();
+  await page.locator('.pdfViewer .textLayer span').filter({hasText:'EVIDENCE-SENTENCE-42'}).waitFor();
+  await page.locator('.pdf-scroll').hover();await page.mouse.wheel(0,800);
+  await until(async()=>Number(await page.getByRole('textbox',{name:'PDF page / PDF页码',exact:true}).inputValue())>=2);
+  await page.getByRole('button',{name:'Search PDF / 搜索文档',exact:true}).click();
+  await page.getByRole('textbox',{name:'Find in PDF / 在PDF中查找',exact:true}).fill('PAGE-3-UNIQUE-SEARCH');
+  await page.locator('.textLayer .highlight').waitFor();
+  await until(async()=>(await page.getByRole('textbox',{name:'PDF page / PDF页码',exact:true}).inputValue())==='3');
+  await page.getByRole('button',{name:'Close PDF search / 关闭文档搜索',exact:true}).click();
+  await page.getByRole('combobox',{name:'PDF zoom / PDF缩放',exact:true}).selectOption('125');
+  await page.waitForTimeout(100);
+  await page.getByRole('combobox',{name:'PDF zoom / PDF缩放',exact:true}).selectOption('page-width');
+  await page.evaluate(id=>window.xiaowang.openReference('xiaowang',id,1),reference.id);
+  await until(async()=>(await page.getByRole('textbox',{name:'PDF page / PDF页码',exact:true}).inputValue())==='1');
   await page.setViewportSize({ width: 900, height: 800 });
   await page.screenshot({ path: path.join(root, "workspace.png") });
   if (process.env.XIAOWANG_SCREENSHOT_DIR) {
@@ -186,6 +203,46 @@ test("desktop: microphone, automatic slide walkthrough, actual playback, tasks a
   await page.getByRole("button", { name: "挂断", exact: true }).click();
   await page.waitForSelector(".voice-panel", { state: "detached" });
   assert.ok((await page.evaluate(() => window.xiaowang.events("xiaowang"))).some(item => item.kind === "call"));
+  reached("file browser");
+  await page.getByRole('button',{name:'从资料库打开',exact:true}).click();
+  const files=page.getByRole('dialog',{name:'浏览任务资料',exact:true});await files.waitFor();
+  await files.getByRole('button',{name:'工作区文件',exact:true}).click();
+  await files.getByRole('row').filter({hasText:'deck.html'}).waitFor();
+  await files.getByRole('button',{name:'导入原件',exact:true}).click();
+  await files.getByRole('textbox',{name:'搜索任务资料',exact:true}).fill('notes.md');
+  const note=files.getByRole('row').filter({hasText:'notes.md'});await note.waitFor();await note.dblclick();
+  await page.locator('.document-reader .prose').filter({hasText:'A short research note.'}).waitFor();
+  await page.getByRole('button',{name:'从资料库打开',exact:true}).click();
+  await files.getByRole('button',{name:'最近打开',exact:true}).click();
+  await files.getByRole('row').filter({hasText:'notes.md'}).waitFor();
+  await files.getByRole('button',{name:'关闭资料浏览器',exact:true}).click();
+  reached("unsaved settings");
+  await page.locator('button.settings').click();
+  const settings=page.getByRole('form',{name:'设置',exact:true});await settings.waitFor();
+  assert.equal(await settings.getByText('网页搜索',{exact:true}).count(),0);
+  const modelInput=settings.locator('input[placeholder="deepseek-chat"]');await modelInput.fill('unsaved-model');
+  await settings.getByRole('button',{name:'关闭',exact:true}).click();
+  await page.getByRole('alertdialog').waitFor();
+  await page.getByRole('button',{name:'继续编辑',exact:true}).click();assert.equal(await modelInput.inputValue(),'unsaved-model');
+  await settings.getByRole('button',{name:'关闭',exact:true}).click();
+  await page.getByRole('button',{name:'放弃修改',exact:true}).click();await settings.waitFor({state:'detached'});
+  assert.equal((await page.evaluate(()=>window.xiaowang.getState())).settings.model,'fixture');
+  await page.locator('button.settings').click();await settings.waitFor();
+  await modelInput.fill('saved-model');await settings.getByRole('button',{name:'关闭',exact:true}).click();
+  await page.getByRole('button',{name:'保存并关闭',exact:true}).click();await settings.waitFor({state:'detached'});
+  assert.equal((await page.evaluate(()=>window.xiaowang.getState())).settings.model,'saved-model');
+  await page.locator('button.settings').click();await settings.waitFor();
+  await settings.getByRole('button',{name:'关闭',exact:true}).click();await settings.waitFor({state:'detached'});
+  if(app.evaluate) {
+    await page.locator('button.settings').click();await settings.waitFor();await modelInput.fill('native-close-unsaved');
+    await page.waitForTimeout(80);
+    await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].close());
+    await page.getByRole('alertdialog').waitFor();await page.getByRole('button',{name:'继续编辑',exact:true}).click();
+    assert.equal(await modelInput.inputValue(),'native-close-unsaved');
+    await app.evaluate(({app})=>app.quit());
+    await page.getByRole('alertdialog').waitFor();await page.getByRole('button',{name:'继续编辑',exact:true}).click();
+    await settings.getByRole('button',{name:'关闭',exact:true}).click();await page.getByRole('button',{name:'放弃修改',exact:true}).click();
+  }
   assert.deepEqual(errors, []); reached("complete");
   console.log(`Verified real desktop flow: ${microphonePackets} microphone packets, ${requests} voice responses, queued jobs, voice completion notification, and a PDF source link.`);
 });

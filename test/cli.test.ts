@@ -20,9 +20,6 @@ function run(home: string, args: string[]) {
       XIAOWANG_API_KEY: "",
       XIAOWANG_BASE_URL: "",
       XIAOWANG_API_STYLE: "",
-      XIAOWANG_SEARCH_KEY: "",
-      XIAOWANG_SEARCH_URL: "",
-      XIAOWANG_SEARCH_PROVIDER: "",
     },
   });
 }

@@ -11,9 +11,6 @@ export function installPreviewBridge(): void {
       baseUrl: "https://api.deepseek.com/v1",
       apiStyle: "",
       keyHint: "已保存 ····8f2a",
-      searchProvider: "",
-      searchUrl: "",
-      searchKeyHint: "",
       realtimeModel: "",
       realtimeUrl: "",
       realtimeKeyHint: "",
@@ -91,6 +88,7 @@ export function installPreviewBridge(): void {
       return { title: path, html: "<!doctype html><title>Deck</title><section>One</section><section>Two</section>", page: 1 };
     },
     async openArtifact() {},
+    async browseFiles() { return { entries: [], total: 0, truncated: false }; },
     async openReference() {},
     async openLink(url) { window.open(url, "_blank", "noopener,noreferrer"); },
     async readFile() {
@@ -109,6 +107,9 @@ export function installPreviewBridge(): void {
     async retryJob() { throw new Error("界面预览不执行后台任务。"); },
     async stageAck() { return true; },
     async stagePosition() {},
+    async settingsDirty() {},
+    async finishSettingsClose() {},
+    onSettingsClose() { return () => {}; },
     callPosition() {},
     callInterrupted() {},
     async callControl() {},

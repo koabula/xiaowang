@@ -1,6 +1,7 @@
 import type { TaskJob } from "../../src/types.ts";
 import type { AudioIdentity, InterruptionReceipt, PlaybackInterruption, PlaybackPosition, VoiceState } from "../main/call.ts";
 import type { StageReceipt } from "../../src/stage.ts";
+import type { BrowseOptions, BrowseResult } from "../../src/file-browser.ts";
 export type { TaskJob, VoiceState };
 
 declare global {
@@ -14,6 +15,7 @@ declare global {
       forgetFile: (slug: string, id: string) => Promise<void>;
       events: (slug: string) => Promise<ChatItem[]>;
       library: (slug: string) => Promise<LibraryItem[]>;
+      browseFiles: (slug: string, options: BrowseOptions) => Promise<BrowseResult>;
       readFile: (slug: string, id: string) => Promise<Uint8Array>;
       pages: (slug: string) => Promise<CanvasPage[]>;
       openPage: (slug: string, path: string, page?: number) => Promise<{ title: string; html: string; page: number }>;
@@ -28,6 +30,9 @@ declare global {
       stageAck: (slug: string, requestId: string, receipt: StageReceipt & { error?: string }) => Promise<boolean>;
       stagePosition: (slug: string, position: { path: string; page: number; totalPages: number; mode: "canvas" | "file" }) => Promise<void>;
       saveSettings: (patch: SettingsPatch) => Promise<SettingsView>;
+      settingsDirty: (dirty: boolean) => Promise<void>;
+      finishSettingsClose: (intent: "window" | "quit") => Promise<void>;
+      onSettingsClose: (callback: (intent: "window" | "quit") => void) => () => void;
       listModels: (patch: SettingsPatch) => Promise<string[]>;
       checkSettings: (patch: SettingsPatch) => Promise<string>;
       openKeyPage: (service: string, region: string) => Promise<void>;
@@ -100,9 +105,6 @@ export interface SettingsView {
   baseUrl: string;
   apiStyle: string;
   keyHint: string;
-  searchProvider: string;
-  searchUrl: string;
-  searchKeyHint: string;
   realtimeModel: string;
   realtimeUrl: string;
   realtimeKeyHint: string;
@@ -119,9 +121,6 @@ export interface SettingsPatch {
   baseUrl?: string;
   apiStyle?: string;
   apiKey?: string;
-  searchKey?: string;
-  searchUrl?: string;
-  searchProvider?: string;
   realtimeModel?: string;
   realtimeUrl?: string;
   realtimeKey?: string;
@@ -176,7 +175,7 @@ export interface StepNote {
 }
 
 export type StageNote = { slug: string; requestId?: string } & (
-  | { mode: "file"; id: string; filename: string; page: number }
+  | { mode: "file"; id: string; filename: string; page: number; restore?: boolean }
   | { mode: "browser"; url: string }
   | { mode: "canvas"; title: string; html: string; page?: number }
 );

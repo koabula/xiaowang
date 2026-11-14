@@ -9,19 +9,7 @@ import {
   reconstructOpenAlexAbstract,
   searchLiterature,
 } from "../src/literature.ts";
-import {
-  formatWebHits,
-  missingSearchConfigMessage,
-  parseBraveResults,
-  parseSearxResults,
-  searchConfigFromEnv,
-  webSearch,
-} from "../src/websearch.ts";
 import { toolSchemas } from "../src/tools.ts";
-import { Runtime } from "../src/runtime.ts";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 
 test("literature parsers keep titles from openalex, crossref and pubmed", () => {
   assert.equal(reconstructOpenAlexAbstract({ Hello: [0], world: [1] }), "Hello world");
@@ -86,42 +74,10 @@ test("search_literature uses one source and reports an empty result", async () =
   assert.match(output, /不要编造/);
 });
 
-test("web search stays unconfigured without a key and parses brave results", async () => {
-  assert.match(missingSearchConfigMessage(), /文献检索不需要/);
-  const missing = await webSearch("cursor", searchConfigFromEnv({}), {
-    fetchImpl: async () => {
-      throw new Error("should not fetch");
-    },
-  });
-  assert.match(missing, /还没有配置/);
-
-  const hits = parseBraveResults({
-    web: { results: [{ title: "Example", url: "https://example.com/a", description: "A page" }] },
-  });
-  assert.equal(hits[0]?.url, "https://example.com/a");
-  assert.match(formatWebHits("example", []), /不要编造链接/);
-  const searx = parseSearxResults({ results: [{ title: "S", url: "https://example.com/s", content: "body" }] });
-  assert.equal(searx[0]?.snippet, "body");
-
-  const found = await webSearch("example", searchConfigFromEnv({ XIAOWANG_SEARCH_KEY: "secret-token" }), {
-    fetchImpl: async (_url, init) => {
-      const headers = new Headers(init?.headers);
-      assert.equal(headers.get("x-subscription-token"), "secret-token");
-      return new Response("secret-token is invalid", { status: 401 });
-    },
-  });
-  assert.match(found, /网络搜索失败/);
-  assert.equal(found.includes("secret-token"), false);
-
-  const home = mkdtempSync(path.join(tmpdir(), "xiaowang-search-"));
-  const runtime = Runtime.open(home);
-  try {
-    const names = toolSchemas().map((item) => item.name);
-    assert.equal(names.includes("search_literature"), true);
-    assert.equal(names.includes("search_arxiv"), false);
-    assert.equal(names.includes("web_search"), false);
-  } finally {
-    runtime.close();
-    rmSync(home, { recursive: true, force: true });
-  }
+test("browser and academic tools remain available without a dedicated web search provider", () => {
+  const names = toolSchemas().map(item => item.name);
+  assert.ok(names.includes("search_literature"));
+  assert.ok(names.includes("browser_navigate"));
+  assert.equal(names.includes("search_web"), false);
+  assert.equal(names.includes("web_search"), false);
 });

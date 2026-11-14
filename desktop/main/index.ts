@@ -20,6 +20,7 @@ import type { BrowserDriver, StageView } from "../../src/stage.ts";
 import { BROWSER_BUSY, CANVAS_HTML_CAP, assertHttpUrl } from "../../src/stage.ts";
 import type { Channel, SessionEvent } from "../../src/types.ts";
 import { listCanvasPages, resolveInsideWorkspace } from "../../src/workspace.ts";
+import { browseBotFiles, type BrowseOptions } from "../../src/file-browser.ts";
 import { BrowserPane } from "./browser.ts";
 import { loadSecrets, mergeSecrets, publicSettings, type SecretPatch, type SecretRecord } from "./secrets.ts";
 
@@ -40,15 +41,13 @@ const devUrl = process.env.XIAOWANG_DESKTOP_URL ?? "";
 
 let runtime: Runtime;
 let window: BrowserWindow | null = null;
+let settingsDirty = false;
 let browser: BrowserPane;
 let secrets: SecretRecord = {
   model: "",
   baseUrl: "",
   apiStyle: "",
   apiKey: "",
-  searchKey: "",
-  searchUrl: "",
-  searchProvider: "",
   realtimeModel: "",
   realtimeUrl: "",
   realtimeKey: "",
@@ -161,9 +160,6 @@ function envFromRecord(record: SecretRecord): NodeJS.ProcessEnv {
     XIAOWANG_BASE_URL: record.baseUrl,
     XIAOWANG_API_STYLE: record.apiStyle,
     XIAOWANG_API_KEY: record.apiKey,
-    XIAOWANG_SEARCH_KEY: record.searchKey,
-    XIAOWANG_SEARCH_URL: record.searchUrl,
-    XIAOWANG_SEARCH_PROVIDER: record.searchProvider,
   };
 }
 
@@ -313,10 +309,21 @@ function registerIpc(): void {
   });
   ipcMain.handle("chat:events", (_event, slug: string) => chatItems(slug));
   ipcMain.handle("library:list", (_event, slug: string) => libraryOf(slug));
+  ipcMain.handle("workspace:browse", (_event, slug: string, options: BrowseOptions) => {
+    const bot = runtime.store.requireBot(slug);
+    if (!options || !["all", "library", "workspace"].includes(options.source)) throw new Error("无效的资料位置。");
+    return browseBotFiles(bot.workspaceDir, runtime.store.listLibrary(bot.id), options);
+  });
   ipcMain.handle("library:openReference", (_event, slug: string, id: string, page: number) => {
     const bot = runtime.store.requireBot(slug);
     const ref = runtime.store.resolveLibraryRef(bot.id, id);
     if (!Number.isSafeInteger(page) || page < 1) throw new Error("无效的来源页码。");
+    if (/\.html?$/i.test(ref.filename)) {
+      const html = readFileSync(ref.storedPath, "utf8");
+      if (Buffer.byteLength(html) > CANVAS_HTML_CAP) throw new Error("这份页面过大。");
+      send("stage", { slug, mode: "canvas", title: `library:${ref.id}/${ref.filename}`, html, page });
+      return;
+    }
     send("stage", { slug, mode: "file", id: ref.id, filename: ref.filename, page });
   });
   ipcMain.handle("link:open", (_event, url: string) => {
@@ -344,7 +351,7 @@ function registerIpc(): void {
     } else {
       if (!/\.(pdf|md|markdown|txt|csv|json|jsonl)$/i.test(resolved.rel)) throw new Error("暂时不能预览这种文件。");
       const result = runtime.store.addLibraryBytes(bot.id, path.basename(resolved.rel), readFileSync(resolved.abs));
-      send("stage", { slug, mode: "file", id: result.ref.id, filename: result.ref.filename, page: 1 });
+      send("stage", { slug, mode: "file", id: result.ref.id, filename: result.ref.filename, page: 1, restore: true });
     }
     publish();
   });
@@ -423,6 +430,12 @@ function registerIpc(): void {
     });
     publish();
     return publicSettings(secrets);
+  });
+  ipcMain.handle("settings:dirty", (_event, dirty: boolean) => { settingsDirty = dirty === true; });
+  ipcMain.handle("settings:finishClose", (_event, intent: "window" | "quit") => {
+    if (settingsDirty) return;
+    if (intent === "quit") app.quit();
+    else if (intent === "window") window?.close();
   });
   ipcMain.handle("call:start", (_event, slug: string) => {
     startCall(slug);
@@ -506,6 +519,9 @@ async function createWindow(): Promise<void> {
     },
   });
   browser.attach(window);
+  window.on("close", event => {
+    if (settingsDirty) { event.preventDefault(); send("settings:closeRequested", "window"); }
+  });
   if (devUrl) await window.loadURL(devUrl);
   else await window.loadFile(path.join(here, "renderer/index.html"));
   window.on("closed", () => {
@@ -701,7 +717,6 @@ app.whenReady().then(async () => {
   // Environment configuration stays in memory and never rewrites stored keys.
   const overrides: Array<[keyof SecretRecord, string]> = [
     ["model", "XIAOWANG_MODEL"], ["baseUrl", "XIAOWANG_BASE_URL"], ["apiStyle", "XIAOWANG_API_STYLE"], ["apiKey", "XIAOWANG_API_KEY"],
-    ["searchProvider", "XIAOWANG_SEARCH_PROVIDER"], ["searchUrl", "XIAOWANG_SEARCH_URL"], ["searchKey", "XIAOWANG_SEARCH_KEY"],
     ["realtimeService", "XIAOWANG_REALTIME_SERVICE"], ["realtimeModel", "XIAOWANG_REALTIME_MODEL"], ["realtimeKey", "XIAOWANG_REALTIME_KEY"],
   ];
   for (const [field, variable] of overrides) if (process.env[variable]?.trim()) secrets[field] = process.env[variable]!.trim();
@@ -732,7 +747,8 @@ app.on("window-all-closed", () => {
   stages.dispose();
   if (process.platform !== "darwin") app.quit();
 });
-app.on("before-quit", () => {
+app.on("before-quit", event => {
+  if (settingsDirty && window && !window.isDestroyed()) { event.preventDefault(); send("settings:closeRequested", "quit"); return; }
   live?.hangup();
   jobs?.shutdown();
   stages.dispose();

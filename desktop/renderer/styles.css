@@ -678,3 +678,81 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .voice-wave { color: color-mix(in srgb, var(--voice-ink) 60%, var(--ink)); }
 .voice-connected > span { background: currentColor; }
 @media (prefers-color-scheme: dark) { .avatar { box-shadow: 0 0 0 1px var(--line); } }
+
+/* PDF.js handles page rendering, text selection and continuous scroll inside this host. */
+.pdf-viewer-host { flex: 1; min-height: 0; position: relative; }
+.pdf-viewer-host .pdf-scroll { position: absolute; inset: 0; padding: 0; overflow: auto; background: var(--surface-soft); }
+.pdf-viewer-host .pdfViewer { padding: 12px 0 24px; --page-margin: 1px auto 14px; }
+.pdf-viewer-host .pdfViewer .page { box-shadow: 0 2px 12px #00000014; }
+.pdf-viewer-host .pdfViewer canvas { margin: 0; box-shadow: none; }
+.pdf-title > span { flex: 1; }
+.pdf-title button, .pdf-controls button, .pdf-find button { border: 0; background: transparent; border-radius: 6px; display: grid; place-items: center; width: 27px; height: 28px; flex-shrink: 0; color: var(--muted); }
+.pdf-title button:hover, .pdf-controls button:hover, .pdf-find button:hover { background: var(--surface-soft); color: var(--text); }
+.pdf-controls { display: flex; align-items: center; justify-content: center; gap: 3px; padding: 6px 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; font-size: 12px; }
+.pdf-controls button:disabled { opacity: .3; }
+.pdf-controls form { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+.pdf-controls input { width: 36px; padding: 4px; text-align: center; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); }
+.pdf-controls select { max-width: 140px; padding: 5px 2px; border: 0; background: transparent; color: var(--text); font-size: 11px; }
+.control-divider { width: 1px; height: 16px; margin: 0 5px; background: var(--line); }
+.pdf-find { display: flex; align-items: center; gap: 3px; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 11px; }
+.pdf-find input { min-width: 40px; flex: 1; border: 1px solid var(--line); border-radius: 6px; padding: 7px; background: var(--surface); color: var(--text); }
+.pdf-find > span { white-space: nowrap; color: var(--muted); }
+.confirm-overlay { position: fixed; inset: 0; z-index: 110; display: grid; place-items: center; padding: 24px; background: #0005; backdrop-filter: blur(4px); }
+.unsaved-dialog { width: min(440px, 100%); padding: 26px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.unsaved-dialog h2 { margin: 0 0 12px; font-size: 19px; }
+.unsaved-dialog p { color: var(--muted); font-size: 14px; line-height: 1.7; margin: 0 0 24px; }
+.unsaved-dialog > div { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.unsaved-dialog button { padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); color: var(--text); }
+.unsaved-dialog button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+dialog::backdrop { background: #15131b66; backdrop-filter: blur(5px); }
+.unsaved-dialog > [role="alertdialog"] { display: block; }
+.unsaved-dialog [role="alertdialog"] > div { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.file-browser-dialog { padding: 0; width: min(1040px, calc(100vw - 48px)); height: min(640px, calc(100vh - 80px)); max-height: calc(100vh - 48px); border: 1px solid var(--line); border-radius: 18px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); overflow: hidden; }
+.file-browser-dialog[open] { display: flex; flex-direction: column; }
+.file-browser-dialog button { border: 0; border-radius: 7px; color: inherit; background: transparent; cursor: pointer; }
+.file-browser-dialog button:hover { background: var(--surface-soft); }
+.file-browser-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 22px; border-bottom: 1px solid var(--line); }
+.file-browser-header > div { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.file-browser-header strong { font-size: 17px; }
+.file-browser-header span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.file-browser-header > button { display: grid; place-items: center; width: 30px; height: 30px; }
+.file-browser-body { display: flex; flex: 1; min-height: 0; }
+.file-browser-body > nav { flex: 0 0 155px; padding: 16px 10px; background: var(--surface-soft); border-right: 1px solid var(--line); }
+.file-browser-body > nav button { display: flex; align-items: center; gap: 9px; padding: 10px; width: 100%; margin-bottom: 4px; text-align: left; font-size: 12px; white-space: nowrap; }
+.file-browser-body > nav button.on { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); color: var(--accent); }
+.file-browser-main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.file-browser-tools { padding: 12px 12px 6px; display: flex; align-items: center; gap: 6px; }
+.file-browser-tools > button { display: grid; place-items: center; width: 26px; height: 27px; flex-shrink: 0; }
+.file-browser-tools button:disabled { opacity: .3; cursor: default; }
+.file-breadcrumb { display: flex; align-items: center; flex: 1; min-width: 0; overflow: auto; font-size: 11px; }
+.file-breadcrumb > span { display: flex; align-items: center; }
+.file-breadcrumb button { padding: 4px; white-space: nowrap; }
+.file-browser-tools select { max-width: 122px; background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 6px; font-size: 10px; padding: 5px; }
+.file-browser-search { margin: 4px 14px 12px; display: flex; gap: 8px; align-items: center; border: 1px solid var(--line); background: var(--surface-soft); padding: 8px 10px; border-radius: 8px; color: var(--muted); }
+.file-browser-search input { flex: 1; min-width: 0; outline: none; background: transparent; border: 0; color: var(--text); font-size: 12px; }
+.file-browser-list { flex: 1; min-height: 0; overflow: auto; padding: 0 10px 16px; }
+.file-table { border-collapse: collapse; width: 100%; text-align: left; font-size: 11px; }
+.file-table th { position: sticky; top: 0; z-index: 1; background: var(--surface); border-bottom: 1px solid var(--line); font-weight: 400; color: var(--muted); padding: 8px; white-space: nowrap; }
+.file-table th button { padding: 0; }
+.file-table td { padding: 10px 8px; color: var(--muted); border-bottom: 1px solid color-mix(in srgb, var(--line) 45%, transparent); white-space: nowrap; }
+.file-table td:first-child { color: var(--text); width: 100%; max-width: 200px; }
+.file-table td:first-child > span { display: flex; align-items: center; gap: 9px; }
+.file-table td:first-child > span > span { display: flex; flex-direction: column; overflow: hidden; text-overflow: ellipsis; }
+.file-table td small { color: var(--muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; }
+.file-table svg { color: var(--accent); flex-shrink: 0; }
+.file-table tbody tr { cursor: pointer; outline-offset: -2px; }
+.file-table tbody tr:hover, .file-table tbody tr[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 9%, var(--surface)); }
+.file-browser-empty { text-align: center; padding: 50px 15px; color: var(--muted); font-size: 13px; }
+.file-details { flex: 0 0 190px; padding: 28px 20px 12px; display: flex; align-items: center; flex-direction: column; gap: 12px; border-left: 1px solid var(--line); overflow: auto; }
+.file-details > svg { color: var(--accent); opacity: .75; margin: 8px 0; flex-shrink: 0; }
+.file-details > strong { font-size: 13px; text-align: center; overflow-wrap: anywhere; }
+.file-details > span, .file-details p { color: var(--muted); font-size: 11px; line-height: 1.7; text-align: center; }
+.file-details dl { align-self: stretch; font-size: 10px; line-height: 1.6; margin-top: 10px; }
+.file-details dt { color: var(--muted); margin-top: 10px; }
+.file-details dd { margin: 2px 0; overflow-wrap: anywhere; }
+.file-browser-footer { display: flex; align-items: center; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--line); }
+.file-browser-footer > span { flex: 1; color: var(--muted); font-size: 11px; }
+.file-browser-footer button, .file-load-more { padding: 8px 18px; border: 1px solid var(--line); font-size: 12px; }
+.file-browser-footer button.primary { color: #fff; background: var(--accent); }
+.file-browser-footer button:disabled { opacity: .4; cursor: default; }
+@media (max-width: 900px) { .file-details { display: none; } .file-browser-body > nav { flex-basis: 145px; } }
