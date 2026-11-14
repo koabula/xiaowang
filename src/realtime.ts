@@ -31,6 +31,7 @@ export type RealtimeNotice = (
   | { kind: "response_started" }
   | { kind: "input_committed" }
   | { kind: "audio_done" }
+  | { kind: "audio_item" }
   | { kind: "response_done"; status?: string; error?: string }
   | { kind: "audio"; pcm: Buffer }
   | { kind: "user_transcript"; text: string; partial: boolean }
@@ -439,6 +440,11 @@ export function parseRealtimeEvent(raw: string): RealtimeNotice[] {
     return text ? [{ kind: "user_transcript", text, partial: true, ...identity }] : [];
   }
   if (type === "response.created") return [{ kind: "response_started", ...identity }];
+  if (type === "response.output_item.added") {
+    const item = recordField(message, "item");
+    const id = item && stringField(item, "id");
+    return id ? [{ kind: "audio_item", ...identity, itemId: id }] : [];
+  }
   if (type === "response.output_audio.done" || type === "response.audio.done") return [{ kind: "audio_done", ...identity }];
   if (type === "response.canceled") return [{ kind: "response_done", status: "cancelled", ...identity }];
   if (type === "response.output_text.delta") {

@@ -1,5 +1,5 @@
 import type { TaskJob } from "../../src/types.ts";
-import type { AudioIdentity, PlaybackPosition, VoiceState } from "../main/call.ts";
+import type { AudioIdentity, InterruptionReceipt, PlaybackInterruption, PlaybackPosition, VoiceState } from "../main/call.ts";
 import type { StageReceipt } from "../../src/stage.ts";
 export type { TaskJob, VoiceState };
 
@@ -42,6 +42,7 @@ declare global {
       callAudio: (audio: string) => void;
       callIdle: (serial: number, callId?: string) => void;
       callPosition: (position: PlaybackPosition) => void;
+      callInterrupted: (receipt: InterruptionReceipt) => void;
       callControl: (action: "pause" | "resume" | "complete") => Promise<void>;
       onDelta: (callback: (note: { slug: string; jobId: string; text: string }) => void) => () => void;
       onJob: (callback: (job: TaskJob & { slug: string }) => void) => () => void;
@@ -137,6 +138,7 @@ export interface CallNote {
   phase: "connecting" | "live" | "closed" | "audio" | "interrupt" | "line" | "saved" | "state";
   state?: VoiceState;
   identity?: AudioIdentity;
+  interruption?: PlaybackInterruption;
   detail?: string;
   who?: "user" | "assistant";
   text?: string;

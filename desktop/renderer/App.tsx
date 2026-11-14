@@ -297,7 +297,8 @@ export function App() {
       return;
     }
     if (note.phase === "interrupt") {
-      audioRef.current.interrupt();
+      const position = audioRef.current.interrupt(note.interruption);
+      if (note.interruption) window.xiaowang.callInterrupted({ callId: note.interruption.callId, playbackEpoch: note.interruption.playbackEpoch, position });
       return;
     }
     if (note.phase === "line" && note.text && note.who) {
@@ -783,10 +784,15 @@ function CanvasStage({
   const [page, setPage] = useState(canvas?.page ?? 1);
   const [totalPages, setTotalPages] = useState(0);
   const [pageError, setPageError] = useState("");
-  useEffect(() => { setPage(canvas?.page ?? 1); }, [canvas?.title, canvas?.page, canvas?.requestId]);
+  useEffect(() => { setPage(canvas?.page ?? 1); setPageError(""); }, [canvas?.title, canvas?.page, canvas?.requestId]);
+  useEffect(() => { setTotalPages(0); }, [canvas?.title, canvas?.html]);
   useEffect(() => {
     if (!canvas) return;
     const listener = (event: MessageEvent) => {
+      if (event.source === frameRef.current?.contentWindow && event.data?.type === "xiaowang:ready") {
+        frameRef.current?.contentWindow?.postMessage({ type: "xiaowang:page", page: canvas.page, requestId: canvas.requestId }, "*");
+        return;
+      }
       if (event.source !== frameRef.current?.contentWindow || event.data?.type !== "xiaowang:position") return;
       const data = event.data as { page: number; totalPages: number; title?: string; requestId?: string; error?: string };
       if (!Number.isSafeInteger(data.page) || !Number.isSafeInteger(data.totalPages) || data.totalPages < 1) return;
@@ -821,6 +827,7 @@ function CanvasStage({
       {pageError ? <p className="reader-error" role="alert">{pageError}</p> : null}
       {canvas && slug ? (
         <iframe
+          key={canvas.title}
           ref={frameRef}
           className="canvas-frame"
           title={canvas.title}
@@ -939,6 +946,10 @@ function SettingsPanel({
         void audio.startPlayback(note.outputRate ?? 24_000);
       }
       if (note.phase === "audio" && note.audio) audio.play(note.audio, note.serial, note.identity);
+      if (note.phase === "interrupt") {
+        const position = audio.interrupt(note.interruption);
+        if (note.interruption) window.xiaowang.callInterrupted({ callId: note.interruption.callId, playbackEpoch: note.interruption.playbackEpoch, position });
+      }
       if (note.phase === "closed") {
         setPreviewing(false);
         if (note.detail) setNotice(note.detail);

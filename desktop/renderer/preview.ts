@@ -110,6 +110,7 @@ export function installPreviewBridge(): void {
     async stageAck() { return true; },
     async stagePosition() {},
     callPosition() {},
+    callInterrupted() {},
     async callControl() {},
     onDelta() { return () => {}; },
     onJob() { return () => {}; },

@@ -5,7 +5,9 @@ import { Presentation, type PresentationState } from "../../src/presentation.ts"
 
 const BREATH_MS = 350;
 export interface PlaybackPosition { serial: number; callId?: string; itemId?: string; contentIndex?: number; playedMs: number }
-export interface AudioIdentity { callId?: string; itemId?: string; responseId?: string; contentIndex?: number }
+export interface AudioIdentity { callId?: string; itemId?: string; responseId?: string; contentIndex?: number; playbackEpoch?: number }
+export interface PlaybackInterruption { callId: string; playbackEpoch: number; throughSerial: number; responseId?: string; itemId?: string }
+export interface InterruptionReceipt { callId: string; playbackEpoch: number; position: PlaybackPosition | null }
 export interface VoiceState {
   phase: "connecting" | "reconnecting" | "listening" | "thinking" | "speaking" | "working" | "paused" | "error" | "ended";
   presentation: PresentationState;
@@ -15,7 +17,7 @@ export interface CallHandlers {
   onPhase: (phase: "connecting" | "live" | "closed", detail?: string) => void;
   onState?: (state: VoiceState) => void;
   onAudio: (pcm: Buffer, serial: number, identity?: AudioIdentity) => void;
-  onInterrupt: () => void;
+  onInterrupt: (interruption: PlaybackInterruption) => void;
   onLine: (who: "user" | "assistant", text: string, partial: boolean, itemId?: string, order?: number) => void;
   onTranscript: (who: "user" | "assistant", text: string) => void;
   runTool: (name: string, args: string, callId?: string, signal?: AbortSignal) => Promise<string>;
@@ -43,6 +45,12 @@ export class LiveCall {
   private userReplyPending = false;
   private audioSerial = 0;
   private activeResponse = "";
+  private playbackEpoch = 0;
+  private interruptedSerial = 0;
+  private requireAudioIdentity = false;
+  private readonly cancelledItems = new Set<string>();
+  private readonly itemResponses = new Map<string, string>();
+  private readonly truncations = new Map<number, { position: PlaybackPosition | null; item: AudioIdentity; timer: ReturnType<typeof setTimeout> }>();
   private hadAudio = false;
   private segmentPending = false;
   private ending = false;
@@ -113,9 +121,18 @@ export class LiveCall {
     this.playback = position;
   }
 
+  noteInterrupted(receipt: InterruptionReceipt): void {
+    if (receipt.callId !== this.id) return;
+    const pending = this.truncations.get(receipt.playbackEpoch);
+    if (!pending) return;
+    clearTimeout(pending.timer); this.truncations.delete(receipt.playbackEpoch);
+    const position = receipt.position;
+    this.truncate(position && position.serial <= this.interruptedSerial && Number.isFinite(position.playedMs) && position.playedMs >= 0 ? position : pending.position, pending.item);
+  }
+
   noteSpeakerIdle(serial: number, callId?: string): void {
     if (callId && callId !== this.id) return;
-    if (serial !== this.audioSerial || this.closed) return;
+    if (serial !== this.audioSerial || serial <= this.interruptedSerial || this.closed) return;
     this.speakerBusy = false;
     this.settleSegment();
     this.schedule();
@@ -158,6 +175,8 @@ export class LiveCall {
     if (this.family === "doubao" && this.open) this.send({ type: "session.close" });
     this.closed = true;
     this.clearTimers();
+    for (const pending of this.truncations.values()) clearTimeout(pending.timer);
+    this.truncations.clear();
     for (const controller of this.tools.values()) controller.abort();
     this.tools.clear();
     this.socket?.close(); this.socket = null;
@@ -230,19 +249,27 @@ export class LiveCall {
     if (notice.kind === "response_started") {
       if (notice.responseId && this.cancelled.has(notice.responseId)) return;
       this.activeResponse = notice.responseId || ""; this.generating = true; this.requested = false;
+      if (this.userTalking) { this.interrupt(); return; }
       this.errorDetail = ""; this.clearLoop();
       this.waitingForInput = false; this.userReplyPending = false; this.hadAudio = false;
       this.assistantPartial = ""; this.openWho = ""; this.armWatchdog(); this.state("thinking"); return;
     }
-    if (notice.responseId && (this.cancelled.has(notice.responseId) || (this.activeResponse && notice.responseId !== this.activeResponse))) {
+    if (notice.kind === "audio_item") {
+      if (notice.itemId && notice.responseId) this.itemResponses.set(notice.itemId, notice.responseId);
+      return;
+    }
+    const responseId = notice.responseId || (notice.itemId ? this.itemResponses.get(notice.itemId) : undefined);
+    if (notice.itemId && this.cancelledItems.has(notice.itemId)) return;
+    if (responseId && (this.cancelled.has(responseId) || (this.activeResponse && responseId !== this.activeResponse))) {
       if (notice.kind === "response_done" && notice.responseId === this.activeResponse) { this.generating = false; this.requested = false; this.activeResponse = ""; this.schedule(this.userReplyPending ? 0 : BREATH_MS); }
       return;
     }
     if (notice.kind === "audio") {
-      if (this.userTalking) return;
+      if (this.userTalking || !this.generating || (this.requireAudioIdentity && !responseId)) return;
       this.hadAudio = true; this.speakerBusy = true; this.audioSerial += 1;
       this.armWatchdog();
-      this.audioItem = { callId: this.id, itemId: notice.itemId, responseId: notice.responseId, contentIndex: notice.contentIndex };
+      if (notice.itemId && responseId) this.itemResponses.set(notice.itemId, responseId);
+      this.audioItem = { callId: this.id, itemId: notice.itemId, responseId, contentIndex: notice.contentIndex, playbackEpoch: this.playbackEpoch };
       this.handlers.onAudio(notice.pcm, this.audioSerial, this.audioItem); this.state("speaking"); return;
     }
     if (notice.kind === "assistant_transcript") { if (!this.userTalking) this.remember("assistant", notice.text, notice.partial, notice.itemId); return; }
@@ -305,17 +332,29 @@ export class LiveCall {
   }
 
   private interrupt(): void {
-    if (this.generating && this.activeResponse) this.cancelled.add(this.activeResponse);
+    if (this.activeResponse) this.cancelled.add(this.activeResponse);
+    if (this.audioItem.responseId) this.cancelled.add(this.audioItem.responseId);
+    if (this.audioItem.itemId) this.cancelledItems.add(this.audioItem.itemId);
+    this.requireAudioIdentity = true;
+    this.interruptedSerial = this.audioSerial;
+    const playbackEpoch = ++this.playbackEpoch;
     if (this.generating) this.send(responseCancel());
-    if (this.speakerBusy || this.generating) {
-      // Playback position is reported by the actual renderer audio clock, not receipt time.
-      const itemId = this.playback?.itemId || this.audioItem.itemId;
-      if (this.family === "openai" && itemId) this.send({ type: "conversation.item.truncate", item_id: itemId, content_index: this.playback?.contentIndex ?? this.audioItem.contentIndex ?? 0, audio_end_ms: this.playback?.itemId === itemId ? Math.floor(this.playback.playedMs) : 0 });
-      this.handlers.onInterrupt();
+    if (this.speakerBusy && this.family === "openai") {
+      const position = this.playback; const item = this.audioItem;
+      // Prefer the renderer's exact stop clock. A missing renderer cannot stall cancellation.
+      const timer = setTimeout(() => { this.truncations.delete(playbackEpoch); this.truncate(position, item); }, 200);
+      this.truncations.set(playbackEpoch, { position, item, timer });
     }
+    this.handlers.onInterrupt({ callId: this.id, playbackEpoch, throughSerial: this.audioSerial, responseId: this.activeResponse || this.audioItem.responseId, itemId: this.audioItem.itemId });
     this.speakerBusy = false; this.segmentPending = false;
     // Remain generating until cancellation is acknowledged; no overlapping response.create.
     this.state();
+  }
+
+  private truncate(position: PlaybackPosition | null, item: AudioIdentity): void {
+    const itemId = position?.itemId || item.itemId;
+    if (this.closed || this.family !== "openai" || !itemId) return;
+    this.send({ type: "conversation.item.truncate", item_id: itemId, content_index: position?.contentIndex ?? item.contentIndex ?? 0, audio_end_ms: position?.itemId === itemId ? Math.floor(position.playedMs) : 0 });
   }
 
   private settleSegment(): void {

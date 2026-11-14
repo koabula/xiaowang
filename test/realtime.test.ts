@@ -10,10 +10,12 @@ function fixture(t: { after(fn: () => void): void }, runTool: (name: string, arg
   const listeners = new Map<string, (event: { data?: unknown }) => void>();
   const states: VoiceState[] = [];
   let interruptions = 0;
+  const audioPackets: unknown[] = [];
+  const interruptionNotes: any[] = [];
   const socket = { send: (data: string) => sent.push(JSON.parse(data)), close() {}, addEventListener: (type: string, fn: (event: { data?: unknown }) => void) => { listeners.set(type, fn); } };
   const isDoubao = url === DOUBAO_REALTIME_URL;
   const call = new LiveCall(url, "test-key", isDoubao ? doubaoSession({ instructions: "小王", tools: [] }) : { type: "session.update", session: { instructions: "小王" } }, {
-    onPhase() {}, onAudio() {}, onInterrupt() { interruptions++; }, onLine() {}, onTranscript() {}, onState(state) { states.push(state); }, runTool,
+    onPhase() {}, onAudio(...packet) { audioPackets.push(packet); }, onInterrupt(note) { interruptions++; interruptionNotes.push(note); }, onLine() {}, onTranscript() {}, onState(state) { states.push(state); }, runTool,
   }, () => socket, preview);
   t.after(() => call.hangup());
   call.start(); listeners.get("open")?.({});
@@ -24,7 +26,7 @@ function fixture(t: { after(fn: () => void): void }, runTool: (name: string, arg
   const tool = (id: string, callId: string, name: string, args = "{}") => emit({ type: "response.function_call_arguments.done", response_id: id, call_id: callId, name, arguments: args });
   const audio = (id: string, itemId = `item_${id}`) => emit({ type: "response.output_audio.delta", response_id: id, item_id: itemId, content_index: 0, delta: Buffer.alloc(480).toString("base64") });
   const creates = () => sent.filter(event => event.type === "response.create");
-  return { call, sent, states, emit, begin, done, tool, audio, creates, interruptions: () => interruptions };
+  return { call, sent, states, emit, begin, done, tool, audio, creates, audioPackets, interruptionNotes, interruptions: () => interruptions };
 }
 
 test("provider-specific session configuration and audio rates", () => {
@@ -96,6 +98,7 @@ test("acknowledgments and questions preserve a walkthrough; explicit pause and s
   f.call.notePlayback({ serial: 1, itemId: "item_r1", contentIndex: 0, playedMs: 100 });
   f.emit({ type: "input_audio_buffer.speech_started" });
   assert.equal(f.interruptions(), 1);
+  f.call.noteInterrupted({ callId: f.call.id, playbackEpoch: f.interruptionNotes.at(-1).playbackEpoch, position: { serial: 1, itemId: "item_r1", contentIndex: 0, playedMs: 100 } });
   assert.equal(f.sent.find(event => event.type === "conversation.item.truncate")?.audio_end_ms, 100);
   f.emit({ type: "input_audio_buffer.speech_stopped" }); f.emit({ type: "input_audio_buffer.committed" });
   f.emit({ type: "conversation.item.input_audio_transcription.completed", transcript: "OK" });
@@ -120,6 +123,37 @@ test("late audio, tool calls and completion from an interrupted response cannot 
   f.audio("old"); f.tool("old", "late", "write_file"); f.done("old");
   assert.equal(tools, 0); assert.equal(f.states.length, before);
   f.audio("new"); assert.equal(f.states.at(-1)?.phase, "speaking");
+});
+
+test("interrupting audio after generation completes invalidates the response and stale drain acknowledgments", async t => {
+  const f = fixture(t); f.call.presentation.start("讲完");
+  f.begin("finished"); f.audio("finished"); f.done("finished");
+  f.emit({ type: "input_audio_buffer.speech_started" });
+  f.emit({ type: "input_audio_buffer.speech_stopped" });
+  f.audio("finished"); f.call.noteSpeakerIdle(1);
+  await delay(400);
+  assert.equal(f.audioPackets.length, 1); assert.equal(f.creates().length, 0);
+  assert.equal(f.call.presentation.snapshot().segments, 0);
+  assert.equal(f.interruptionNotes.at(-1).throughSerial, 1);
+});
+
+test("unidentified and known-old-item audio cannot reopen playback after an interruption", t => {
+  const f = fixture(t); f.begin("old"); f.audio("old");
+  f.emit({ type: "input_audio_buffer.speech_started" }); f.done("old", "cancelled");
+  f.emit({ type: "input_audio_buffer.speech_stopped" }); f.begin("new");
+  f.emit({ type: "response.output_audio.delta", delta: Buffer.alloc(480).toString("base64") });
+  f.emit({ type: "response.output_audio.delta", item_id: "item_old", delta: Buffer.alloc(480).toString("base64") });
+  assert.equal(f.audioPackets.length, 1);
+  f.emit({ type: "response.output_item.added", response_id: "new", item: { id: "item_new" } });
+  f.emit({ type: "response.output_audio.delta", item_id: "item_new", delta: Buffer.alloc(480).toString("base64") });
+  assert.equal(f.audioPackets.length, 2);
+});
+
+test("a response starting while the user speaks is cancelled before it can emit audio", t => {
+  const f = fixture(t); f.emit({ type: "input_audio_buffer.speech_started" });
+  f.begin("raced"); f.emit({ type: "input_audio_buffer.speech_stopped" }); f.audio("raced");
+  assert.equal(f.audioPackets.length, 0);
+  assert.ok(f.sent.some(event => event.type === "response.cancel"));
 });
 
 test("queued job results wait until the user and speaker are idle, and notify only once", async t => {

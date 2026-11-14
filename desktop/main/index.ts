@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, session, sh
 import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { LiveCall, type PlaybackPosition, type VoiceState } from "./call.ts";
+import { LiveCall, type InterruptionReceipt, type PlaybackPosition, type VoiceState } from "./call.ts";
 import { JobQueue, type JobOutput } from "../../src/jobs.ts";
 import { StageRequests } from "./stage.ts";
 import type { TaskJob } from "../../src/types.ts";
@@ -439,6 +439,7 @@ function registerIpc(): void {
     live?.sendAudio(Buffer.from(audio, "base64"));
   });
   ipcMain.on("call:position", (_event, position: PlaybackPosition) => live?.notePlayback(position));
+  ipcMain.on("call:interrupted", (_event, receipt: InterruptionReceipt) => live?.noteInterrupted(receipt));
   ipcMain.handle("call:control", (_event, action: "pause" | "resume" | "complete") => { if (["pause", "resume", "complete"].includes(action)) live?.control(action); });
   ipcMain.on("call:idle", (_event, serial: number, callId?: string) => {
     live?.noteSpeakerIdle(serial, callId);
@@ -659,8 +660,8 @@ function openCall(
     onAudio(pcm, serial, identity) {
       send("call", { slug, callId: call.id, phase: "audio", preview, audio: pcm.toString("base64"), serial, identity });
     },
-    onInterrupt() {
-      if (!preview) send("call", { slug, callId: call.id, phase: "interrupt" });
+    onInterrupt(interruption) {
+      send("call", { slug, callId: call.id, phase: "interrupt", preview, interruption });
     },
     onLine(who, text, partial, itemId, order) {
       if (!preview) send("call", { slug, callId: call.id, phase: "line", who, text, partial, itemId, order });

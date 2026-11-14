@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld("xiaowang", {
   callAudio: (audio) => ipcRenderer.send("call:audio", audio),
   callIdle: (serial, callId) => ipcRenderer.send("call:idle", serial, callId),
   callPosition: (position) => ipcRenderer.send("call:position", position),
+  callInterrupted: (receipt) => ipcRenderer.send("call:interrupted", receipt),
   callControl: (action) => ipcRenderer.invoke("call:control", action),
   onDelta: (callback) => listeners("delta", callback),
   onJob: (callback) => listeners("job", callback),

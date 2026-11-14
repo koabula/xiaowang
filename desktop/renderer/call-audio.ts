@@ -1,5 +1,5 @@
 import { pcm16FromFloat } from "../../src/realtime.ts";
-import type { AudioIdentity, PlaybackPosition } from "../main/call.ts";
+import type { AudioIdentity, PlaybackInterruption, PlaybackPosition } from "../main/call.ts";
 
 export interface AudioLevels { input: number; output: number }
 export interface CallAudio {
@@ -7,7 +7,7 @@ export interface CallAudio {
   startPlayback(outputRate: number): Promise<void>;
   stop(): void;
   play(audio: string, serial?: number, identity?: AudioIdentity): void;
-  interrupt(): void;
+  interrupt(interruption?: PlaybackInterruption): PlaybackPosition | null;
   setMuted(muted: boolean): void;
   subscribeLevels(listener: (levels: AudioLevels) => void): () => void;
 }
@@ -33,6 +33,11 @@ export function createCallAudio(send: (audio: string) => void, onIdle?: (serial:
   let playback: AudioContext | null = null;
   let inputMeter: AnalyserNode | null = null;
   let outputMeter: AnalyserNode | null = null;
+  let outputGate: GainNode | null = null;
+  let playbackEpoch = 0;
+  let throughSerial = 0;
+  const rejectedResponses = new Set<string>();
+  const rejectedItems = new Set<string>();
   let outputRate = 24_000;
   let nextAt = 0;
   let muted = false;
@@ -53,14 +58,15 @@ export function createCallAudio(send: (audio: string) => void, onIdle?: (serial:
     let sum = 0; for (const value of samples) sum += value * value;
     return Math.min(1, Math.sqrt(sum / samples.length) * 5);
   }
-  function position(): void {
+  function position(): PlaybackPosition | null {
     const now = playback?.currentTime ?? 0;
-    const current = playing.find(item => item.start <= now && item.start + item.duration >= now) ?? playing.at(-1);
-    if (!current) return;
+    const current = playing.find(item => item.start <= now && item.start + item.duration >= now) ?? playing[0];
+    if (!current) return null;
     const key = itemKey(current.identity);
     let seconds = completed.get(key) ?? 0;
     for (const item of playing) if (itemKey(item.identity) === key) seconds += Math.max(0, Math.min(item.duration, now - item.start));
-    onPosition?.({ serial: current.serial, ...current.identity, playedMs: Math.round(seconds * 1000) });
+    const result = { serial: current.serial, ...current.identity, playedMs: Math.round(seconds * 1000) };
+    onPosition?.(result); return result;
   }
   function tick(time: number): void {
     if (!playback) { frame = 0; return; }
@@ -73,7 +79,8 @@ export function createCallAudio(send: (audio: string) => void, onIdle?: (serial:
   }
   function meters(): void {
     if (!playback) return;
-    outputMeter = playback.createAnalyser(); outputMeter.fftSize = 256; outputMeter.connect(playback.destination);
+    outputMeter = playback.createAnalyser(); outputMeter.fftSize = 256;
+    outputGate = playback.createGain(); outputMeter.connect(outputGate); outputGate.connect(playback.destination);
     if (!frame) frame = requestAnimationFrame(tick);
   }
   function settled(): void { if (heard > 0 && !playing.length && !pending.length) onIdle?.(heard, heardCallId); }
@@ -118,16 +125,18 @@ export function createCallAudio(send: (audio: string) => void, onIdle?: (serial:
     stop() {
       generation += 1; pending = []; heard = 0; heardCallId = undefined;
       this.interrupt(); processor?.disconnect(); processor = null;
+      playbackEpoch = 0; throughSerial = 0; rejectedResponses.clear(); rejectedItems.clear();
       mic?.getTracks().forEach(track => track.stop()); mic = null;
       const shared = playback === capture;
       void capture?.close().catch(() => {}); if (!shared) void playback?.close().catch(() => {});
-      capture = null; playback = null; inputMeter = null; outputMeter = null;
+      capture = null; playback = null; inputMeter = null; outputMeter = null; outputGate = null;
       cancelAnimationFrame(frame); frame = 0; completed.clear();
       listeners.forEach(listener => listener({ input: 0, output: 0 }));
     },
     setMuted(value) { muted = value; mic?.getAudioTracks().forEach(track => { track.enabled = !value; }); if (value) listeners.forEach(listener => listener({ input: 0, output: energy(outputMeter) })); },
     subscribeLevels(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     play(audio, serial = 0, identity = {}) {
+      if ((identity.playbackEpoch ?? 0) < playbackEpoch || (serial > 0 && serial <= throughSerial) || (identity.responseId && rejectedResponses.has(identity.responseId)) || (identity.itemId && rejectedItems.has(identity.itemId))) return;
       heard = Math.max(heard, serial);
       heardCallId = identity.callId;
       if (!playback || !outputMeter) { pending.push({ audio, serial, identity }); return; }
@@ -139,6 +148,7 @@ export function createCallAudio(send: (audio: string) => void, onIdle?: (serial:
       // Let Web Audio resample from the source sample rate; avoid nearest-neighbor stretching.
       const buffer = playback.createBuffer(1, values.length, outputRate); buffer.copyToChannel(values, 0);
       const node = playback.createBufferSource(); node.buffer = buffer; node.connect(outputMeter);
+      outputGate?.gain.setValueAtTime(1, playback.currentTime);
       const start = Math.max(playback.currentTime + 0.012, nextAt); nextAt = start + buffer.duration;
       const item = { node, start, duration: buffer.duration, serial, identity }; playing.push(item);
       node.onended = () => {
@@ -148,12 +158,24 @@ export function createCallAudio(send: (audio: string) => void, onIdle?: (serial:
       };
       node.start(start);
     },
-    interrupt() {
-      position();
+    interrupt(interruption) {
+      const stoppedAt = position();
+      if (outputGate && playback) outputGate.gain.setValueAtTime(0, playback.currentTime);
+      if (interruption) {
+        playbackEpoch = Math.max(playbackEpoch, interruption.playbackEpoch);
+        throughSerial = Math.max(throughSerial, interruption.throughSerial);
+        if (interruption.responseId) rejectedResponses.add(interruption.responseId);
+        if (interruption.itemId) rejectedItems.add(interruption.itemId);
+      }
       const held = playing.splice(0);
+      for (const item of [...held, ...pending]) {
+        if (item.identity?.responseId) rejectedResponses.add(item.identity.responseId);
+        if (item.identity?.itemId) rejectedItems.add(item.identity.itemId);
+      }
       held.forEach(item => { item.node.onended = null; item.node.stop(); item.node.disconnect(); });
       pending = []; completed.clear(); nextAt = playback?.currentTime ?? 0;
       // Interruption is not a natural drain acknowledgement.
+      return stoppedAt;
     },
   };
   return api;
