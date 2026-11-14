@@ -21,6 +21,7 @@ test("stage receipts are correlated to a workspace and confirm actual page bound
   const result = stage.show("bot", { mode: "canvas", title: "deck.html", html: "<section>one</section>", page: 1 });
   const id = sent[0]!.requestId;
   assert.equal(stage.acknowledge("other", id, { page: 1, totalPages: 2 }), false);
+  assert.equal(stage.acknowledge("bot", id, { page: 2, totalPages: 2 }), false);
   assert.equal(stage.acknowledge("bot", id, { page: 1, totalPages: 2 }), true);
   assert.deepEqual(await result, { page: 1, totalPages: 2 });
   const invalid = stage.show("bot", { mode: "file", id: "doc", filename: "file.pdf", page: 5 });

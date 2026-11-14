@@ -39,6 +39,7 @@ export class LiveCall {
   private closed = false;
   private generating = false;
   private requested = false;
+  private discardRequested = false;
   private speakerBusy = false;
   private userTalking = false;
   private waitingForInput = false;
@@ -117,7 +118,7 @@ export class LiveCall {
 
   notePlayback(position: PlaybackPosition): void {
     if (position.callId && position.callId !== this.id) return;
-    if (position.serial > this.audioSerial || position.playedMs < 0 || !Number.isFinite(position.playedMs)) return;
+    if (position.serial > this.audioSerial || position.serial <= this.interruptedSerial || position.playedMs < 0 || !Number.isFinite(position.playedMs)) return;
     this.playback = position;
   }
 
@@ -248,8 +249,10 @@ export class LiveCall {
     if (notice.kind === "user_transcript") { this.remember("user", notice.text, notice.partial, notice.itemId); return; }
     if (notice.kind === "response_started") {
       if (notice.responseId && this.cancelled.has(notice.responseId)) return;
+      const discard = this.requested && this.discardRequested;
       this.activeResponse = notice.responseId || ""; this.generating = true; this.requested = false;
-      if (this.userTalking) { this.interrupt(); return; }
+      this.discardRequested = false;
+      if (this.userTalking || discard) { this.interrupt(); return; }
       this.errorDetail = ""; this.clearLoop();
       this.waitingForInput = false; this.userReplyPending = false; this.hadAudio = false;
       this.assistantPartial = ""; this.openWho = ""; this.armWatchdog(); this.state("thinking"); return;
@@ -259,11 +262,16 @@ export class LiveCall {
       return;
     }
     const responseId = notice.responseId || (notice.itemId ? this.itemResponses.get(notice.itemId) : undefined);
+    if (notice.kind === "response_done" && this.requested && this.discardRequested && !this.generating) {
+      if (responseId) this.cancelled.add(responseId);
+      this.requested = false; this.discardRequested = false; this.clearWatchdog(); this.schedule(this.userReplyPending ? 0 : BREATH_MS); return;
+    }
     if (notice.itemId && this.cancelledItems.has(notice.itemId)) return;
     if (responseId && (this.cancelled.has(responseId) || (this.activeResponse && responseId !== this.activeResponse))) {
       if (notice.kind === "response_done" && notice.responseId === this.activeResponse) { this.generating = false; this.requested = false; this.activeResponse = ""; this.schedule(this.userReplyPending ? 0 : BREATH_MS); }
       return;
     }
+    if (this.requireAudioIdentity && !responseId && ["audio", "assistant_transcript", "function_call", "response_done"].includes(notice.kind)) return;
     if (notice.kind === "audio") {
       if (this.userTalking || !this.generating || (this.requireAudioIdentity && !responseId)) return;
       this.hadAudio = true; this.speakerBusy = true; this.audioSerial += 1;
@@ -335,10 +343,11 @@ export class LiveCall {
     if (this.activeResponse) this.cancelled.add(this.activeResponse);
     if (this.audioItem.responseId) this.cancelled.add(this.audioItem.responseId);
     if (this.audioItem.itemId) this.cancelledItems.add(this.audioItem.itemId);
-    this.requireAudioIdentity = true;
+    this.requireAudioIdentity ||= this.generating || this.requested || this.speakerBusy || this.audioSerial > 0;
     this.interruptedSerial = this.audioSerial;
     const playbackEpoch = ++this.playbackEpoch;
-    if (this.generating) this.send(responseCancel());
+    if (this.requested) this.discardRequested = true;
+    if (this.generating || this.requested) this.send(responseCancel());
     if (this.speakerBusy && this.family === "openai") {
       const position = this.playback; const item = this.audioItem;
       // Prefer the renderer's exact stop clock. A missing renderer cannot stall cancellation.
@@ -397,6 +406,7 @@ export class LiveCall {
   private requestResponse(instruction = ""): void {
     if (this.generating || this.requested || this.closed) return;
     this.syncContext(instruction);
+    this.discardRequested = false;
     this.requested = true;
     if (this.family === "doubao") this.send({ type: "conversation.item.create", items: [{ type: "message", role: "user", content: [{ type: "input_text", text: instruction || "请依据刚才的工具结果接着回答。" }] }] });
     else this.send(responseCreate());

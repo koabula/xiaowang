@@ -62,7 +62,7 @@ function flip(page,id){
  }catch(e){report(id,String(e));}
 }
 window.addEventListener("message",function(e){if(e.source===parent&&e.data&&e.data.type==="xiaowang:page")flip(e.data.page,e.data.requestId);});
-function changed(){if(reporting)return;reporting=true;requestAnimationFrame(function(){reporting=false;if(requested&&visible(slides()[requested.page-1]))report(requested.id);else report();});}
+function changed(){if(reporting)return;reporting=true;requestAnimationFrame(function(){reporting=false;if(requested&&state().page===requested.page&&visible(slides()[requested.page-1]))report(requested.id);else report();});}
 function ready(){
  new MutationObserver(changed).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:["class","style","hidden"]});
  window.addEventListener("keydown",function(){setTimeout(changed,0);});window.addEventListener("click",function(){setTimeout(changed,0);});

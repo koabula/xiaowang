@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight, FileText, LoaderCircle, Minus, Plus, Search,
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { AnnotationMode, GlobalWorkerOptions, getDocument, type PDFDocumentLoadingTask } from "pdfjs-dist";
-import { EventBus, PDFViewer, PDFLinkService, PDFFindController, ScrollMode } from "pdfjs-dist/web/pdf_viewer.mjs";
+import { EventBus, PDFViewer, PDFLinkService, PDFFindController, ScrollMode, RenderingStates } from "pdfjs-dist/web/pdf_viewer.mjs";
 import "pdfjs-dist/web/pdf_viewer.css";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
@@ -52,7 +52,7 @@ function PdfReader({ slug, file, locale }: { slug: string; file: ReaderFile; loc
     };
     const viewer = new PDFViewer(options); engine.current = viewer; link.setViewer(viewer); viewer.scrollMode = ScrollMode.VERTICAL;
     let task: PDFDocumentLoadingTask | null = null; let ready = false; let pending: ReaderFile | null = null;
-    const rendered = new Set<number>(); const acknowledged = new Set<string>();
+    const acknowledged = new Set<string>();
     let savedPage = 0; try { savedPage = Number(localStorage.getItem(positionKey)); } catch { /* Optional reading position. */ }
     const ack = (requested: ReaderFile, reason?: string) => {
       if (!requested.requestId || acknowledged.has(requested.requestId)) return;
@@ -66,7 +66,7 @@ function PdfReader({ slug, file, locale }: { slug: string; file: ReaderFile; loc
       if (!Number.isSafeInteger(target) || target < 1 || target > viewer.pagesCount) { const message = `页码超出范围：${target} / ${viewer.pagesCount}`; setError(message); setLoading(false); ack(requested, message); return; }
       setError(""); viewer.scrollPageIntoView({ pageNumber: target });
       // A receipt means the requested page is painted, not just present as an empty placeholder.
-      if (rendered.has(target)) { setLoading(false); ack(requested); } else setLoading(true);
+      if (viewer.getPageView(target - 1)?.renderingState === RenderingStates.FINISHED) { setLoading(false); ack(requested); } else setLoading(true);
     };
     navigation.current = navigate;
     events.on("pagesinit", () => { if (ac.signal.aborted) return; ready = true; setPages(viewer.pagesCount); viewer.currentScaleValue = "page-width"; navigate(latest.current); }, { signal: ac.signal });
@@ -78,7 +78,6 @@ function PdfReader({ slug, file, locale }: { slug: string; file: ReaderFile; loc
     events.on("pagerendered", ({ pageNumber, error: renderError }: { pageNumber: number; error?: Error }) => {
       if (ac.signal.aborted) return;
       if (renderError) { const message = renderError.message || String(renderError); setError(message); setLoading(false); if (pending?.page === pageNumber) ack(pending, message); return; }
-      rendered.add(pageNumber);
       if (pageNumber === viewer.currentPageNumber) setLoading(false);
       if (pending?.page === pageNumber) ack(pending);
     }, { signal: ac.signal });

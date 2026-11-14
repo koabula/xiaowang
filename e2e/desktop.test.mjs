@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer } from "node:http";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, rename } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { _electron as electron, chromium } from "playwright";
@@ -59,7 +59,7 @@ function tinyPdf(sentence, pages = 3) {
   return Buffer.from(pdf+`trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
 }
 
-test("desktop: microphone, automatic slide walkthrough, actual playback, tasks and saved state", { timeout: 60000 }, async t => {
+test("desktop: voice interruption, PDF Viewer, bot files, settings and saved state", { timeout: 60000 }, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), "xw-desktop-"));
   const home = path.join(root, "home"); const userData = path.join(root, "profile");
   await mkdir(userData, { recursive: true });
@@ -89,13 +89,14 @@ test("desktop: microphone, automatic slide walkthrough, actual playback, tasks a
   const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
   await new Promise(resolve => server.once("listening", resolve));
   const realtimeUrl = `ws://127.0.0.1:${server.address().port}/realtime`;
-  let connection; let requests = 0; let microphonePackets = 0; const outputs = []; let latestInstructions = "";
+  let connection; let requests = 0; let microphonePackets = 0; const outputs = []; let latestInstructions = ""; let forcedResponse = "";
   server.on("connection", (socket, request) => {
     connection = socket; assert.equal(request.headers.authorization, "Bearer test-realtime-key");
     const emit = value => socket.send(JSON.stringify(value));
     emit({ type: "session.created" });
     socket.on("message", raw => {
       const event = JSON.parse(raw.toString());
+      if (event.type === "response.cancel" && forcedResponse) { emit({type:"response.done",response:{id:forcedResponse,status:"cancelled",output:[]}});forcedResponse="";return; }
       if (event.type === "input_audio_buffer.append") { microphonePackets++; return; }
       if (event.type === "session.update") { latestInstructions = event.session.instructions; emit({ type: "session.updated" }); return; }
       if (event.item?.type === "function_call_output") outputs.push(event.item);
@@ -111,6 +112,7 @@ test("desktop: microphone, automatic slide walkthrough, actual playback, tasks a
       else if (requests === 4) { speak("第二页：讨论结果和局限。这份材料已经讲完。"); tool("manage_presentation", { action: "complete" }); }
       else if (requests === 5) tool("delegate_task", { task: "核对语音任务", notify: "when_idle" });
       else if (requests === 6) speak("好，任务已经排队。完成后告诉你。");
+      else if (requests >= 8) speak("已听到新的问题。");
       else if (latestInstructions.includes("后台任务状态数据")) speak("核对任务完成了，结果在任务记录里。");
       emit({ type: "response.done", response: { id, status: "completed", output: [] } });
     });
@@ -134,11 +136,16 @@ test("desktop: microphone, automatic slide walkthrough, actual playback, tasks a
   app.process().stderr?.on("data", data => processErrors.push(data.toString()));
   const page = await app.firstWindow({ timeout: 15000 }); const errors = []; reached("window");
   page.on("pageerror", error => errors.push(error.message));
+  await page.waitForLoadState("load");
+  await page.addInitScript(()=>{window.audioMeters=[];const create=AudioContext.prototype.createAnalyser;AudioContext.prototype.createAnalyser=function(...args){const meter=create.apply(this,args);window.audioMeters.push(meter);return meter;};});
+  await page.reload();
   await page.waitForFunction(() => Boolean(window.xiaowang));
   reached("preload");
   await page.waitForSelector(".composer");
   await mkdir(path.join(home, "bots", "xiaowang", "workspace"), { recursive: true });
   await writeFile(path.join(home, "bots", "xiaowang", "workspace", "deck.html"), '<!doctype html><meta charset="utf-8"><title>测试材料</title><style>body{margin:0;font:24px sans-serif}.slide{padding:40px;min-height:400px}</style><section class="slide">研究问题</section><section class="slide" style="display:none">讨论与局限</section>');
+  await mkdir(path.join(home,'bots','xiaowang','workspace','slides'),{recursive:true});
+  await writeFile(path.join(home,'bots','xiaowang','workspace','slides','legacy.html'),`<!doctype html><style>body{margin:0;overflow:hidden}.s{position:absolute;inset:0;display:none;flex-direction:column;justify-content:center;padding:40px}.s.on{display:flex}</style>${Array.from({length:11},(_,i)=>`<div class="s ${i===0?'on':''}">Page ${i+1}</div>`).join('')}<script>const S=[...document.querySelectorAll('.s')];let i=0;function go(d){i=Math.max(0,Math.min(S.length-1,i+d));S.forEach((s,k)=>s.classList.toggle('on',k===i))}onkeydown=e=>{if(e.key==='ArrowRight')go(1);if(e.key==='ArrowLeft')go(-1)}</script>`);
   await page.evaluate(() => window.xiaowang.callStart("xiaowang"));
   await page.waitForSelector(".voice-panel"); reached("microphone setup"); await until(() => microphonePackets > 0); reached("microphone packets");
   connection.send(JSON.stringify({ type: "input_audio_buffer.speech_started" }));
@@ -171,6 +178,27 @@ test("desktop: microphone, automatic slide walkthrough, actual playback, tasks a
   await until(() => requests >= 7); reached("voice job notification");
   assert.ok(outputs.some(output => output.call_id === "c5" && JSON.parse(output.output).id));
   await until(async () => (await page.locator(".voice-caption").textContent()).includes("核对任务完成了"));
+  reached("audible interruption through the complete call pipeline");
+  const outputEnergy=()=>page.evaluate(()=>{const meter=window.audioMeters.at(-1);if(!meter)return 0;const data=new Float32Array(meter.fftSize);meter.getFloatTimeDomainData(data);return Math.sqrt(data.reduce((sum,value)=>sum+value*value,0)/data.length);});
+  const voiceEvent=value=>connection.send(JSON.stringify(value));
+  for(const generated of [true,false]) {
+    const id=generated?'already-generated':'still-generating';
+    voiceEvent({type:'response.created',response:{id}});
+    voiceEvent({type:'response.output_audio.delta',response_id:id,item_id:`item_${id}`,content_index:0,delta:tone(3000)});
+    if(generated)voiceEvent({type:'response.done',response:{id,status:'completed',output:[]}});else forcedResponse=id;
+    await until(async()=>await outputEnergy()>.08);
+    const started=Date.now();voiceEvent({type:'input_audio_buffer.speech_started'});
+    await until(async()=>await outputEnergy()<.001,1000);
+    assert.ok(Date.now()-started<300,'Speech must stop at the renderer without waiting for server cancellation');
+    voiceEvent({type:'input_audio_buffer.speech_stopped'});
+    voiceEvent({type:'response.output_audio.delta',response_id:id,item_id:`item_${id}`,delta:tone(1000)});
+    voiceEvent({type:'response.output_audio.delta',item_id:`item_${id}`,delta:tone(1000)});
+    voiceEvent({type:'response.output_audio.delta',delta:tone(1000)});
+    await sleep(160);assert.ok(await outputEnergy()<.001,'Old audio must stay silent after the user stops speaking');
+    voiceEvent({type:'input_audio_buffer.committed'});
+    await until(async()=>await outputEnergy()>.05);
+    await until(async()=>await outputEnergy()<.001);
+  }
   reached("PDF extraction"); await page.evaluate(() => window.xiaowang.ask("xiaowang", "阅读PDF并引用来源")); reached("PDF source link");
   await page.locator(`.bubble a[href^="xwref://"]`).last().click();
   await page.waitForFunction(() => document.querySelector(".pdf-scroll canvas")?.width > 0);
@@ -208,9 +236,22 @@ test("desktop: microphone, automatic slide walkthrough, actual playback, tasks a
   const files=page.getByRole('dialog',{name:'浏览任务资料',exact:true});await files.waitFor();
   await files.getByRole('button',{name:'工作区文件',exact:true}).click();
   await files.getByRole('row').filter({hasText:'deck.html'}).waitFor();
+  await files.getByRole('row').filter({hasText:'slides'}).dblclick();
+  const legacyFile=files.getByRole('row').filter({hasText:'legacy.html'});await legacyFile.waitFor();
+  await files.getByRole('button',{name:'上级目录',exact:true}).click();await files.getByRole('row').filter({hasText:'deck.html'}).waitFor();
+  await files.getByRole('row').filter({hasText:'slides'}).dblclick();await legacyFile.waitFor();await legacyFile.press('Enter');
+  await page.locator('.canvas-stage .reader-pager').filter({hasText:'1 / 11'}).waitFor();
+  assert.equal(await page.locator('.canvas-stage .reader-error').count(),0);
+  await page.getByRole('button',{name:'Next page / 下一页',exact:true}).click();
+  await page.frameLocator('.canvas-frame').locator('.s.on').filter({hasText:'Page 2'}).waitFor();
+  await page.getByRole('button',{name:'从资料库打开',exact:true}).click();await files.waitFor();
+  assert.equal(await files.getByRole('combobox',{name:'文件类型',exact:true}).inputValue(),'canvas');
+  await files.getByRole('combobox',{name:'文件类型',exact:true}).selectOption('all');
   await files.getByRole('button',{name:'导入原件',exact:true}).click();
   await files.getByRole('textbox',{name:'搜索任务资料',exact:true}).fill('notes.md');
-  const note=files.getByRole('row').filter({hasText:'notes.md'});await note.waitFor();await note.dblclick();
+  const note=files.getByRole('row').filter({hasText:'notes.md'});await note.waitFor();await files.getByRole('row').filter({hasText:'paper.pdf'}).waitFor({state:'detached'});await note.click();
+  if(process.env.XIAOWANG_SCREENSHOT_DIR){await page.setViewportSize({width:1280,height:840});await page.screenshot({path:path.join(process.env.XIAOWANG_SCREENSHOT_DIR,'file-browser.png')});}
+  await note.dblclick();
   await page.locator('.document-reader .prose').filter({hasText:'A short research note.'}).waitFor();
   await page.getByRole('button',{name:'从资料库打开',exact:true}).click();
   await files.getByRole('button',{name:'最近打开',exact:true}).click();
@@ -231,6 +272,14 @@ test("desktop: microphone, automatic slide walkthrough, actual playback, tasks a
   await modelInput.fill('saved-model');await settings.getByRole('button',{name:'关闭',exact:true}).click();
   await page.getByRole('button',{name:'保存并关闭',exact:true}).click();await settings.waitFor({state:'detached'});
   assert.equal((await page.evaluate(()=>window.xiaowang.getState())).settings.model,'saved-model');
+  await page.locator('button.settings').click();await settings.waitFor();await modelInput.fill('save-failure-draft');
+  const secretFile=path.join(userData,'secrets.bin');await rename(secretFile,`${secretFile}.backup`);await mkdir(secretFile);
+  await settings.getByRole('button',{name:'保存并进入',exact:true}).click();
+  await settings.locator('footer p').waitFor();assert.equal(await modelInput.inputValue(),'save-failure-draft');
+  await rm(secretFile,{recursive:true,force:true});await rename(`${secretFile}.backup`,secretFile);
+  await settings.getByRole('button',{name:'关闭',exact:true}).click();
+  if(process.env.XIAOWANG_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.XIAOWANG_SCREENSHOT_DIR,'unsaved-settings.png')});
+  await page.getByRole('button',{name:'放弃修改',exact:true}).click();await settings.waitFor({state:'detached'});
   await page.locator('button.settings').click();await settings.waitFor();
   await settings.getByRole('button',{name:'关闭',exact:true}).click();await settings.waitFor({state:'detached'});
   if(app.evaluate) {
@@ -244,5 +293,5 @@ test("desktop: microphone, automatic slide walkthrough, actual playback, tasks a
     await settings.getByRole('button',{name:'关闭',exact:true}).click();await page.getByRole('button',{name:'放弃修改',exact:true}).click();
   }
   assert.deepEqual(errors, []); reached("complete");
-  console.log(`Verified real desktop flow: ${microphonePackets} microphone packets, ${requests} voice responses, queued jobs, voice completion notification, and a PDF source link.`);
+  console.log(`Verified real desktop flow: ${microphonePackets} microphone packets, ${requests} voice responses, queued jobs, long-audio interruptions, continuous PDF reading, file browsing, unsaved settings and failure recovery.`);
 });

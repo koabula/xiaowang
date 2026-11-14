@@ -156,6 +156,18 @@ test("a response starting while the user speaks is cancelled before it can emit 
   assert.ok(f.sent.some(event => event.type === "response.cancel"));
 });
 
+test("an interrupted pending request cannot become audible after the user has already finished speaking", async t => {
+  const f = fixture(t);
+  f.emit({ type: "input_audio_buffer.speech_started" }); f.emit({ type: "input_audio_buffer.speech_stopped" }); f.emit({ type: "input_audio_buffer.committed" }); await delay();
+  assert.equal(f.creates().length, 1);
+  f.emit({ type: "input_audio_buffer.speech_started" }); f.emit({ type: "input_audio_buffer.speech_stopped" });
+  f.begin("late-start"); f.audio("late-start"); f.done("late-start", "cancelled");
+  assert.equal(f.audioPackets.length, 0);
+  f.emit({ type: "input_audio_buffer.committed" }); await delay();
+  assert.equal(f.creates().length, 2);
+  f.begin("current"); f.audio("current"); assert.equal(f.audioPackets.length, 1);
+});
+
 test("queued job results wait until the user and speaker are idle, and notify only once", async t => {
   const f = fixture(t);
   f.emit({ type: "input_audio_buffer.speech_started" }); f.call.notify("job1", "资料整理好了");
