@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { STEWARD_SLUG, stewardPrompt } from "./persona.ts";
 import type { Bot, SessionEvent, StoredEvent, Term } from "./types.ts";
 
 interface BotRow {
@@ -13,6 +14,8 @@ interface BotRow {
   glossary_json: string;
   workspace_dir: string;
   parent_bot_id: string | null;
+  avatar_seed: string;
+  avatar_ink: string;
   created_at: string;
 }
 
@@ -88,6 +91,13 @@ export class Store {
         PRIMARY KEY (bot_id, file_id)
       );
     `);
+    const columns = db.prepare("PRAGMA table_info(bots)").all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "avatar_seed")) {
+      db.exec("ALTER TABLE bots ADD COLUMN avatar_seed TEXT NOT NULL DEFAULT ''");
+    }
+    if (!columns.some((column) => column.name === "avatar_ink")) {
+      db.exec("ALTER TABLE bots ADD COLUMN avatar_ink TEXT NOT NULL DEFAULT ''");
+    }
     return new Store(home, db);
   }
 
@@ -115,13 +125,15 @@ export class Store {
       glossary: normalizeTerms(input.glossary ?? []),
       workspaceDir,
       parentBotId: input.parentBotId ?? null,
+      avatarSeed: "",
+      avatarInk: "",
       createdAt: new Date().toISOString(),
     };
     this.db
       .prepare(
         `INSERT INTO bots (
-          id, slug, name, system_prompt, glossary_json, workspace_dir, parent_bot_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          id, slug, name, system_prompt, glossary_json, workspace_dir, parent_bot_id, avatar_seed, avatar_ink, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         bot.id,
@@ -131,6 +143,8 @@ export class Store {
         JSON.stringify(bot.glossary),
         bot.workspaceDir,
         bot.parentBotId,
+        bot.avatarSeed,
+        bot.avatarInk,
         bot.createdAt,
       );
     return bot;
@@ -166,6 +180,47 @@ export class Store {
     const merged = mergeTerms(bot.glossary, terms);
     this.db.prepare("UPDATE bots SET glossary_json = ? WHERE id = ?").run(JSON.stringify(merged), bot.id);
     return merged;
+  }
+
+  renameBot(idOrSlug: string, name: string): Bot {
+    const bot = this.requireBot(idOrSlug);
+    const next = name.trim();
+    if (!next) throw new Error("名字不能为空。");
+    if (next.length > 80) throw new Error("名字请控制在 80 字以内。");
+    if (bot.slug === STEWARD_SLUG) {
+      this.db.prepare("UPDATE bots SET name = ?, system_prompt = ? WHERE id = ?").run(next, stewardPrompt(next), bot.id);
+    } else {
+      this.db.prepare("UPDATE bots SET name = ? WHERE id = ?").run(next, bot.id);
+    }
+    return this.requireBot(bot.id);
+  }
+
+  setAvatar(idOrSlug: string, patch: { seed?: string; ink?: string }): Bot {
+    const bot = this.requireBot(idOrSlug);
+    let seed = bot.avatarSeed;
+    let ink = bot.avatarInk;
+    if (patch.seed !== undefined) {
+      const next = patch.seed.trim();
+      if (next && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(next)) throw new Error("这张头像暂时不能用。");
+      seed = next;
+    }
+    if (patch.ink !== undefined) {
+      const next = patch.ink.trim().toUpperCase();
+      if (next && !/^#[0-9A-F]{6}$/.test(next)) throw new Error("请从给出的颜色里选。");
+      ink = next;
+    }
+    this.db.prepare("UPDATE bots SET avatar_seed = ?, avatar_ink = ? WHERE id = ?").run(seed, ink, bot.id);
+    return this.requireBot(bot.id);
+  }
+
+  setAvatarSeed(idOrSlug: string, seed: string): Bot {
+    return this.setAvatar(idOrSlug, { seed });
+  }
+
+  forgetLibraryRef(botId: string, nameOrId: string): void {
+    const bot = this.requireBot(botId);
+    const ref = this.resolveLibraryRef(bot.id, nameOrId);
+    this.db.prepare("DELETE FROM bot_file_refs WHERE bot_id = ? AND file_id = ?").run(bot.id, ref.id);
   }
 
   append(botId: string, event: SessionEvent): StoredEvent {
@@ -388,6 +443,8 @@ function rowToBot(row: BotRow): Bot {
     glossary,
     workspaceDir: row.workspace_dir,
     parentBotId: row.parent_bot_id,
+    avatarSeed: row.avatar_seed ?? "",
+    avatarInk: row.avatar_ink ?? "",
     createdAt: row.created_at,
   };
 }

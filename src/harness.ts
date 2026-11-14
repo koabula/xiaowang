@@ -82,7 +82,8 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
     }
     const current = runtime.store.requireBot(bot.id);
     const library = runtime.store.listLibrary(bot.id).map((ref) => ({ id: ref.id, filename: ref.filename }));
-    const projected = projectLlmContext(current, runtime.store.getEvents(bot.id), { library });
+    const personName = runtime.ensureSteward().name;
+    const projected = projectLlmContext(current, runtime.store.getEvents(bot.id), { library, personName });
     const result = await options.provider.complete({
       system: projected.system,
       messages: projected.messages,

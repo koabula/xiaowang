@@ -47,6 +47,8 @@ interface BotRow {
   slug: string;
   name: string;
   preview: string;
+  avatarSeed: string;
+  avatarInk: string;
 }
 
 function send(channel: string, payload: unknown): void {
@@ -70,6 +72,8 @@ function botRows(): BotRow[] {
     slug: bot.slug,
     name: bot.name,
     preview: previewOf(bot.id),
+    avatarSeed: bot.avatarSeed,
+    avatarInk: bot.avatarInk,
   }));
 }
 
@@ -219,6 +223,19 @@ function registerIpc(): void {
     runtime.store.setActiveBot(bot.id);
     publish();
     return bot.slug;
+  });
+  ipcMain.handle("bot:rename", (_event, slug: string, name: string) => {
+    runtime.store.renameBot(slug, name);
+    publish();
+  });
+  ipcMain.handle("bot:avatar", (_event, slug: string, patch: { seed?: string; ink?: string }) => {
+    runtime.store.setAvatar(slug, patch ?? {});
+    publish();
+  });
+  ipcMain.handle("library:forget", (_event, slug: string, id: string) => {
+    const bot = runtime.store.requireBot(slug);
+    runtime.store.forgetLibraryRef(bot.id, id);
+    publish();
   });
   ipcMain.handle("chat:events", (_event, slug: string) => chatItems(slug));
   ipcMain.handle("library:list", (_event, slug: string) => libraryOf(slug));

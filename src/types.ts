@@ -13,6 +13,8 @@ export interface Bot {
   glossary: Term[];
   workspaceDir: string;
   parentBotId: string | null;
+  avatarSeed: string;
+  avatarInk: string;
   createdAt: string;
 }
 

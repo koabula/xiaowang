@@ -16,8 +16,8 @@ export function installPreviewBridge(): void {
       ready: true,
     },
     bots: [
-      { slug: "xiaowang", name: "小王同学", preview: "还没有单独立项的对话留在这里" },
-      { slug: "speculative", name: "投机解码", preview: "先核对代表论文，再写笔记" },
+      { slug: "xiaowang", name: "小王同学", preview: "还没有单独立项的对话留在这里", avatarSeed: "", avatarInk: "" },
+      { slug: "speculative", name: "投机解码", preview: "先核对代表论文，再写笔记", avatarSeed: "", avatarInk: "" },
     ],
   };
   const chats = new Map<string, ChatItem[]>([
@@ -49,9 +49,21 @@ export function installPreviewBridge(): void {
       state = { ...state, activeSlug: slug };
       publish();
     },
+    async renameBot(slug, name) {
+      state = { ...state, bots: state.bots.map((bot) => bot.slug === slug ? { ...bot, name } : bot) };
+      publish();
+    },
+    async setAvatar(slug, patch) {
+      state = {
+        ...state,
+        bots: state.bots.map((bot) => bot.slug === slug ? { ...bot, avatarSeed: patch.seed ?? bot.avatarSeed, avatarInk: patch.ink ?? bot.avatarInk } : bot),
+      };
+      publish();
+    },
+    async forgetFile() {},
     async createBot(name) {
       const slug = name.toLowerCase().replace(/\s+/g, "-") || "bot";
-      state = { ...state, activeSlug: slug, bots: [...state.bots, { slug, name, preview: "还没有对话" }] };
+      state = { ...state, activeSlug: slug, bots: [...state.bots, { slug, name, preview: "还没有对话", avatarSeed: "", avatarInk: "" }] };
       chats.set(slug, []);
       publish();
       return slug;

@@ -225,7 +225,9 @@ function printEvents(runtime: Runtime, slug?: string): void {
 function printBrief(runtime: Runtime, slug?: string): void {
   const bot = slug ? runtime.store.requireBot(slug) : runtime.activeBot();
   const library = runtime.store.listLibrary(bot.id);
-  output.write(`${formatVoiceBrief(projectVoiceBrief(bot, runtime.store.getEvents(bot.id), { library }))}\n`);
+  output.write(
+    `${formatVoiceBrief(projectVoiceBrief(bot, runtime.store.getEvents(bot.id), { library }), runtime.ensureSteward().name)}\n`,
+  );
 }
 
 function printLibrary(runtime: Runtime, slug?: string): void {

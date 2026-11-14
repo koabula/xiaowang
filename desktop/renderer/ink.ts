@@ -1,4 +1,6 @@
-const INKS = ["#177E6B", "#C44D34", "#2B59C3", "#B86B19", "#467A56", "#7A543E", "#6B4C7A", "#1E6F8C"];
+export const INK_CHOICES = ["#18181B", "#177E6B", "#C44D34", "#2B59C3", "#B86B19", "#467A56", "#7A543E", "#6B4C7A", "#1E6F8C"];
+
+const INKS = INK_CHOICES.slice(1);
 
 export function inkFor(slug: string): string {
   if (slug === "xiaowang") return "#18181B";

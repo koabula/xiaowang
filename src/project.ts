@@ -1,4 +1,4 @@
-import { SHARED_PERSONA } from "./persona.ts";
+import { personaFor, STEWARD_NAME, STEWARD_SLUG } from "./persona.ts";
 import type { Bot, ModelMessage, StoredEvent, Term } from "./types.ts";
 
 const TOOL_OUTPUT_CAP = 8_000;
@@ -34,10 +34,10 @@ interface Unit {
 export function projectLlmContext(
   bot: Bot,
   events: StoredEvent[],
-  options?: { budget?: number; library?: CatalogItem[] },
+  options?: { budget?: number; library?: CatalogItem[]; personName?: string },
 ): LlmProjection {
   const budget = options?.budget ?? DEFAULT_BUDGET;
-  const system = buildSystem(bot, events, options?.library);
+  const system = buildSystem(bot, events, options?.library, options?.personName?.trim() || STEWARD_NAME);
   const units = groupUnits(events);
   let dropped = 0;
   while (units.length > 1 && system.length + charCount(units) > budget) {
@@ -86,7 +86,7 @@ export function projectVoiceBrief(
   return brief;
 }
 
-export function formatVoiceBrief(brief: VoiceBrief): string {
+export function formatVoiceBrief(brief: VoiceBrief, personName = STEWARD_NAME): string {
   const lines = [
     `任务：${brief.botName}（${brief.slug}）`,
     `目标：${brief.goal || "还没有写下任务目标。"}`,
@@ -109,18 +109,21 @@ export function formatVoiceBrief(brief: VoiceBrief): string {
   } else {
     lines.push("最近对话：");
     for (const turn of brief.recentTurns) {
-      const who = turn.role === "user" ? "用户" : "小王";
+      const who = turn.role === "user" ? "用户" : personName;
       lines.push(`- ${who}：${turn.text}`);
     }
   }
   return lines.join("\n");
 }
 
-function buildSystem(bot: Bot, events: StoredEvent[], library?: CatalogItem[]): string {
+function buildSystem(bot: Bot, events: StoredEvent[], library: CatalogItem[] | undefined, personName: string): string {
+  const entrance = bot.slug === STEWARD_SLUG;
   const parts = [
-    SHARED_PERSONA,
+    personaFor(personName),
     "",
-    `当前任务：${bot.name}（${bot.slug}）`,
+    entrance
+      ? `你是「${personName}」的总入口。还没有单独开任务的对话留在这里。`
+      : `当前任务：${bot.name}（${bot.slug}）`,
     `工作区根目录：${bot.workspaceDir}`,
     "文件工具只接受这个工作区内的相对路径，例如 notes/reading.md。不要使用 ..，也不要读写别的 Bot 的目录。",
   ];
@@ -134,8 +137,8 @@ function buildSystem(bot: Bot, events: StoredEvent[], library?: CatalogItem[]): 
     );
     if (library.length > shown.length) parts.push(`还有 ${library.length - shown.length} 份引用没有列在这里。需要时用 list_library。`);
   }
-  const baselines = baselinesOf(events);
-  const prompt = bot.systemPrompt.trim();
+  const baselines = entrance ? [] : baselinesOf(events);
+  const prompt = entrance ? "" : bot.systemPrompt.trim();
   if (prompt && !baselines.includes(prompt)) {
     parts.push("", "任务要求：", prompt);
   }

@@ -137,3 +137,45 @@ test("the model sees library names in its projection, and trimming is not writte
     close();
   }
 });
+
+test("a task can rename its display name and drop a library reference", async () => {
+  const { runtime, close } = openRuntime();
+  try {
+    const steward = runtime.activeBot();
+    const renamedSteward = runtime.store.renameBot(steward.slug, "阿王");
+    assert.equal(renamedSteward.slug, steward.slug);
+    assert.equal(renamedSteward.workspaceDir, steward.workspaceDir);
+    assert.equal(renamedSteward.name, "阿王");
+    let seen = "";
+    const provider: LlmProvider = {
+      model: "scripted",
+      async complete(request): Promise<CompletionResult> {
+        seen = request.system;
+        return { text: "我按新名字来。", toolCalls: [] };
+      },
+    };
+    await runTurn(runtime, { botId: renamedSteward.id, input: "你是谁", provider, env: {} });
+    assert.match(seen, /你是「阿王」/);
+    assert.equal(seen.includes("你是「小王同学」"), false);
+    const bot = runtime.store.createBot({ name: "任务甲", systemPrompt: "甲" });
+    const taskView = projectLlmContext(bot, runtime.store.getEvents(bot.id), { personName: "阿王" });
+    assert.match(taskView.system, /你是「阿王」/);
+    assert.match(taskView.system, /当前任务：任务甲/);
+    const renamed = runtime.store.renameBot(bot.slug, "任务甲改名");
+    assert.equal(renamed.slug, bot.slug);
+    assert.equal(renamed.workspaceDir, bot.workspaceDir);
+    assert.equal(renamed.name, "任务甲改名");
+    const added = runtime.store.addLibraryBytes(bot.id, "shared.txt", Buffer.from("hello"));
+    const other = runtime.store.createBot({ name: "任务乙", systemPrompt: "乙" });
+    runtime.store.shareLibraryFile(bot.id, added.ref.id, other.id);
+    runtime.store.forgetLibraryRef(bot.id, added.ref.id);
+    assert.equal(runtime.store.listLibrary(bot.id).length, 0);
+    assert.equal(runtime.store.listLibrary(other.id).length, 1);
+    const seeded = runtime.store.setAvatar(bot.slug, { seed: `${bot.slug}-k7q`, ink: "#177E6B" });
+    assert.equal(seeded.avatarSeed, `${bot.slug}-k7q`);
+    assert.equal(seeded.avatarInk, "#177E6B");
+    assert.equal(runtime.store.requireBot(bot.slug).avatarSeed, `${bot.slug}-k7q`);
+  } finally {
+    close();
+  }
+});

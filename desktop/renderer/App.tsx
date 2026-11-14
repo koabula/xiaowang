@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, Eye, FileText, Globe, Mic, MousePointer2, PanelRight, Plus, Presentation, Search, Settings, X } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Avatar } from "./avatar.tsx";
-import { inkFor } from "./ink.ts";
-import type { AppState, BrowserNote, ChatItem, LibraryItem, SettingsPatch, StageNote } from "./types.ts";
+import { Avatar, nextAvatarSeed } from "./avatar.tsx";
+import { INK_CHOICES, inkFor } from "./ink.ts";
+import type { AppState, BotRow, BrowserNote, ChatItem, LibraryItem, SettingsPatch, StageNote } from "./types.ts";
 
 type StageSnap = {
-  mode: "file" | "browser" | "slides";
+  mode: "file" | "browser" | "slides" | "profile";
   open: boolean;
   file: { id: string; filename: string; page: number } | null;
   slides: { title: string; pages: string[]; index: number } | null;
@@ -47,7 +47,8 @@ export function App() {
   const draft = draftBySlug[active] ?? "";
   const activity = activityBySlug[active] ?? "";
   const current = state?.bots.find((bot) => bot.slug === active);
-  const ink = inkFor(active || "xiaowang");
+  const steward = state?.bots.find((bot) => bot.slug === "xiaowang");
+  const ink = current?.avatarInk || inkFor(active || "xiaowang");
   const covered = settingsOpen || callOpen || (state !== null && !state.settings.ready);
 
   function patchStage(slug: string, patch: Partial<StageSnap>) {
@@ -137,6 +138,18 @@ export function App() {
     }
   }
 
+  function openProfile() {
+    const slug = activeRef.current;
+    const snap = stageBySlug[slug] ?? EMPTY_STAGE;
+    if (snap.open && snap.mode === "profile") {
+      patchStage(slug, { open: false });
+      return;
+    }
+    const max = Math.max(360, window.innerWidth - leftWidth - 420);
+    setRightWidth((width) => Math.min(Math.max(width, 360), max));
+    patchStage(slug, { mode: "profile", open: true });
+  }
+
   function toggleStage() {
     const slug = activeRef.current;
     const open = stageBySlug[slug]?.open ?? true;
@@ -167,8 +180,8 @@ export function App() {
           <button className="icon" title="新任务" type="button" onClick={() => setCreating(true)}><Plus size={16} /></button>
         </div>
         <button className={active === "xiaowang" ? "steward on" : "steward"} type="button" onClick={() => void window.xiaowang.setActive("xiaowang")}>
-          <Avatar slug="xiaowang" size={72} live={active === "xiaowang"} />
-          <strong>小王同学</strong>
+          <Avatar slug="xiaowang" seed={steward?.avatarSeed} ink={steward?.avatarInk} size={72} mood={busyBySlug.xiaowang ? "think" : "idle"} />
+          <strong>{steward?.name ?? "小王同学"}</strong>
         </button>
         <div className="search-line">
           <input value={query} placeholder="找任务" onChange={(event) => setQuery(event.target.value)} />
@@ -181,7 +194,7 @@ export function App() {
         <nav>
           {bots.filter((bot) => bot.slug !== "xiaowang").map((bot) => (
             <button className={["bot", bot.slug === active ? "on" : "", busyBySlug[bot.slug] ? "working" : ""].filter(Boolean).join(" ")} key={bot.slug} type="button" onClick={() => void window.xiaowang.setActive(bot.slug)}>
-              <Avatar slug={bot.slug} live={bot.slug === active} />
+              <Avatar slug={bot.slug} seed={bot.avatarSeed} ink={bot.avatarInk} mood={busyBySlug[bot.slug] ? "think" : "idle"} />
               <span>
                 <strong>{bot.name}</strong>
                 <em>{bot.preview}</em>
@@ -201,7 +214,11 @@ export function App() {
 
       <main className="thread">
         <header>
-          <span className="pill"><Avatar slug={active || "xiaowang"} size={22} mood={busy ? "think" : "idle"} />{current?.name ?? "小王同学"}</span>
+          <button className={mode === "profile" && stageOpen ? "pill on" : "pill"} type="button" onClick={openProfile}>
+            <Avatar slug={active || "xiaowang"} seed={current?.avatarSeed} ink={current?.avatarInk} size={22} mood={busy ? "think" : "idle"} />
+            {current?.name ?? "小王同学"}
+            <ChevronRight size={14} />
+          </button>
           <button className="icon stage-toggle" type="button" title={stageOpen ? "收起右栏" : "展开右栏"} onClick={toggleStage}>
             <PanelRight size={16} />
           </button>
@@ -210,7 +227,7 @@ export function App() {
           {items.filter(isConversation).map((item) => <Message key={item.id} item={item} ink={ink} />)}
           {busy ? (
             <div className="thinking">
-              <Avatar slug={active || "xiaowang"} size={28} mood="think" />
+              <Avatar slug={active || "xiaowang"} seed={current?.avatarSeed} ink={current?.avatarInk} size={28} mood="think" />
               {activity ? <em key={activity}>{activity}</em> : <span className="dots" aria-hidden="true"><i /><i /><i /></span>}
             </div>
           ) : null}
@@ -259,6 +276,17 @@ export function App() {
           <button className={mode === "browser" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "browser" })}><Globe size={15} /> 浏览器</button>
           <button className={mode === "slides" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "slides" })}><Presentation size={15} /> 幻灯片</button>
         </div>
+        {mode === "profile" && current ? (
+          <ProfileStage
+            bot={current}
+            personName={steward?.name ?? "小王同学"}
+            library={library}
+            onRefresh={async () => setLibrary(await window.xiaowang.library(current.slug))}
+            onForgot={(id) => {
+              if (file?.id === id) patchStage(current.slug, { file: null });
+            }}
+          />
+        ) : null}
         {mode === "file" ? (
           <FileStage slug={active} library={library} file={file} onPick={(entry) => patchStage(active, { file: { ...entry, page: 1 } })} />
         ) : null}
@@ -289,7 +317,6 @@ export function App() {
       </aside>
       ) : null}
 
-      {toast ? <button className="toast" type="button" onClick={() => setToast("")}>{toast}</button> : null}
       {settingsOpen || (state !== null && !state.settings.ready) ? (
         <SettingsPanel
           settings={state?.settings}
@@ -302,6 +329,7 @@ export function App() {
           }}
         />
       ) : null}
+      {toast ? <button className="toast" type="button" onClick={() => setToast("")}>{toast}</button> : null}
     </div>
   );
 }
@@ -376,7 +404,7 @@ function Reader({ slug, file }: { slug: string; file: { id: string; filename: st
 }
 
 function SlideStage({ slides, onIndex }: { slides: { title: string; pages: string[]; index: number } | null; onIndex: (index: number) => void }) {
-  if (!slides) return <p className="empty">小王做好幻灯片后会出现在这里。</p>;
+  if (!slides) return <p className="empty">幻灯片做好后会出现在这里。</p>;
   const page = slides.pages[slides.index] ?? "";
   return (
     <div className="slides">
@@ -472,6 +500,68 @@ function SettingsPanel({
         <button className="primary" type="submit">保存并进入</button>
       </form>
     </div>
+  );
+}
+
+function ProfileStage({
+  bot,
+  personName,
+  library,
+  onRefresh,
+  onForgot,
+}: {
+  bot: BotRow;
+  personName: string;
+  library: LibraryItem[];
+  onRefresh: () => Promise<void>;
+  onForgot: (id: string) => void;
+}) {
+  const [name, setName] = useState(bot.name);
+  const [notice, setNotice] = useState("");
+  useEffect(() => setName(bot.name), [bot.slug, bot.name]);
+  const entrance = bot.slug === "xiaowang";
+  const ink = bot.avatarInk || (entrance ? "#18181B" : inkFor(bot.slug));
+  return (
+    <form
+      className="profile"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void window.xiaowang.renameBot(bot.slug, name).then(() => setNotice("")).catch((error: unknown) => setNotice(plainError(error)));
+      }}
+    >
+      <div className="hero">
+        <Avatar slug={bot.slug} seed={bot.avatarSeed} ink={bot.avatarInk} size={96} />
+        <button type="button" onClick={() => void window.xiaowang.setAvatar(bot.slug, { seed: nextAvatarSeed(bot.slug) })}>换一张</button>
+      </div>
+      <div className="inks">
+        {INK_CHOICES.map((color) => (
+          <button
+            key={color}
+            type="button"
+            className={color.toUpperCase() === ink.toUpperCase() ? "on" : ""}
+            style={{ background: color }}
+            title={color}
+            onClick={() => void window.xiaowang.setAvatar(bot.slug, { ink: color })}
+          />
+        ))}
+      </div>
+      <label>名字
+        <input value={name} onChange={(event) => setName(event.target.value)} />
+      </label>
+      <button className="primary" type="submit">保存名字</button>
+      {notice ? <p>{notice}</p> : <p>{entrance ? `下一轮起，总入口和每个任务都用「${name.trim() || personName}」认识自己。` : "改的是这个任务的显示名。"}</p>}
+      <div className="library-edit">
+        <strong>资料</strong>
+        {library.map((entry) => (
+          <div key={entry.id}>
+            <span>{entry.filename}</span>
+            <button type="button" onClick={() => void window.xiaowang.forgetFile(bot.slug, entry.id).then(() => { onForgot(entry.id); return onRefresh(); })}>移出</button>
+          </div>
+        ))}
+        {library.length === 0 ? <p>这个任务还没有资料。</p> : null}
+        <button type="button" onClick={() => void window.xiaowang.addFiles().then(onRefresh)}>添加资料</button>
+      </div>
+    </form>
   );
 }
 

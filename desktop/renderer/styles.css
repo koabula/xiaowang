@@ -81,13 +81,30 @@ nav { overflow: auto; display: flex; flex-direction: column; gap: 2px; padding-t
 
 .avatar { position: relative; display: inline-grid; place-items: center; flex: none; border-radius: 999px; overflow: hidden; }
 .avatar svg { width: 100%; height: 100%; display: block; }
-.avatar.live { animation: breathe 5.5s ease-in-out infinite; }
-.avatar.think { animation: look 1.2s ease-in-out infinite; }
+.avatar svg g > g {
+  animation: glance var(--glance-span, 14s) ease-in-out var(--glance-delay, 0s) infinite;
+}
+.avatar svg g > g > rect {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: blink var(--blink-span, 8s) ease-in-out var(--blink-delay, 0s) infinite;
+}
+.avatar.think svg g > g {
+  animation: none;
+  translate: var(--glance-x, 6%) 0;
+  transition: translate 0.45s ease;
+}
+.avatar.think svg g > g > rect {
+  animation-duration: var(--think-blink, 3.6s);
+}
 .bot.working .avatar { box-shadow: 0 0 0 2px #177e6b; }
-@keyframes breathe { 50% { transform: scale(1.035); } }
-@keyframes look {
-  0%, 100% { transform: translateX(0) rotate(0deg); }
-  50% { transform: translateX(1px) rotate(-6deg); }
+@keyframes blink {
+  0%, 88%, 100% { transform: scaleY(1); }
+  92% { transform: scaleY(0.12); }
+}
+@keyframes glance {
+  0%, 74%, 100% { translate: 0 0; }
+  82%, 90% { translate: var(--glance-x, 6%) 0; }
 }
 @keyframes line-in {
   from { opacity: 0; transform: translateY(6px); }
@@ -109,12 +126,17 @@ nav { overflow: auto; display: flex; flex-direction: column; gap: 2px; padding-t
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 12px 4px 4px;
+  padding: 4px 10px 4px 4px;
+  border: 0;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.88);
   box-shadow: var(--shadow);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
   white-space: nowrap;
 }
+.pill.on { box-shadow: 0 0 0 1.5px #18181b, var(--shadow); }
 .messages { flex: 1; min-width: 0; overflow: auto; padding: 8px 28px 24px; display: flex; flex-direction: column; gap: 10px; }
 .bubble { max-width: min(72%, 640px); padding: 10px 14px; border-radius: 18px; overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
 .bubble.user { white-space: pre-wrap; }
@@ -286,3 +308,16 @@ nav { overflow: auto; display: flex; flex-direction: column; gap: 2px; padding-t
 .modal .row { display: flex; gap: 8px; }
 .modal .row button { border: 0; background: #efeff2; border-radius: 999px; padding: 8px 14px; }
 .modal p { margin: 0; color: var(--faint); font-size: 12px; }
+.profile { flex: 1; min-height: 0; overflow: auto; display: grid; align-content: start; gap: 12px; padding: 8px 16px 20px; }
+.profile .hero { display: grid; justify-items: center; gap: 8px; }
+.profile .hero button, .profile .primary { border: 0; background: #fff; border-radius: 999px; padding: 8px 14px; }
+.profile label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
+.profile input { border: 0; background: #fff; border-radius: 999px; padding: 8px 12px; outline: none; }
+.profile p { margin: 0; color: var(--faint); font-size: 12px; }
+.inks { display: flex; gap: 8px; flex-wrap: wrap; }
+.inks button { width: 22px; height: 22px; border: 0; border-radius: 99px; padding: 0; }
+.inks button.on { box-shadow: 0 0 0 2px #f6f6f7, 0 0 0 4px #18181b; }
+.library-edit { display: grid; gap: 6px; }
+.library-edit div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.library-edit span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-edit button { border: 0; background: #efeff2; border-radius: 999px; padding: 6px 12px; }

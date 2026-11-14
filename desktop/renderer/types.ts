@@ -6,6 +6,9 @@ declare global {
       getState: () => Promise<AppState>;
       setActive: (slug: string) => Promise<void>;
       createBot: (name: string, baseline: string) => Promise<string>;
+      renameBot: (slug: string, name: string) => Promise<void>;
+      setAvatar: (slug: string, patch: { seed?: string; ink?: string }) => Promise<void>;
+      forgetFile: (slug: string, id: string) => Promise<void>;
       events: (slug: string) => Promise<ChatItem[]>;
       library: (slug: string) => Promise<LibraryItem[]>;
       readFile: (slug: string, id: string) => Promise<Uint8Array>;
@@ -39,6 +42,8 @@ export interface BotRow {
   slug: string;
   name: string;
   preview: string;
+  avatarSeed: string;
+  avatarInk: string;
 }
 
 export interface ChatItem {
