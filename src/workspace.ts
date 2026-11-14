@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 export type ResolvedPath =
@@ -32,6 +32,33 @@ export function resolveInsideWorkspace(root: string, inputPath: string): Resolve
     return { ok: true, abs, rel: "." };
   }
   return { ok: true, abs, rel: rel.split(path.sep).join("/") };
+}
+
+/** 列出工作区里可打开的 HTML 页面（Canvas）。 */
+export function listCanvasPages(root: string): Array<{ path: string; name: string }> {
+  const pages: Array<{ path: string; name: string }> = [];
+  walk(root, "", pages);
+  return pages;
+}
+
+function walk(absDir: string, prefix: string, out: Array<{ path: string; name: string }>): void {
+  let entries;
+  try {
+    entries = readdirSync(absDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (out.length >= 200) return;
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      walk(path.join(absDir, entry.name), rel, out);
+      continue;
+    }
+    if (entry.isFile() && /\.html?$/i.test(entry.name)) {
+      out.push({ path: rel, name: entry.name });
+    }
+  }
 }
 
 function existingAncestorInside(root: string, candidate: string): boolean {

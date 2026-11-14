@@ -81,12 +81,13 @@ export const END_CALL_TOOL: ToolSchema = {
 
 export const CONTINUE_SPEAKING_TOOL: ToolSchema = {
   name: "continue_speaking",
-  description: "当你说完当前这一小段后还需要不等用户回应、接着往下讲下一段时调用（如连续讲多页内容、逐段讲论文或分步阐述）。当前段播完后会自动接上下一段；全部讲完或该听用户说话时不要调用。",
+  description: "这一小段说完后还要接着讲下一段时调用，例如翻到下一页再讲。当前段播完才会接上。这一轮已经答完、该听用户时不要调用。",
   parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
 };
 
-export function continueCue(family: RealtimeFamily = "openai"): Record<string, unknown> {
-  const prompt = "用户没有打断，接着往下讲下一段；如果后面还有下一段就继续调用 continue_speaking，全部讲完就自然收尾停下，不要提系统提示。";
+/** 只在模型调用 continue_speaking 之后，用这一句接上下一段。 */
+export function loopCue(family: RealtimeFamily = "openai"): Record<string, unknown> {
+  const prompt = "接着讲下一段。要翻页就先 show_stage。这一段讲完如果还要继续，再调用 continue_speaking。不要提系统提示。";
   if (family === "doubao") {
     return {
       type: "conversation.item.create",
@@ -144,7 +145,7 @@ export function voiceTools(tools: ToolSchema[], locale: Locale = "zh"): ToolSche
   const keepGoing = locale === "en"
     ? {
       ...CONTINUE_SPEAKING_TOOL,
-      description: "Call this when you have another segment to say right after the current one without waiting for the user (such as walking through multiple pages, sections, or steps). Playback of the current segment will automatically roll into the next turn. Do not call it once you are done or waiting for the user.",
+      description: "Call this when the next segment should follow as soon as this one finishes playing, such as the next slide. Do not call it when the answer is done and you should listen.",
     }
     : CONTINUE_SPEAKING_TOOL;
   const endCall = locale === "en"
@@ -158,7 +159,7 @@ export function realtimeInstructions(personName: string, brief: string, locale: 
     return [
       `You are "${personName}". This is a voice call. Speak in short sentences.`,
       "The user only hears your voice. When you look something up or read, say one short line first, then use the tool. Do not narrate the tool, and do not say you handed the work off.",
-      "When something spans multiple pages or segments and you should keep speaking without waiting for the user, call continue_speaking on each segment; stop calling it when you finish.",
+      "A turn works like the text side: tools continue the same turn, and the turn ends when you finish speaking. Call continue_speaking only when another segment should start as soon as this one finishes, such as the next slide. Do not wait for the user to say continue.",
       "When the user wants a new or edited canvas, ppt, slides, report, or written note, say one short line, then call ask_text and put their words in task. Do not write the long piece yourself.",
       "When presenting an existing canvas/ppt/slides HTML file, read it with read_file if needed and call show_stage(mode='canvas', path=..., page=N) as you move to each slide.",
       "When the user wants to end the call, say a short goodbye, then call end_call. The call hangs up after the goodbye.",
@@ -170,7 +171,7 @@ export function realtimeInstructions(personName: string, brief: string, locale: 
   return [
     `你是「${personName}」。这是一次语音通话，用口语短句。`,
     "用户只听见你的声音。要查文献或读资料时，先接一句再调用工具。不要念工具过程，也不要说自己把事情转交了。",
-    "一件事需要分几段或几页连续讲完、不用等用户回应时，在每一段调用 continue_speaking，当前段播完会自动接下一段；全部讲完或该听用户说话时就不再调用。",
+    "一轮和文字那边一样：工具接在同一轮里，说完这一轮就停，开始听用户。只有还要接着讲下一段（比如下一页）时才调用 continue_speaking，当前段播完会自动接上。不要等用户说「继续」。",
     "用户要新做或修改一份 canvas、ppt、slides、幻灯片、演示、汇报或写下来的笔记时，先接一句，再调用 ask_text，把原话放进 task。不要自己写长文。",
     "讲已有的 canvas/ppt/幻灯片时，必要时先 read_file，每讲一页调用 show_stage(mode='canvas', path=..., page=N) 把右栏翻到对应页。",
     "用户要结束通话时，先说一句简短的再见，然后调用 end_call。道别说完就会挂断。",
@@ -255,7 +256,26 @@ export function mergeUtterance(current: string, incoming: string): string {
 }
 
 function spokenKey(value: string): string {
-  return value.toLowerCase().replace(/[\s,.!?;:'"()[\]{}，。！？；：、“”‘’（）【】·…—\-]/g, "");
+  const flat = value.toLowerCase().replace(/[\s,.!?;:'"()[\]{}，。！？；：、“”‘’（）【】·…—\-]/g, "");
+  return flat.replace(/[零〇一二两三四五六七八九十]+/g, (token) => {
+    const number = chineseNumber(token);
+    return number === null ? token : String(number);
+  });
+}
+
+function chineseNumber(token: string): number | null {
+  const digit: Record<string, number> = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  const tenAt = token.indexOf("十");
+  if (tenAt === -1) {
+    if (![...token].every((char) => char in digit)) return null;
+    if (token.length === 1) return digit[token] ?? null;
+    return Number([...token].map((char) => digit[char]).join(""));
+  }
+  const high = tenAt === 0 ? 1 : digit[token[tenAt - 1] ?? ""];
+  const low = tenAt === token.length - 1 ? 0 : digit[token[tenAt + 1] ?? ""];
+  if (high === undefined || low === undefined) return null;
+  if (token.length > tenAt + 2) return null;
+  return high * 10 + low;
 }
 
 function collapseRepeat(value: string): string {

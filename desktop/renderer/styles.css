@@ -269,8 +269,10 @@ nav { overflow: auto; display: flex; flex-direction: column; gap: 2px; padding-t
 .split:hover, .split:active { background-image: linear-gradient(#d8d8dc, #d8d8dc); }
 
 .stage { flex: 0 0 auto; background: #f6f6f7; display: flex; flex-direction: column; min-width: 0; }
-.stage-tabs { display: flex; gap: 4px; padding: 14px 12px 8px; }
-.stage-tabs .fit { margin-left: auto; width: 32px; height: 32px; padding: 0; justify-content: center; }
+.stage-tabs { display: flex; align-items: center; gap: 4px; padding: 14px 12px 8px; }
+.stage-tabs.shut { padding-top: 10px; padding-bottom: 4px; }
+.stage-tab-end { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.stage-tabs .fit { width: 32px; height: 32px; padding: 0; justify-content: center; }
 .shell.canvas-wide .rail,
 .shell.canvas-wide > .split,
 .shell.canvas-wide .thread { display: none; }
@@ -278,20 +280,98 @@ nav { overflow: auto; display: flex; flex-direction: column; gap: 2px; padding-t
 .shell.canvas-wide .stage-tabs { padding: 16px 16px 8px 84px; -webkit-app-region: drag; }
 .shell.canvas-wide .stage-tabs button { -webkit-app-region: no-drag; }
 .shell.canvas-wide .canvas-frame { margin: 0 16px 16px; }
-.stage-tabs button, .file-list button, .pager button {
+.stage-tabs button, .pager button {
+  height: 32px;
   border: 0;
   background: transparent;
   color: var(--muted);
   border-radius: 999px;
-  padding: 6px 10px;
+  padding: 0 10px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
-.stage-tabs button.on, .file-list button.on { background: #fff; color: var(--ink); box-shadow: var(--shadow); }
-.file-stage, .slides, .browser-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.file-list { display: flex; gap: 6px; overflow: auto; padding: 0 12px 8px; }
-.file-list button { background: rgba(255, 255, 255, 0.7); white-space: nowrap; }
+.stage-tabs button.on { background: #fff; color: var(--ink); box-shadow: var(--shadow); }
+.file-stage, .slides, .browser-stage, .canvas-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.open-strip { padding: 0 12px 8px; }
+.open-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+}
+.open-scroll {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  overflow: auto;
+}
+.open-chip {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  max-width: 220px;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.72);
+  border-radius: 999px;
+  padding-right: 2px;
+}
+.open-chip.on { background: #fff; box-shadow: var(--shadow); }
+.open-chip .name, .open-choice, .open-add, .open-find {
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+}
+.open-chip .name {
+  min-width: 0;
+  padding: 0 4px 0 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.open-chip.on .name { color: var(--ink); }
+.open-chip .close {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.open-choice {
+  flex: 0 0 auto;
+  padding: 0 12px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  white-space: nowrap;
+}
+.open-find {
+  flex: 1 0 140px;
+  min-width: 140px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 12px;
+  outline: none;
+  box-shadow: var(--shadow);
+}
+.open-add {
+  width: 32px;
+  flex: 0 0 32px;
+  margin-left: 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.open-add.on { background: #fff; color: var(--ink); box-shadow: var(--shadow); }
 .prose, .plain, .slides article { margin: 0 12px 12px; background: #fff; border-radius: 16px; overflow: auto; flex: 1; }
 .pdf-frame { flex: 1; min-height: 0; margin: 0 12px 12px; border: 0; border-radius: 16px; background: #525659; }
 .prose, .slides article { padding: 18px 20px; }
@@ -365,7 +445,6 @@ nav { overflow: auto; display: flex; flex-direction: column; gap: 2px; padding-t
 .lang { display: flex; padding: 3px; background: #f4f4f6; border-radius: 12px; }
 .lang button { border: 0; background: transparent; color: var(--muted); height: 32px; padding: 0 12px; border-radius: 9px; font-size: 14px; }
 .lang button.on { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(15, 15, 20, 0.06); }
-.canvas-stage { flex: 1; min-height: 0; display: flex; }
 .canvas-frame { flex: 1; min-height: 0; margin: 0 12px 12px; border: 0; border-radius: 16px; background: #fff; }
 .modal header strong { font-size: 18px; }
 .modal header > button {

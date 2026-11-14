@@ -84,6 +84,12 @@ export function installPreviewBridge(): void {
     async library() {
       return library;
     },
+    async pages() {
+      return [{ path: "deck.html", name: "deck.html" }];
+    },
+    async openPage(_slug, path) {
+      return { title: path, html: "<!doctype html><title>Deck</title><section>One</section><section>Two</section>", page: 1 };
+    },
     async readFile() {
       return new TextEncoder().encode("# 阅读笔记\n\n投机解码用小模型起草，大模型逐段确认。\n");
     },

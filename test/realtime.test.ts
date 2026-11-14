@@ -341,6 +341,10 @@ test("transcript snapshots replace the line instead of repeating it", () => {
     mergeUtterance("", "嗯你把这个 ppt 完整的讲一遍你把这个 PPT 完整的讲一遍。"),
     "你把这个 PPT 完整的讲一遍。",
   );
+  assert.equal(
+    mergeUtterance("等等这是第八页的内容吗", "这是第 8 页的内容吗？"),
+    "这是第 8 页的内容吗？",
+  );
   assert.equal(mergeUtterance("你好", "世界"), "你好世界");
 });
 
@@ -547,7 +551,7 @@ test("ask_text starts the written work without reading it aloud", async () => {
   assert.doesNotMatch(flipEvents, /两三句/);
 });
 
-test("continue_speaking waits for playback then starts the next segment", async () => {
+test("a finished turn stays quiet until continue_speaking, and a cancelled user turn is answered", async () => {
   const sent: string[] = [];
   const listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
   const socket = {
@@ -578,13 +582,29 @@ test("continue_speaking waits for playback then starts the next segment", async 
   message({ data: JSON.stringify({ type: "session.updated" }) });
   message({ data: JSON.stringify({ type: "response.created" }) });
   message({ data: JSON.stringify({ type: "response.audio.delta", delta: Buffer.from([0, 1]).toString("base64") }) });
-  const mark = sent.length;
-  message({ data: JSON.stringify({ type: "response.function_call_arguments.done", call_id: "go_on", name: "continue_speaking", arguments: "{}" }) });
+  const quiet = sent.length;
   message({ data: JSON.stringify({ type: "response.done", response: { output: [] } }) });
-  assert.doesNotMatch(sent.slice(mark).join("\n"), /接着往下讲/);
   call.noteSpeakerIdle(1);
   await new Promise((resolve) => setTimeout(resolve, 400));
-  const follow = sent.slice(mark).join("\n");
-  assert.match(follow, /接着往下讲/);
+  assert.doesNotMatch(sent.slice(quiet).join("\n"), /接着讲下一段/);
+
+  message({ data: JSON.stringify({ type: "response.created" }) });
+  message({ data: JSON.stringify({ type: "response.audio.delta", delta: Buffer.from([0, 1]).toString("base64") }) });
+  message({ data: JSON.stringify({ type: "response.function_call_arguments.done", call_id: "next", name: "continue_speaking", arguments: "{}" }) });
+  const marked = sent.length;
+  message({ data: JSON.stringify({ type: "response.done", response: { output: [] } }) });
+  call.noteSpeakerIdle(2);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const follow = sent.slice(marked).join("\n");
+  assert.match(follow, /接着讲下一段/);
   assert.match(follow, /response\.create/);
+
+  message({ data: JSON.stringify({ type: "response.created" }) });
+  message({ data: JSON.stringify({ type: "response.audio.delta", delta: Buffer.from([0, 2]).toString("base64") }) });
+  const barge = sent.length;
+  message({ data: JSON.stringify({ type: "input_audio_buffer.speech_started" }) });
+  message({ data: JSON.stringify({ type: "input_audio_buffer.speech_stopped" }) });
+  const afterBarge = sent.slice(barge).join("\n");
+  assert.match(afterBarge, /response\.cancel/);
+  assert.match(afterBarge, /response\.create/);
 });

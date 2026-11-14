@@ -11,6 +11,8 @@ export interface Copy {
   settings: string;
   collapseStage: string;
   expandStage: string;
+  collapseMenu: string;
+  expandMenu: string;
   files: string;
   browser: string;
   canvas: string;
@@ -34,7 +36,13 @@ export interface Copy {
   release: string;
   emptyCanvas: string;
   emptyLibrary: string;
+  emptyPages: string;
+  findFile: string;
+  findPage: string;
+  openFromLibrary: string;
+  closeTab: string;
   pickFile: string;
+  pickPage: string;
   connectModel: string;
   close: string;
   language: string;
@@ -81,6 +89,8 @@ const zh: Copy = {
   settings: "设置",
   collapseStage: "收起右栏",
   expandStage: "展开右栏",
+  collapseMenu: "收起菜单",
+  expandMenu: "展开菜单",
   files: "文件",
   browser: "浏览器",
   canvas: "Canvas",
@@ -104,7 +114,13 @@ const zh: Copy = {
   release: "停止",
   emptyCanvas: "写好的页面会出现在这里。",
   emptyLibrary: "把 PDF 或笔记放进这个任务。",
+  emptyPages: "工作区还没有 HTML 页面。",
+  findFile: "找资料",
+  findPage: "找页面",
+  openFromLibrary: "从资料库打开",
+  closeTab: "关闭",
   pickFile: "选择一份资料。",
+  pickPage: "选择一份页面。",
   connectModel: "先接上模型",
   close: "关闭",
   language: "语言",
@@ -151,6 +167,8 @@ const en: Copy = {
   settings: "Settings",
   collapseStage: "Hide the side pane",
   expandStage: "Show the side pane",
+  collapseMenu: "Hide the menu",
+  expandMenu: "Show the menu",
   files: "Files",
   browser: "Browser",
   canvas: "Canvas",
@@ -174,7 +192,13 @@ const en: Copy = {
   release: "Stop",
   emptyCanvas: "A page will show up here once it is ready.",
   emptyLibrary: "Add a PDF or a note to this task.",
+  emptyPages: "No HTML pages in the workspace yet.",
+  findFile: "Find a file",
+  findPage: "Find a page",
+  openFromLibrary: "Open from the library",
+  closeTab: "Close",
   pickFile: "Choose a file.",
+  pickPage: "Choose a page.",
   connectModel: "Connect a model",
   close: "Close",
   language: "Language",

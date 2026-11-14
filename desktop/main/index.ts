@@ -13,8 +13,9 @@ import { Runtime } from "../../src/runtime.ts";
 import { resolveHome } from "../../src/store.ts";
 import { executeTool, toolSchemas } from "../../src/tools.ts";
 import type { BrowserDriver, StageView } from "../../src/stage.ts";
-import { BROWSER_BUSY } from "../../src/stage.ts";
+import { BROWSER_BUSY, CANVAS_HTML_CAP } from "../../src/stage.ts";
 import type { Channel, SessionEvent } from "../../src/types.ts";
+import { listCanvasPages, resolveInsideWorkspace } from "../../src/workspace.ts";
 import { BrowserPane } from "./browser.ts";
 import { loadSecrets, mergeSecrets, publicSettings, type SecretPatch, type SecretRecord } from "./secrets.ts";
 
@@ -311,6 +312,21 @@ function registerIpc(): void {
     const bot = runtime.store.requireBot(slug);
     const ref = runtime.store.resolveLibraryRef(bot.id, id);
     return readFileSync(ref.storedPath);
+  });
+  ipcMain.handle("workspace:pages", (_event, slug: string) => {
+    const bot = runtime.store.requireBot(slug);
+    return listCanvasPages(bot.workspaceDir);
+  });
+  ipcMain.handle("workspace:openPage", (_event, slug: string, rel: string, page = 1) => {
+    const bot = runtime.store.requireBot(slug);
+    const resolved = resolveInsideWorkspace(bot.workspaceDir, typeof rel === "string" ? rel : "");
+    if (!resolved.ok) throw new Error(resolved.error);
+    if (!/\.html?$/i.test(resolved.rel)) throw new Error("Canvas 需要一份 .html 文件。");
+    const html = readFileSync(resolved.abs, "utf8");
+    if (Buffer.byteLength(html, "utf8") > CANVAS_HTML_CAP) throw new Error("这份 HTML 太大，右栏放不下。");
+    const view = { mode: "canvas" as const, title: resolved.rel, html, page: Math.max(1, Number(page) || 1) };
+    send("stage", { slug: bot.slug, ...view });
+    return view;
   });
   ipcMain.handle("library:add", async () => {
     if (!window) return;

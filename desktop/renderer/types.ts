@@ -12,6 +12,8 @@ declare global {
       events: (slug: string) => Promise<ChatItem[]>;
       library: (slug: string) => Promise<LibraryItem[]>;
       readFile: (slug: string, id: string) => Promise<Uint8Array>;
+      pages: (slug: string) => Promise<CanvasPage[]>;
+      openPage: (slug: string, path: string, page?: number) => Promise<{ title: string; html: string; page: number }>;
       addFiles: () => Promise<void>;
       ask: (slug: string, text: string) => Promise<ChatItem[]>;
       stop: (slug: string) => Promise<void>;
@@ -68,6 +70,11 @@ export interface LibraryItem {
   id: string;
   filename: string;
   byteSize: number;
+}
+
+export interface CanvasPage {
+  path: string;
+  name: string;
 }
 
 export interface SettingsView {

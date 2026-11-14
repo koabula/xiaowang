@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, AudioLines, Check, ChevronDown, ChevronRight, ExternalLink, Eye, FileText, Frame, Globe, Maximize2, MessageSquareText, Mic, MicOff, Minimize2, MousePointer2, PanelRight, Phone, PhoneOff, Play, Plus, RefreshCw, Search, Settings, Square, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, AudioLines, Check, ChevronDown, ChevronRight, ChevronUp, ExternalLink, Eye, FileText, Frame, Globe, Maximize2, MessageSquareText, Mic, MicOff, Minimize2, MousePointer2, PanelRight, Phone, PhoneOff, Play, Plus, RefreshCw, Search, Settings, Square, X } from "lucide-react";
 import * as Select from "@radix-ui/react-select";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -9,7 +9,7 @@ import { createCallAudio } from "./call-audio.ts";
 import { copyFor, localeOf, type Copy, type Locale } from "./copy.ts";
 import { REALTIME_SERVICES, modelsFor, resolveRealtime, voicesFor, type RealtimeRegion, type RealtimeServiceId } from "../../src/realtime-catalog.ts";
 import { mergeUtterance } from "../../src/realtime.ts";
-import type { AppState, BotRow, BrowserNote, CallNote, ChatItem, LibraryItem, SettingsPatch, StageNote, TurnNote } from "./types.ts";
+import type { AppState, BotRow, BrowserNote, CallNote, CanvasPage, ChatItem, LibraryItem, SettingsPatch, StageNote, TurnNote } from "./types.ts";
 
 type StageSnap = {
   mode: "file" | "browser" | "canvas" | "profile";
@@ -19,11 +19,30 @@ type StageSnap = {
 };
 
 const EMPTY_STAGE: StageSnap = { mode: "file", open: true, file: null, canvas: null };
+const TAB_STORE = "xiaowang.openTabs";
+
+type OpenTabs = { files: string[]; pages: string[] };
+
+function loadTabs(): Record<string, OpenTabs> {
+  try {
+    const raw = localStorage.getItem(TAB_STORE);
+    const parsed = raw ? JSON.parse(raw) as Record<string, OpenTabs> : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveTabs(tabs: Record<string, OpenTabs>): void {
+  localStorage.setItem(TAB_STORE, JSON.stringify(tabs));
+}
 
 export function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [items, setItems] = useState<ChatItem[]>([]);
   const [library, setLibrary] = useState<LibraryItem[]>([]);
+  const [pages, setPages] = useState<CanvasPage[]>([]);
+  const [openTabs, setOpenTabs] = useState<Record<string, OpenTabs>>(loadTabs);
   const [draftBySlug, setDraftBySlug] = useState<Record<string, string>>({});
   const [busyBySlug, setBusyBySlug] = useState<Record<string, boolean>>({});
   const [activityBySlug, setActivityBySlug] = useState<Record<string, string>>({});
@@ -41,6 +60,7 @@ export function App() {
   const [rightWidth, setRightWidth] = useState(420);
   const [leftWidth, setLeftWidth] = useState(252);
   const [canvasWide, setCanvasWide] = useState(false);
+  const [stageMenu, setStageMenu] = useState(true);
   const [browser, setBrowser] = useState<BrowserNote>({ url: "", title: "", holder: "bot", loading: false });
   const [address, setAddress] = useState("");
   const holeRef = useRef<HTMLDivElement>(null);
@@ -106,7 +126,13 @@ export function App() {
     if (!active) return;
     void window.xiaowang.events(active).then(setItems);
     void window.xiaowang.library(active).then(setLibrary);
+    void window.xiaowang.pages(active).then(setPages).catch(() => setPages([]));
   }, [active]);
+
+  useEffect(() => {
+    if (!active || mode !== "canvas") return;
+    void window.xiaowang.pages(active).then(setPages).catch(() => setPages([]));
+  }, [active, mode, canvas?.title]);
 
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
@@ -142,13 +168,38 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [canvasWide, mode]);
 
+  function pinTab(slug: string, kind: "files" | "pages", key: string) {
+    if (!slug || !key) return;
+    setOpenTabs((prev) => {
+      const current = prev[slug] ?? { files: [], pages: [] };
+      if (current[kind].includes(key)) return prev;
+      const next = { ...prev, [slug]: { ...current, [kind]: [...current[kind], key] } };
+      saveTabs(next);
+      return next;
+    });
+  }
+
+  function closeTab(slug: string, kind: "files" | "pages", key: string) {
+    setOpenTabs((prev) => {
+      const current = prev[slug] ?? { files: [], pages: [] };
+      const next = { ...prev, [slug]: { ...current, [kind]: current[kind].filter((item) => item !== key) } };
+      saveTabs(next);
+      return next;
+    });
+  }
+
   function rememberStage(view: StageNote) {
     if (!view.slug) return;
-    if (view.mode === "file") patchStage(view.slug, { mode: "file", open: true, file: { id: view.id, filename: view.filename, page: view.page } });
-    else if (view.mode === "browser") {
+    if (view.mode === "file") {
+      pinTab(view.slug, "files", view.id);
+      patchStage(view.slug, { mode: "file", open: true, file: { id: view.id, filename: view.filename, page: view.page } });
+    } else if (view.mode === "browser") {
       patchStage(view.slug, { mode: "browser", open: true });
       if (view.url && view.slug === activeRef.current) setAddress(view.url);
-    } else patchStage(view.slug, { mode: "canvas", open: true, canvas: { title: view.title, html: view.html, page: view.page ?? 1 } });
+    } else {
+      pinTab(view.slug, "pages", view.title);
+      patchStage(view.slug, { mode: "canvas", open: true, canvas: { title: view.title, html: view.html, page: view.page ?? 1 } });
+    }
   }
 
   async function sendMessage() {
@@ -378,15 +429,24 @@ export function App() {
 
       {stageOpen ? (
       <aside className="stage" style={wide ? undefined : { width: rightWidth }}>
-        <div className="stage-tabs">
-          <button className={mode === "file" ? "on" : ""} type="button" onClick={() => { setCanvasWide(false); patchStage(active, { mode: "file" }); }}><FileText size={15} /> {copy.files}</button>
-          <button className={mode === "browser" ? "on" : ""} type="button" onClick={() => { setCanvasWide(false); patchStage(active, { mode: "browser" }); }}><Globe size={15} /> {copy.browser}</button>
-          <button className={mode === "canvas" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "canvas" })}><Frame size={15} /> {copy.canvas}</button>
-          {mode === "canvas" ? (
-            <button className="fit" type="button" title={wide ? copy.shrinkCanvas : copy.fillCanvas} onClick={() => setCanvasWide((value) => !value)}>
-              {wide ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
-            </button>
+        <div className={stageMenu ? "stage-tabs" : "stage-tabs shut"}>
+          {stageMenu ? (
+            <>
+              <button className={mode === "file" ? "on" : ""} type="button" onClick={() => { setCanvasWide(false); patchStage(active, { mode: "file" }); }}><FileText size={15} /> {copy.files}</button>
+              <button className={mode === "browser" ? "on" : ""} type="button" onClick={() => { setCanvasWide(false); patchStage(active, { mode: "browser" }); }}><Globe size={15} /> {copy.browser}</button>
+              <button className={mode === "canvas" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "canvas" })}><Frame size={15} /> {copy.canvas}</button>
+            </>
           ) : null}
+          <span className="stage-tab-end">
+            {mode === "canvas" ? (
+              <button className="fit" type="button" title={wide ? copy.shrinkCanvas : copy.fillCanvas} onClick={() => setCanvasWide((value) => !value)}>
+                {wide ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+              </button>
+            ) : null}
+            <button className="fit" type="button" title={stageMenu ? copy.collapseMenu : copy.expandMenu} onClick={() => setStageMenu((value) => !value)}>
+              {stageMenu ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+            </button>
+          </span>
         </div>
         {mode === "profile" && current ? (
           <ProfileStage
@@ -396,14 +456,49 @@ export function App() {
             library={library}
             onRefresh={async () => setLibrary(await window.xiaowang.library(current.slug))}
             onForgot={(id) => {
+              closeTab(current.slug, "files", id);
               if (file?.id === id) patchStage(current.slug, { file: null });
             }}
           />
         ) : null}
         {mode === "file" ? (
-          <FileStage slug={active} library={library} file={file} copy={copy} onPick={(entry) => patchStage(active, { file: { ...entry, page: 1 } })} />
+          <FileStage
+            slug={active}
+            library={library}
+            file={file}
+            openIds={openTabs[active]?.files ?? []}
+            menu={stageMenu}
+            copy={copy}
+            onPick={(entry) => {
+              pinTab(active, "files", entry.id);
+              patchStage(active, { file: { ...entry, page: 1 } });
+            }}
+            onClose={(id) => {
+              closeTab(active, "files", id);
+              if (file?.id === id) patchStage(active, { file: null });
+            }}
+          />
         ) : null}
-        {mode === "canvas" ? <CanvasStage canvas={canvas} copy={copy} /> : null}
+        {mode === "canvas" ? (
+          <CanvasStage
+            slug={active}
+            pages={pages}
+            canvas={canvas}
+            openPaths={openTabs[active]?.pages ?? []}
+            menu={stageMenu}
+            copy={copy}
+            onPick={(path) => {
+              pinTab(active, "pages", path);
+              void window.xiaowang.openPage(active, path, 1).then((view) => {
+                patchStage(active, { mode: "canvas", open: true, canvas: { title: view.title, html: view.html, page: view.page } });
+              }).catch((error) => setToast(plainError(error)));
+            }}
+            onClose={(path) => {
+              closeTab(active, "pages", path);
+              if (canvas?.title === path) patchStage(active, { canvas: null });
+            }}
+          />
+        ) : null}
         {mode === "browser" ? (
           <div className="browser-stage">
             <form className="url" onSubmit={(event) => { event.preventDefault(); void window.xiaowang.browserGo(address.startsWith("http") ? address : `https://${address}`); }}>
@@ -536,27 +631,126 @@ function callMood(call: LiveCallView): "idle" | "think" {
   return last?.live && last.who === "assistant" ? "think" : "idle";
 }
 
+function leafName(label: string): string {
+  const name = label.split(/[/\\]/).pop();
+  return name || label;
+}
+
+function OpenStrip({
+  openItems,
+  catalog,
+  activeKey,
+  placeholder,
+  addLabel,
+  closeLabel,
+  onOpen,
+  onClose,
+}: {
+  openItems: Array<{ key: string; label: string }>;
+  catalog: Array<{ key: string; label: string }>;
+  activeKey: string | null;
+  placeholder: string;
+  addLabel: string;
+  closeLabel: string;
+  onOpen: (key: string) => void;
+  onClose: (key: string) => void;
+}) {
+  const [picking, setPicking] = useState(false);
+  const [query, setQuery] = useState("");
+  const openKeys = new Set(openItems.map((item) => item.key));
+  const closed = catalog.filter((item) => !openKeys.has(item.key));
+  const needle = query.trim().toLowerCase();
+  const choices = needle
+    ? closed.filter((item) => item.label.toLowerCase().includes(needle) || item.key.toLowerCase().includes(needle))
+    : closed;
+  return (
+    <div className="open-strip">
+      <div className="open-row">
+        <div className="open-scroll">
+          {openItems.map((item) => (
+            <span className={item.key === activeKey ? "open-chip on" : "open-chip"} key={item.key}>
+              <button className="name" type="button" title={item.label} onClick={() => onOpen(item.key)}>{leafName(item.label)}</button>
+              <button className="close" type="button" title={closeLabel} onClick={() => onClose(item.key)}><X size={13} /></button>
+            </span>
+          ))}
+          {picking ? (
+            <input
+              className="open-find"
+              value={query}
+              placeholder={placeholder}
+              autoFocus
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          ) : null}
+          {picking ? choices.map((item) => (
+            <button
+              className="open-choice"
+              key={item.key}
+              type="button"
+              title={item.label}
+              onClick={() => { onOpen(item.key); setPicking(false); setQuery(""); }}
+            >{leafName(item.label)}</button>
+          )) : null}
+        </div>
+        <button
+          className={picking ? "open-add on" : "open-add"}
+          type="button"
+          title={addLabel}
+          onClick={() => {
+            if (picking) {
+              setPicking(false);
+              setQuery("");
+              return;
+            }
+            if (closed.length === 0) return;
+            setPicking(true);
+          }}
+        ><Plus size={15} /></button>
+      </div>
+    </div>
+  );
+}
+
 function FileStage({
   slug,
   library,
   file,
+  openIds,
+  menu,
   copy,
   onPick,
+  onClose,
 }: {
   slug: string;
   library: LibraryItem[];
   file: { id: string; filename: string; page: number } | null;
+  openIds: string[];
+  menu: boolean;
   copy: Copy;
   onPick: (file: LibraryItem) => void;
+  onClose: (id: string) => void;
 }) {
+  const byId = new Map(library.map((entry) => [entry.id, entry]));
   return (
     <div className="file-stage">
-      <div className="file-list">
-        {library.length === 0 ? <p>{copy.emptyLibrary}</p> : null}
-        {library.map((entry) => (
-          <button className={file?.id === entry.id ? "on" : ""} key={entry.id} type="button" onClick={() => onPick(entry)}>{entry.filename}</button>
-        ))}
-      </div>
+      {menu ? (
+      <OpenStrip
+        openItems={openIds.flatMap((id) => {
+          const entry = byId.get(id);
+          return entry ? [{ key: entry.id, label: entry.filename }] : [];
+        })}
+        catalog={library.map((entry) => ({ key: entry.id, label: entry.filename }))}
+        activeKey={file?.id ?? null}
+        placeholder={copy.findFile}
+        addLabel={copy.openFromLibrary}
+        closeLabel={copy.closeTab}
+        onOpen={(key) => {
+          const entry = byId.get(key);
+          if (entry) onPick(entry);
+        }}
+        onClose={onClose}
+      />
+      ) : null}
       {file && slug ? <Reader slug={slug} file={file} /> : <p className="empty">{copy.pickFile}</p>}
     </div>
   );
@@ -637,24 +831,58 @@ function withCanvasPager(html: string): string {
   return html.includes("</body>") ? html.replace("</body>", `${CANVAS_PAGER_SHIM}</body>`) : `${html}${CANVAS_PAGER_SHIM}`;
 }
 
-function CanvasStage({ canvas, copy }: { canvas: { title: string; html: string; page: number } | null; copy: Copy }) {
+function CanvasStage({
+  slug,
+  pages,
+  canvas,
+  openPaths,
+  menu,
+  copy,
+  onPick,
+  onClose,
+}: {
+  slug: string;
+  pages: CanvasPage[];
+  canvas: { title: string; html: string; page: number } | null;
+  openPaths: string[];
+  menu: boolean;
+  copy: Copy;
+  onPick: (path: string) => void;
+  onClose: (path: string) => void;
+}) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const page = canvas?.page ?? 1;
   useEffect(() => {
     if (!canvas) return;
     frameRef.current?.contentWindow?.postMessage({ type: "xiaowang:page", page }, "*");
   }, [canvas?.title, canvas?.html, page]);
-  if (!canvas) return <p className="empty">{copy.emptyCanvas}</p>;
+  const openItems = openPaths.map((path) => ({ key: path, label: path }));
   return (
     <div className="canvas-stage">
-      <iframe
-        ref={frameRef}
-        className="canvas-frame"
-        title={canvas.title}
-        sandbox="allow-scripts"
-        srcDoc={withCanvasPager(canvas.html)}
-        onLoad={() => frameRef.current?.contentWindow?.postMessage({ type: "xiaowang:page", page }, "*")}
+      {menu ? (
+      <OpenStrip
+        openItems={openItems}
+        catalog={pages.map((entry) => ({ key: entry.path, label: entry.path }))}
+        activeKey={canvas?.title ?? null}
+        placeholder={copy.findPage}
+        addLabel={copy.openFromLibrary}
+        closeLabel={copy.closeTab}
+        onOpen={onPick}
+        onClose={onClose}
       />
+      ) : null}
+      {canvas && slug ? (
+        <iframe
+          ref={frameRef}
+          className="canvas-frame"
+          title={canvas.title}
+          sandbox="allow-scripts"
+          srcDoc={withCanvasPager(canvas.html)}
+          onLoad={() => frameRef.current?.contentWindow?.postMessage({ type: "xiaowang:page", page }, "*")}
+        />
+      ) : (
+        <p className="empty">{copy.emptyCanvas}</p>
+      )}
     </div>
   );
 }
