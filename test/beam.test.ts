@@ -33,9 +33,11 @@ test("a new face keeps the slab color, and a new color keeps the same slots for 
   }
 });
 
-test("the app icon is the pinned steward beam", () => {
+test("the app icon fills the tile with the steward ink", () => {
   const svg = beamSvg(APP_ICON_NAME, beamPalette(APP_ICON_NAME, APP_ICON_INK));
   assert.equal(svg, beamSvg(APP_ICON_NAME, beamPalette(APP_ICON_NAME, APP_ICON_INK)));
   assert.match(svg, new RegExp(APP_ICON_INK));
-  assert.match(svg, /#FFFFFF|#000000/);
+  assert.match(svg, /#FFFFFF/);
+  assert.doesNotMatch(svg, /#F4F4F5/);
+  assert.doesNotMatch(svg, /<mask/);
 });

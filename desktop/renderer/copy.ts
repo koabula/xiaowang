@@ -15,7 +15,8 @@ export interface Copy {
   browser: string;
   canvas: string;
   addToLibrary: string;
-  dictateLater: string;
+  fillCanvas: string;
+  shrinkCanvas: string;
   stop: string;
   call: string;
   hangup: string;
@@ -84,7 +85,8 @@ const zh: Copy = {
   browser: "浏览器",
   canvas: "Canvas",
   addToLibrary: "放入资料库",
-  dictateLater: "听写还没接上",
+  fillCanvas: "铺满窗口",
+  shrinkCanvas: "收回",
   stop: "停下",
   call: "通话",
   hangup: "挂断",
@@ -153,7 +155,8 @@ const en: Copy = {
   browser: "Browser",
   canvas: "Canvas",
   addToLibrary: "Add to the library",
-  dictateLater: "Dictation is not connected",
+  fillCanvas: "Fill the window",
+  shrinkCanvas: "Back to the side",
   stop: "Stop",
   call: "Call",
   hangup: "Hang up",

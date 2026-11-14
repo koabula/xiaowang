@@ -31,6 +31,7 @@ declare global {
       callIdle: (serial: number) => void;
       onState: (callback: (state: AppState) => void) => () => void;
       onStep: (callback: (step: StepNote) => void) => () => void;
+      onTurn: (callback: (note: TurnNote) => void) => () => void;
       onStage: (callback: (view: StageNote) => void) => () => void;
       onBrowser: (callback: (state: BrowserNote) => void) => () => void;
       onDownload: (callback: (note: DownloadNote) => void) => () => void;
@@ -125,6 +126,12 @@ export interface Bounds {
   y: number;
   width: number;
   height: number;
+}
+
+export interface TurnNote {
+  slug: string;
+  busy: boolean;
+  error?: string;
 }
 
 export interface StepNote {

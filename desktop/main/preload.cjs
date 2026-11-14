@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld("xiaowang", {
   callIdle: (serial) => ipcRenderer.send("call:idle", serial),
   onState: (callback) => listeners("state", callback),
   onStep: (callback) => listeners("step", callback),
+  onTurn: (callback) => listeners("turn", callback),
   onStage: (callback) => listeners("stage", callback),
   onBrowser: (callback) => listeners("browser", callback),
   onDownload: (callback) => listeners("download", callback),

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, AudioLines, Check, ChevronDown, ChevronRight, ExternalLink, Eye, FileText, Frame, Globe, MessageSquareText, Mic, MicOff, MousePointer2, PanelRight, Phone, PhoneOff, Play, Plus, RefreshCw, Search, Settings, Square, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, AudioLines, Check, ChevronDown, ChevronRight, ExternalLink, Eye, FileText, Frame, Globe, Maximize2, MessageSquareText, Mic, MicOff, Minimize2, MousePointer2, PanelRight, Phone, PhoneOff, Play, Plus, RefreshCw, Search, Settings, Square, X } from "lucide-react";
 import * as Select from "@radix-ui/react-select";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -9,7 +9,7 @@ import { createCallAudio } from "./call-audio.ts";
 import { copyFor, localeOf, type Copy, type Locale } from "./copy.ts";
 import { REALTIME_SERVICES, modelsFor, resolveRealtime, voicesFor, type RealtimeRegion, type RealtimeServiceId } from "../../src/realtime-catalog.ts";
 import { mergeUtterance } from "../../src/realtime.ts";
-import type { AppState, BotRow, BrowserNote, CallNote, ChatItem, LibraryItem, SettingsPatch, StageNote } from "./types.ts";
+import type { AppState, BotRow, BrowserNote, CallNote, ChatItem, LibraryItem, SettingsPatch, StageNote, TurnNote } from "./types.ts";
 
 type StageSnap = {
   mode: "file" | "browser" | "canvas" | "profile";
@@ -40,6 +40,7 @@ export function App() {
   const [toast, setToast] = useState("");
   const [rightWidth, setRightWidth] = useState(420);
   const [leftWidth, setLeftWidth] = useState(252);
+  const [canvasWide, setCanvasWide] = useState(false);
   const [browser, setBrowser] = useState<BrowserNote>({ url: "", title: "", holder: "bot", loading: false });
   const [address, setAddress] = useState("");
   const holeRef = useRef<HTMLDivElement>(null);
@@ -86,6 +87,17 @@ export function App() {
         if (!step.activity?.trim()) return;
         setActivityBySlug((prev) => ({ ...prev, [step.slug]: step.activity!.trim() }));
       }),
+      window.xiaowang.onTurn((note: TurnNote) => {
+        setBusyBySlug((prev) => ({ ...prev, [note.slug]: note.busy }));
+        if (note.busy) {
+          setActivityBySlug((prev) => ({ ...prev, [note.slug]: "" }));
+          return;
+        }
+        if (note.error) setToast(note.error.length > 160 ? `${note.error.slice(0, 160)}…` : note.error);
+        if (activeRef.current !== note.slug) return;
+        void window.xiaowang.events(note.slug).then(setItems);
+        void window.xiaowang.library(note.slug).then(setLibrary);
+      }),
     ];
     return () => stops.forEach((stop) => stop());
   }, []);
@@ -120,6 +132,15 @@ export function App() {
       window.removeEventListener("resize", send);
     };
   }, [mode, covered, rightWidth, leftWidth, stageOpen]);
+
+  useEffect(() => {
+    if (!(canvasWide && mode === "canvas")) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setCanvasWide(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [canvasWide, mode]);
 
   function rememberStage(view: StageNote) {
     if (!view.slug) return;
@@ -253,9 +274,10 @@ export function App() {
   }
 
   const bots = (state?.bots ?? []).filter((bot) => `${bot.name}${bot.preview}`.includes(query.trim()));
+  const wide = canvasWide && mode === "canvas" && stageOpen;
 
   return (
-    <div className="shell">
+    <div className={wide ? "shell canvas-wide" : "shell"}>
       <aside className="rail" style={{ width: leftWidth }}>
         <div className="traffic-space">
           <button className="icon" title={copy.search} type="button"><Search size={16} /></button>
@@ -345,7 +367,6 @@ export function App() {
               }
             }}
           />
-          <button className="icon" type="button" title={copy.dictateLater}><Mic size={18} /></button>
           {busy ? <button className="call stop" type="button" title={copy.stop} onClick={() => void window.xiaowang.stop(active)}><Square size={14} /></button> : null}
           <button className={call ? "call stop" : "call"} style={call ? undefined : { background: ink }} type="button" title={call ? copy.hangup : copy.call} onClick={() => void toggleCall()}>
             {call ? <PhoneOff size={16} /> : <><span /><span /><span /><span /></>}
@@ -356,11 +377,16 @@ export function App() {
       {stageOpen ? <div className="split" onPointerDown={(event) => dragSize(event, rightWidth, setRightWidth, -1)} /> : null}
 
       {stageOpen ? (
-      <aside className="stage" style={{ width: rightWidth }}>
+      <aside className="stage" style={wide ? undefined : { width: rightWidth }}>
         <div className="stage-tabs">
-          <button className={mode === "file" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "file" })}><FileText size={15} /> {copy.files}</button>
-          <button className={mode === "browser" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "browser" })}><Globe size={15} /> {copy.browser}</button>
+          <button className={mode === "file" ? "on" : ""} type="button" onClick={() => { setCanvasWide(false); patchStage(active, { mode: "file" }); }}><FileText size={15} /> {copy.files}</button>
+          <button className={mode === "browser" ? "on" : ""} type="button" onClick={() => { setCanvasWide(false); patchStage(active, { mode: "browser" }); }}><Globe size={15} /> {copy.browser}</button>
           <button className={mode === "canvas" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "canvas" })}><Frame size={15} /> {copy.canvas}</button>
+          {mode === "canvas" ? (
+            <button className="fit" type="button" title={wide ? copy.shrinkCanvas : copy.fillCanvas} onClick={() => setCanvasWide((value) => !value)}>
+              {wide ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+            </button>
+          ) : null}
         </div>
         {mode === "profile" && current ? (
           <ProfileStage

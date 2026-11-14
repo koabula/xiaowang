@@ -8,13 +8,13 @@ import { formatVoiceBrief, projectVoiceBrief } from "../../src/project.ts";
 import { checkModel, configFromEnv, createProvider, listModels } from "../../src/provider.ts";
 import { localeOf } from "../../src/locale.ts";
 import { keyForService, realtimeKeyPage, resolveRealtime } from "../../src/realtime-catalog.ts";
-import { PREVIEW_LINE, doubaoSession, realtimeEndpoint, realtimeInstructions, sessionUpdate, socketUrl, voiceTools } from "../../src/realtime.ts";
+import { PREVIEW_LINE, askTextResult, doubaoSession, realtimeEndpoint, realtimeInstructions, sessionUpdate, socketUrl, voiceTools } from "../../src/realtime.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { resolveHome } from "../../src/store.ts";
 import { executeTool, toolSchemas } from "../../src/tools.ts";
 import type { BrowserDriver, StageView } from "../../src/stage.ts";
 import { BROWSER_BUSY } from "../../src/stage.ts";
-import type { SessionEvent } from "../../src/types.ts";
+import type { Channel, SessionEvent } from "../../src/types.ts";
 import { BrowserPane } from "./browser.ts";
 import { loadSecrets, mergeSecrets, publicSettings, type SecretPatch, type SecretRecord } from "./secrets.ts";
 
@@ -103,7 +103,7 @@ function chatItems(slug: string): ChatItem[] {
 }
 
 function present(id: number, event: SessionEvent): ChatItem | null {
-  if (event.type === "user_text" && event.channel !== "system") {
+  if (event.type === "user_text" && event.channel === "text") {
     return { id, kind: "user", text: event.text };
   }
   if (event.type === "assistant_turn" && event.text.trim()) {
@@ -170,12 +170,13 @@ function libraryOf(slug: string) {
   }));
 }
 
-async function ask(slug: string, text: string, signal: AbortSignal): Promise<void> {
+async function ask(slug: string, text: string, signal: AbortSignal, channel: Channel = "text"): Promise<void> {
   const bot = runtime.store.requireBot(slug);
   const provider = createProvider(configFromEnv(envFromSecrets()));
   await runTurn(runtime, {
     botId: bot.id,
     input: text,
+    channel,
     provider,
     env: envFromSecrets(),
     locale: localeOf(secrets.locale),
@@ -203,6 +204,46 @@ async function ask(slug: string, text: string, signal: AbortSignal): Promise<voi
 
 let turns = new Map<string, AbortController>();
 let live: LiveCall | null = null;
+
+function beginTurn(slug: string, text: string, channel: Channel): boolean {
+  if (turns.has(slug)) return false;
+  const controller = new AbortController();
+  turns.set(slug, controller);
+  send("turn", { slug, busy: true });
+  let failure = "";
+  void ask(slug, text, controller.signal, channel)
+    .catch((error: unknown) => {
+      failure = error instanceof Error ? error.message : String(error);
+    })
+    .finally(() => {
+      const current = turns.get(slug) === controller;
+      if (current) turns.delete(slug);
+      if (current) send("turn", { slug, busy: false, error: failure });
+    });
+  return true;
+}
+
+function handoffText(task: string, lines: Array<{ who: "user" | "assistant"; text: string }>, person: string, locale: ReturnType<typeof localeOf>): string {
+  const heard = lines
+    .slice(-8)
+    .filter((line) => line.text.trim())
+    .map((line) => {
+      const who = line.who === "user" ? (locale === "en" ? "User" : "用户") : person;
+      return locale === "en" ? `${who}: ${line.text.trim()}` : `${who}：${line.text.trim()}`;
+    })
+    .join("\n");
+  if (!heard) return task;
+  return locale === "en" ? `${task}\n\nJust now on the call:\n${heard}` : `${task}\n\n刚才的通话：\n${heard}`;
+}
+
+function taskArgument(args: string): string {
+  try {
+    const input = JSON.parse(args) as { task?: unknown };
+    return typeof input.task === "string" ? input.task.trim() : "";
+  } catch {
+    return "";
+  }
+}
 
 function browserFor(slug: string): BrowserDriver {
   const claim = (): string | null => {
@@ -478,6 +519,12 @@ function startCall(slug: string): void {
     });
   openCall(socketUrl(endpoint), key, session, endpoint.inputRate, endpoint.outputRate, slug, "", {
     async runTool(name, args) {
+      if (name === "ask_text") {
+        const task = taskArgument(args);
+        if (!task) return askTextResult("missing", locale);
+        if (!beginTurn(slug, handoffText(task, live?.transcript() ?? [], bot.name, locale), "voice")) return askTextResult("busy", locale);
+        return askTextResult("started", locale);
+      }
       let input: unknown = {};
       try {
         input = args.trim() ? JSON.parse(args) : {};

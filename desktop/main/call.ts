@@ -1,5 +1,6 @@
 import {
   TOOL_ACCEPTED,
+  askTextResult,
   audioAppend,
   functionOutput,
   foldTranscript,
@@ -238,6 +239,21 @@ export class LiveCall {
       if (!this.speaking) this.endReady = true;
       this.send(functionOutput(callId, "道别说完就挂断。", this.family));
       this.tryHangup();
+      return;
+    }
+    if (name === "ask_text") {
+      void this.handlers.runTool(name, args).then((output) => {
+        if (this.closed) return;
+        this.send(functionOutput(callId, output.trim() || askTextResult("started"), this.family));
+        if (this.family !== "doubao") this.send(responseCreate());
+        this.speaking = true;
+      }).catch((error: unknown) => {
+        if (this.closed) return;
+        const message = error instanceof Error ? error.message : String(error);
+        this.send(functionOutput(callId, message, this.family));
+        if (this.family !== "doubao") this.send(responseCreate());
+        this.speaking = true;
+      });
       return;
     }
     this.send(functionOutput(callId, TOOL_ACCEPTED, this.family));

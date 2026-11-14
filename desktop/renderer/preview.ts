@@ -1,5 +1,5 @@
 import { realtimeKeyPage } from "../../src/realtime-catalog.ts";
-import type { AppState, BrowserNote, CallNote, ChatItem, DownloadNote, LibraryItem, SettingsPatch, SettingsView, StageNote, StepNote } from "./types.ts";
+import type { AppState, BrowserNote, CallNote, ChatItem, DownloadNote, LibraryItem, SettingsPatch, SettingsView, StageNote, StepNote, TurnNote } from "./types.ts";
 
 /** 普通浏览器里预览界面。桌面端有 preload 时不会装上。 */
 export function installPreviewBridge(): void {
@@ -163,6 +163,9 @@ export function installPreviewBridge(): void {
     onStep(callback) {
       listeners.step.add(callback);
       return () => listeners.step.delete(callback);
+    },
+    onTurn(_callback: (note: TurnNote) => void) {
+      return () => {};
     },
     onStage(callback) {
       listeners.stage.add(callback);

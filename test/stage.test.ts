@@ -113,6 +113,10 @@ test("show_stage opens a referenced file and a canvas page", async () => {
     const system = projectLlmContext(bot, [], { personName: "Wang", locale: "en" }).system;
     assert.match(system, /Reply in English/);
     assert.match(system, /mode=canvas/);
+    assert.match(system, /slides/);
+    const chinese = projectLlmContext(bot, [], { personName: "小王" }).system;
+    assert.match(chinese, /幻灯片/);
+    assert.match(chinese, /mode=canvas/);
   } finally {
     close();
   }

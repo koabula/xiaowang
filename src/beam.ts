@@ -25,27 +25,20 @@ export function beamPalette(name: string, slab: string): string[] {
 export const APP_ICON_NAME = "xiaowang";
 export const APP_ICON_INK = "#18181B";
 
-/** 和 boring-avatars · beam 同一套几何，用来导出不会随换脸变化的应用图标。 */
+/** 应用图标铺满整张方块，眼睛和嘴放在正中。程序坞会把方块裁成圆角。 */
 export function beamSvg(name: string, colors: string[], pixels = 1024): string {
   const face = beamFace(name, colors);
   const size = 36;
   const mouth = face.isMouthOpen
-    ? `<path d="M15 ${19 + face.mouthSpread}c2 1 4 1 6 0" stroke="${face.faceColor}" fill="none" stroke-linecap="round"/>`
-    : `<path d="M13,${19 + face.mouthSpread} a1,0.75 0 0,0 10,0" fill="${face.faceColor}"/>`;
+    ? `<path d="M12.2 21.6c1.8 1.7 3.6 2.5 5.8 2.5s4-.8 5.8-2.5" stroke="#FFFFFF" stroke-width="1.8" fill="none" stroke-linecap="round"/>`
+    : `<path d="M11.4 21.2c2.6 3.3 10.6 3.3 13.2 0" stroke="#FFFFFF" stroke-width="1.8" fill="none" stroke-linecap="round"/>`;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${pixels}" height="${pixels}" viewBox="0 0 ${size} ${size}" fill="none">
-  <rect width="${size}" height="${size}" fill="${PAPER}"/>
-  <mask id="beam" maskUnits="userSpaceOnUse" x="0" y="0" width="${size}" height="${size}">
-    <rect width="${size}" height="${size}" rx="${size * 2}" fill="#FFFFFF"/>
-  </mask>
-  <g mask="url(#beam)">
-    <rect width="${size}" height="${size}" fill="${face.backgroundColor}"/>
-    <rect width="${size}" height="${size}" rx="${face.isCircle ? size : size / 6}" fill="${face.wrapperColor}" transform="translate(${face.wrapperTranslateX} ${face.wrapperTranslateY}) rotate(${face.wrapperRotate} ${size / 2} ${size / 2}) scale(${face.wrapperScale})"/>
-    <g transform="translate(${face.faceTranslateX} ${face.faceTranslateY}) rotate(${face.faceRotate} ${size / 2} ${size / 2})">
-      ${mouth}
-      <rect x="${14 - face.eyeSpread}" y="14" width="1.5" height="2" rx="1" fill="${face.faceColor}"/>
-      <rect x="${20 + face.eyeSpread}" y="14" width="1.5" height="2" rx="1" fill="${face.faceColor}"/>
-    </g>
+  <rect width="${size}" height="${size}" fill="${face.wrapperColor}"/>
+  <g transform="translate(18 18) scale(1.45) translate(-18 -18)">
+    <rect x="10.1" y="11" width="3.2" height="4.3" rx="1.6" fill="#FFFFFF"/>
+    <rect x="22.7" y="11" width="3.2" height="4.3" rx="1.6" fill="#FFFFFF"/>
+    ${mouth}
   </g>
 </svg>
 `;

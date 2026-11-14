@@ -79,19 +79,56 @@ export const END_CALL_TOOL: ToolSchema = {
   parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
 };
 
+export function askTextTool(locale: Locale = "zh"): ToolSchema {
+  if (locale === "en") {
+    return {
+      name: "ask_text",
+      description: "Use this when the user wants a page or something written down: canvas, ppt, slides, a talk, a report, or a note. Say one short line first, then call it. Put their words in task. Do not say you handed it off, and do not write the long piece yourself.",
+      parameters: {
+        type: "object",
+        properties: { task: { type: "string", description: "What to make, in the user's words." } },
+        required: ["task"],
+        additionalProperties: false,
+      },
+    };
+  }
+  return {
+    name: "ask_text",
+    description: "用户要一份页面或写下来的东西时调用：canvas、ppt、slides、幻灯片、演示、汇报或笔记。先用一句口语接住，再调用。task 用用户的原话。不要说把事情转交了，也不要自己写长文。",
+    parameters: {
+      type: "object",
+      properties: { task: { type: "string", description: "要做的事，用用户的原话。" } },
+      required: ["task"],
+      additionalProperties: false,
+    },
+  };
+}
+
+export function askTextResult(kind: "started" | "busy" | "missing", locale: Locale = "zh"): string {
+  if (locale === "en") {
+    if (kind === "busy") return "The previous piece is still going. Tell the user in one short sentence that this one starts when it finishes.";
+    if (kind === "missing") return "You did not catch what to make. Ask in one short sentence.";
+    return "Started. Keep the conversation going. Do not repeat the task and do not read a long answer.";
+  }
+  if (kind === "busy") return "上一件还没做完。用一句口语告诉用户，做完再开始这一件。";
+  if (kind === "missing") return "没有听清要做的事。用一句口语问用户要哪一份。";
+  return "已经开始。继续用口语接住，不要复述任务，也不要念长文。";
+}
+
 export function voiceTools(tools: ToolSchema[], locale: Locale = "zh"): ToolSchema[] {
-  if (tools.some((tool) => tool.name === "end_call")) return tools;
-  const tool = locale === "en"
+  const names = new Set(tools.map((tool) => tool.name));
+  const endCall = locale === "en"
     ? { ...END_CALL_TOOL, description: "End this call. Say a short goodbye first, then call this. Do not call it before the goodbye." }
     : END_CALL_TOOL;
-  return [...tools, tool];
+  return [...tools, ...[askTextTool(locale), endCall].filter((tool) => !names.has(tool.name))];
 }
 
 export function realtimeInstructions(personName: string, brief: string, locale: Locale = "zh"): string {
   if (locale === "en") {
     return [
       `You are "${personName}". This is a voice call. Speak in short sentences.`,
-      "The user only hears your voice. When you look something up, read, or write a note, say one short line first, then use the tool. Do not narrate the tool, and do not say you handed the work off.",
+      "The user only hears your voice. When you look something up or read, say one short line first, then use the tool. Do not narrate the tool, and do not say you handed the work off.",
+      "When the user wants a canvas, ppt, slides, a talk, a report, or a written note, say one short line, then call ask_text and put their words in task. Do not write the long piece yourself.",
       "When the user wants to end the call, say a short goodbye, then call end_call. The call hangs up after the goodbye.",
       "Do not invent numbers that are not in the abstract or the text.",
       "",
@@ -100,7 +137,8 @@ export function realtimeInstructions(personName: string, brief: string, locale: 
   }
   return [
     `你是「${personName}」。这是一次语音通话，用口语短句。`,
-    "用户只听见你的声音。要查文献、读资料或写笔记时，先接一句再调用工具。不要念工具过程，也不要说自己把事情转交了。",
+    "用户只听见你的声音。要查文献或读资料时，先接一句再调用工具。不要念工具过程，也不要说自己把事情转交了。",
+    "用户要 canvas、ppt、slides、幻灯片、演示、汇报或写下来的笔记时，先接一句，再调用 ask_text，把原话放进 task。不要自己写长文。",
     "用户要结束通话时，先说一句简短的再见，然后调用 end_call。道别说完就会挂断。",
     "摘要和正文里没有的数字不要编。",
     "",

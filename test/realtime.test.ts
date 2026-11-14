@@ -11,6 +11,7 @@ import {
   QWEN_REALTIME_MODEL,
   QWEN_REALTIME_URL,
   TOOL_ACCEPTED,
+  askTextResult,
   doubaoSession,
   foldTranscript,
   mergeUtterance,
@@ -63,10 +64,15 @@ test("a session carries the spoken instructions and the same tool names", () => 
   const session = update.session as { instructions: string; tools: Array<{ name: string }> };
   assert.match(session.instructions, /你是「阿王」/);
   assert.match(session.instructions, /投机解码/);
+  assert.match(session.instructions, /ask_text/);
   assert.match(session.instructions, /end_call/);
   assert.equal(session.tools[0]?.name, "search_literature");
   const voiced = voiceTools([{ name: "search_literature", description: "检索", parameters: { type: "object" } }]);
+  assert.equal(voiced.at(-2)?.name, "ask_text");
   assert.equal(voiced.at(-1)?.name, "end_call");
+  const english = realtimeInstructions("Wang", "Task: decoding", "en");
+  assert.match(english, /ask_text/);
+  assert.match(english, /slides/);
 });
 
 test("server events become audio, transcripts, and one function call", () => {
@@ -461,4 +467,43 @@ test("end_call waits until the goodbye finishes playing", () => {
   assert.equal(phases.includes("closed"), false);
   call.noteSpeakerIdle(1);
   assert.equal(phases.at(-1), "closed");
+});
+
+test("ask_text starts the written work without reading it aloud", async () => {
+  const sent: string[] = [];
+  const listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
+  const socket = {
+    send(data: string) {
+      sent.push(data);
+    },
+    close() {},
+    addEventListener(type: string, listener: (event: { data?: unknown }) => void) {
+      const list = listeners.get(type) ?? [];
+      list.push(listener);
+      listeners.set(type, list);
+    },
+  };
+  const call = new LiveCall("wss://example.test/realtime", "key", { type: "session.update" }, {
+    onPhase() {},
+    onAudio() {},
+    onInterrupt() {},
+    onLine() {},
+    onTranscript() {},
+    runTool(name) {
+      assert.equal(name, "ask_text");
+      return Promise.resolve(askTextResult("started"));
+    },
+  }, () => socket);
+  call.start();
+  const message = listeners.get("message")?.[0];
+  assert.ok(message);
+  message({ data: JSON.stringify({ type: "session.created" }) });
+  message({ data: JSON.stringify({ type: "session.updated" }) });
+  const mark = sent.length;
+  message({ data: JSON.stringify({ type: "response.function_call_arguments.done", call_id: "page", name: "ask_text", arguments: "{\"task\":\"做一份幻灯片\"}" }) });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const follow = sent.slice(mark).join("\n");
+  assert.match(follow, /已经开始/);
+  assert.doesNotMatch(follow, /结果好了/);
+  assert.equal(askTextResult("busy", "en").includes("previous piece"), true);
 });

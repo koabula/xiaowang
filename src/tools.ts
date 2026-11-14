@@ -234,7 +234,7 @@ const TOOLS: Tool[] = [
     schema: {
       name: "show_stage",
       description:
-        "把内容放到桌面右栏给用户看。mode=file 打开当前任务资料库里的 PDF 或文本并翻到 page；mode=browser 打开右栏浏览器；mode=canvas 打开工作区里一份自包含的 HTML（CSS 排版，需要翻页或交互时写少量 JS）。讲解、对照和示意图用 canvas，不要交 Markdown 幻灯片。用户能看见右栏时再用。Show a self-contained HTML file with mode=canvas.",
+        "把内容放到桌面右栏给用户看。mode=file 打开当前任务资料库里的 PDF 或文本并翻到 page；mode=browser 打开右栏浏览器；mode=canvas 打开工作区里一份自包含的 HTML。用户说到 canvas、ppt、slides、幻灯片、演示或汇报时用 mode=canvas。Open that page with mode=canvas.",
       parameters: objectSchema(
         {
           mode: { type: "string", description: "file、browser 或 canvas。" },
