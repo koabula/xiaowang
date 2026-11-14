@@ -1,9 +1,10 @@
 import { projectLlmContext } from "./project.ts";
 import type { Runtime } from "./runtime.ts";
+import type { BrowserDriver, StageDriver } from "./stage.ts";
 import { executeTool, toolSchemas } from "./tools.ts";
 import type { Bot, Channel, CompletionResult, LlmProvider, ToolCall } from "./types.ts";
 
-const DEFAULT_MAX_STEPS = 8;
+const QUIET_STEP_CAP = 40;
 const MAX_KICKOFFS = 5;
 
 export interface StepEvent {
@@ -30,6 +31,9 @@ export interface RunTurnOptions {
   maxSteps?: number;
   fetchImpl?: typeof fetch;
   env?: NodeJS.ProcessEnv;
+  browser?: BrowserDriver;
+  stage?: StageDriver;
+  signal?: AbortSignal;
   onStep?: (step: StepEvent) => void;
 }
 
@@ -63,14 +67,18 @@ export async function runTurn(runtime: Runtime, options: RunTurnOptions): Promis
 
 async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<TurnResult> {
   const bot = runtime.store.requireBot(options.botId);
-  const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
+  const maxSteps = options.maxSteps ?? QUIET_STEP_CAP;
   runtime.store.append(bot.id, {
     type: "user_text",
     channel: options.channel ?? "text",
     text: options.input,
   });
 
+  let lastText = "";
   for (let step = 1; step <= maxSteps; step += 1) {
+    if (options.signal?.aborted) {
+      return { bot: runtime.store.requireBot(bot.id), finalText: lastText, steps: step - 1, kickoffs: [], skippedKickoffs: 0 };
+    }
     const current = runtime.store.requireBot(bot.id);
     const library = runtime.store.listLibrary(bot.id).map((ref) => ({ id: ref.id, filename: ref.filename }));
     const projected = projectLlmContext(current, runtime.store.getEvents(bot.id), { library });
@@ -79,6 +87,7 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
       messages: projected.messages,
       tools: toolSchemas(),
     });
+    lastText = result.text;
     const toolCalls = normalizeToolCalls(result, step);
     runtime.store.append(bot.id, {
       type: "assistant_turn",
@@ -88,7 +97,7 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
     });
     options.onStep?.({ bot: current, kind: "assistant", text: result.text });
 
-    if (toolCalls.length === 0) {
+    if (options.signal?.aborted || toolCalls.length === 0) {
       return {
         bot: runtime.store.requireBot(bot.id),
         finalText: result.text,
@@ -99,12 +108,23 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
     }
 
     for (const call of toolCalls) {
+      if (options.signal?.aborted) {
+        return {
+          bot: runtime.store.requireBot(bot.id),
+          finalText: lastText,
+          steps: step,
+          kickoffs: [],
+          skippedKickoffs: 0,
+        };
+      }
       const outcome = await executeTool(call.name, call.input, {
         store: runtime.store,
         bot: runtime.store.requireBot(bot.id),
         enqueueKickoff: (job) => runtime.enqueueKickoff(job),
         fetchImpl: options.fetchImpl,
         env: options.env ?? process.env,
+        browser: options.browser,
+        stage: options.stage,
       });
       runtime.store.append(bot.id, {
         type: "tool_result",
@@ -126,16 +146,9 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
     }
   }
 
-  const finalText = "这一轮的工具步骤已达上限，先停在这里。已经写进工作区的文件都还在。";
-  runtime.store.append(bot.id, {
-    type: "assistant_turn",
-    channel: "text",
-    text: finalText,
-    toolCalls: [],
-  });
   return {
     bot: runtime.store.requireBot(bot.id),
-    finalText,
+    finalText: lastText,
     steps: maxSteps,
     kickoffs: [],
     skippedKickoffs: 0,

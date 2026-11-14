@@ -122,7 +122,7 @@ test("projection keeps the full log but drops old turns and hides tool dumps fro
   assert.ok(projection.droppedTurns > 0);
   assert.equal(events.some((item) => JSON.stringify(item.event).includes("更早的")), false);
   assert.match(flat, /更早的/);
-  assert.equal(projection.system.includes("本项目资料库"), false);
+    assert.equal(projection.system.includes("这个任务的资料库"), false);
   assert.equal(flat.includes("FIRST-TOKEN-00"), false);
   assert.equal(flat.includes("LAST-TOKEN-99"), true);
   assert.match(flat, /工具执行被中断/);

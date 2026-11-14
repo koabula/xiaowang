@@ -146,19 +146,22 @@ export function toAnthropicTools(tools: ToolSchema[]): unknown[] {
 }
 
 async function completeOpenAI(config: ProviderConfig, request: CompletionRequest): Promise<CompletionResult> {
+  const body: Record<string, unknown> = {
+    model: config.model,
+    messages: toOpenAIMessages(request.system, request.messages),
+    max_tokens: request.tools.length === 0 ? 32 : 4096,
+  };
+  if (request.tools.length > 0) {
+    body.tools = toOpenAITools(request.tools);
+    body.tool_choice = "auto";
+  }
   const response = await fetch(openaiChatUrl(config.baseUrl), {
     method: "POST",
     headers: {
       authorization: `Bearer ${config.apiKey}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({
-      model: config.model,
-      messages: toOpenAIMessages(request.system, request.messages),
-      tools: toOpenAITools(request.tools),
-      tool_choice: "auto",
-      max_tokens: 4096,
-    }),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(120_000),
   });
   const raw = await response.text();
@@ -186,6 +189,13 @@ async function completeOpenAI(config: ProviderConfig, request: CompletionRequest
 }
 
 async function completeAnthropic(config: ProviderConfig, request: CompletionRequest): Promise<CompletionResult> {
+  const body: Record<string, unknown> = {
+    model: config.model,
+    system: request.system,
+    messages: toAnthropicMessages(request.messages),
+    max_tokens: request.tools.length === 0 ? 32 : 4096,
+  };
+  if (request.tools.length > 0) body.tools = toAnthropicTools(request.tools);
   const response = await fetch(anthropicMessagesUrl(config.baseUrl), {
     method: "POST",
     headers: {
@@ -193,13 +203,7 @@ async function completeAnthropic(config: ProviderConfig, request: CompletionRequ
       "anthropic-version": "2023-06-01",
       "content-type": "application/json",
     },
-    body: JSON.stringify({
-      model: config.model,
-      system: request.system,
-      messages: toAnthropicMessages(request.messages),
-      tools: toAnthropicTools(request.tools),
-      max_tokens: 4096,
-    }),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(120_000),
   });
   const raw = await response.text();
@@ -272,4 +276,28 @@ function isLocalBase(baseUrl: string): boolean {
 
 function trimSlash(url: string): string {
   return url.replace(/\/+$/, "");
+}
+
+export async function listModels(input: { baseUrl: string; apiKey: string; apiStyle?: string }): Promise<string[]> {
+  const style = inferStyle(input.apiStyle?.trim() || undefined, input.baseUrl, "");
+  const base = trimSlash(input.baseUrl || (style === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1"));
+  const url = style === "anthropic" ? (base.endsWith("/v1") ? `${base}/models` : `${base}/v1/models`) : `${base}/models`;
+  const headers: Record<string, string> =
+    style === "anthropic"
+      ? { "x-api-key": input.apiKey, "anthropic-version": "2023-06-01" }
+      : { authorization: `Bearer ${input.apiKey}` };
+  const response = await fetch(url, { headers, signal: AbortSignal.timeout(20_000) });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(formatHttpError(response.status, raw, input.apiKey));
+  const json = JSON.parse(raw) as { data?: Array<{ id?: string }> };
+  return [...new Set((json.data ?? []).map((item) => item.id).filter((id): id is string => Boolean(id)))];
+}
+
+export async function checkModel(config: ProviderConfig): Promise<string> {
+  const result = await createProvider(config).complete({
+    system: "连通性检查。",
+    messages: [{ role: "user", content: "只回复一个字：好" }],
+    tools: [],
+  });
+  return result.text.trim() || "已接通";
 }

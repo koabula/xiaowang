@@ -17,7 +17,7 @@ import {
   searchConfigFromEnv,
   webSearch,
 } from "../src/websearch.ts";
-import { executeTool } from "../src/tools.ts";
+import { toolSchemas } from "../src/tools.ts";
 import { Runtime } from "../src/runtime.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -116,16 +116,10 @@ test("web search stays unconfigured without a key and parses brave results", asy
   const home = mkdtempSync(path.join(tmpdir(), "xiaowang-search-"));
   const runtime = Runtime.open(home);
   try {
-    const tool = await executeTool(
-      "web_search",
-      { query: "openalex" },
-      { store: runtime.store, bot: runtime.activeBot(), enqueueKickoff() {}, env: {} },
-    );
-    assert.equal(tool.isError, true);
-    assert.match(tool.output, /XIAOWANG_SEARCH_KEY/);
-    const names = (await import("../src/tools.ts")).toolSchemas().map((item) => item.name);
+    const names = toolSchemas().map((item) => item.name);
     assert.equal(names.includes("search_literature"), true);
     assert.equal(names.includes("search_arxiv"), false);
+    assert.equal(names.includes("web_search"), false);
   } finally {
     runtime.close();
     rmSync(home, { recursive: true, force: true });

@@ -18,7 +18,7 @@ const HELP = `小王同学（无头内核）
   xiaowang                         在终端里和当前 Bot 对话
   xiaowang ask [--bot slug] 问题   问一句就退出
   xiaowang bots                    列出项目
-  xiaowang new <项目名> [--baseline 课题基线]
+  xiaowang new <任务名> [--baseline 任务说明]
   xiaowang add <文件> [--bot slug] 把 PDF 或文本放进资料库，并引用到当前项目
   xiaowang library [slug]          列出当前项目引用的原件
   xiaowang share <id或文件名> --to <slug> [--from slug]
@@ -37,9 +37,6 @@ const HELP = `小王同学（无头内核）
   XIAOWANG_BASE_URL    接口前缀。OpenAI 兼容接口会在后面接 /chat/completions
   XIAOWANG_API_KEY     密钥。只放在环境变量里，不会写入会话或工作区
   XIAOWANG_MODEL       模型名
-  XIAOWANG_SEARCH_KEY  Brave 搜索密钥。文献检索不需要它
-  XIAOWANG_SEARCH_URL  SearxNG 地址。设置后快捷搜索走这个实例
-  XIAOWANG_SEARCH_PROVIDER  brave 或 searxng。可以省略，由上面两项推断
 
 例子
   export XIAOWANG_BASE_URL=https://api.deepseek.com/v1
@@ -277,8 +274,8 @@ function expandUserPath(filePath: string): string {
 function createFromCli(runtime: Runtime, args: string[]): void {
   const { positionals, flags } = parseFlags(args);
   const name = positionals.join(" ").trim();
-  if (!name) throw new Error("用法：xiaowang new <项目名> [--baseline 课题基线]");
-  const baseline = typeof flags.baseline === "string" ? flags.baseline : "（尚未写入课题基线）";
+  if (!name) throw new Error("用法：xiaowang new <任务名> [--baseline 任务说明]");
+  const baseline = typeof flags.baseline === "string" ? flags.baseline : "（尚未写入任务说明）";
   const parent = runtime.activeBot();
   const bot = runtime.store.createBot({
     name,

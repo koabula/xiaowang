@@ -48,7 +48,7 @@ export function projectLlmContext(
   if (dropped > 0) {
     messages.push({
       role: "user",
-      content: `更早的 ${dropped} 段对话仍在会话记录里，这次没有放进上下文。需要细节时去工作区读笔记，或根据课题基线继续。`,
+      content: `更早的 ${dropped} 段对话仍在会话记录里，这次没有放进上下文。需要细节时去工作区读笔记，或根据任务说明继续。`,
     });
   }
   for (const unit of units) messages.push(...unit.messages);
@@ -88,8 +88,8 @@ export function projectVoiceBrief(
 
 export function formatVoiceBrief(brief: VoiceBrief): string {
   const lines = [
-    `项目：${brief.botName}（${brief.slug}）`,
-    `目标：${brief.goal || "还没有写下课题目标。"}`,
+    `任务：${brief.botName}（${brief.slug}）`,
+    `目标：${brief.goal || "还没有写下任务目标。"}`,
   ];
   if (brief.glossary.length > 0) {
     lines.push(
@@ -120,7 +120,7 @@ function buildSystem(bot: Bot, events: StoredEvent[], library?: CatalogItem[]): 
   const parts = [
     SHARED_PERSONA,
     "",
-    `当前项目：${bot.name}（${bot.slug}）`,
+    `当前任务：${bot.name}（${bot.slug}）`,
     `工作区根目录：${bot.workspaceDir}`,
     "文件工具只接受这个工作区内的相对路径，例如 notes/reading.md。不要使用 ..，也不要读写别的 Bot 的目录。",
   ];
@@ -129,22 +129,22 @@ function buildSystem(bot: Bot, events: StoredEvent[], library?: CatalogItem[]): 
     parts.push(
       "",
       shown.length > 0
-        ? `本项目资料库：\n${shown.map((line) => `- ${line}`).join("\n")}`
-        : "本项目资料库还没有引用。用户交给这个项目的 PDF 会出现在这里，用 read_document 阅读。",
+        ? `这个任务的资料库：\n${shown.map((line) => `- ${line}`).join("\n")}`
+        : "这个任务的资料库还没有引用。用户交给这个任务的 PDF 会出现在这里，用 read_document 阅读。",
     );
     if (library.length > shown.length) parts.push(`还有 ${library.length - shown.length} 份引用没有列在这里。需要时用 list_library。`);
   }
   const baselines = baselinesOf(events);
   const prompt = bot.systemPrompt.trim();
   if (prompt && !baselines.includes(prompt)) {
-    parts.push("", "项目要求：", prompt);
+    parts.push("", "任务要求：", prompt);
   }
   if (baselines.length > 0) {
-    parts.push("", "课题基线：");
+    parts.push("", "任务说明：");
     for (const baseline of baselines) parts.push(`- ${baseline}`);
   }
   if (bot.glossary.length > 0) {
-    parts.push("", "课题术语：");
+    parts.push("", "任务术语：");
     for (const term of bot.glossary) {
       parts.push(term.alias ? `- ${term.term}：${term.alias}` : `- ${term.term}`);
     }

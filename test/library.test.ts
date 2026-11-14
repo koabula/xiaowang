@@ -130,7 +130,7 @@ test("the model sees library names in its projection, and trimming is not writte
     assert.equal(JSON.stringify(events).includes("压缩"), false);
 
     const hidden = projectLlmContext(bot, events);
-    assert.equal(hidden.system.includes("本项目资料库"), false);
+    assert.equal(hidden.system.includes("这个任务的资料库"), false);
     const shown = projectLlmContext(bot, events, { library: runtime.store.listLibrary(bot.id) });
     assert.match(shown.system, /named\.pdf/);
   } finally {
