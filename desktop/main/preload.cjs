@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld("xiaowang", {
   callStop: () => ipcRenderer.invoke("call:stop"),
   previewVoice: (patch) => ipcRenderer.invoke("call:preview", patch),
   callAudio: (audio) => ipcRenderer.send("call:audio", audio),
+  callMute: (muted) => ipcRenderer.send("call:mute", muted),
   callIdle: (serial, callId) => ipcRenderer.send("call:idle", serial, callId),
   callPosition: (position) => ipcRenderer.send("call:position", position),
   callInterrupted: (receipt) => ipcRenderer.send("call:interrupted", receipt),

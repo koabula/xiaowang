@@ -32,6 +32,14 @@ Use the app's Settings panel for normal use. Environment overrides remain in mem
 
 Use `npm run preview` for a UI-only browser preview or `npm run xiaowang -- help` for the CLI. Desktop tests use synthetic microphone input and local mock services; they never need real model keys. Real-provider checks should additionally cover a short conversation, interruptions, tool use and reconnects.
 
+## Realtime provider checks
+
+Doubao Seeduplex uses its native ASR and TTS lifecycle. Audio deltas have no identifiers and are bound to the preceding `response.output_audio.started`; a cancel acknowledgement fences old audio before a new stream is admitted. `response.done` carries usage and must not be treated as OpenAI's generation-completion envelope. ASR completion uses `text`, and an ASR-start alone can be a recognizer reset rather than confirmed speech.
+
+The dedicated `test/doubao.test.ts` and `e2e/doubao-native.test.mjs` fixtures reproduce those native events without injecting `response.created`. Continuous walkthroughs use real `continue_speaking` function outputs after playback drains. Native completion notices use `speech_text_buffer.commit`; inserting a user message into context is not used to trigger a spoken notice. Muting also switches the provider to its explicit input-mute mode.
+
+For a real-service check, use an isolated workspace and fixed test speech. Verify actual renderer audio, recognition, tool execution and spoken continuation, not only captions or socket connectivity. Never log credentials or raw user audio. Playwright's default mock keychain cannot decrypt a user's real macOS settings; a real-account check must use normal app startup and a secure, isolated profile.
+
 ## Canvas integration
 
 Generated decks mark each page with `data-xw-slide` and the current page with `active`. Custom navigation can expose:

@@ -28,6 +28,8 @@ export type RealtimeNotice = (
   | { kind: "session.closed" }
   | { kind: "speech_started" }
   | { kind: "speech_stopped" }
+  | { kind: "asr_started" }
+  | { kind: "audio_started" }
   | { kind: "response_started" }
   | { kind: "input_committed" }
   | { kind: "audio_done" }
@@ -37,11 +39,11 @@ export type RealtimeNotice = (
   | { kind: "user_transcript"; text: string; partial: boolean }
   | { kind: "assistant_transcript"; text: string; partial: boolean }
   | { kind: "function_call"; callId: string; name: string; arguments: string }
-  | { kind: "error"; message: string; code?: string }) & { responseId?: string; itemId?: string; contentIndex?: number };
+  | { kind: "error"; message: string; code?: string }) & { responseId?: string; itemId?: string; questionId?: string; contentIndex?: number };
 
-export function realtimeEndpoint(input?: { url?: string; model?: string }): RealtimeEndpoint {
+export function realtimeEndpoint(input?: { url?: string; model?: string; family?: RealtimeFamily }): RealtimeEndpoint {
   const url = (input?.url?.trim() || QWEN_REALTIME_URL).replace(/\/$/, "");
-  const family = realtimeFamily(url);
+  const family = input?.family ?? realtimeFamily(url);
   const openai = family === "openai";
   if (family === "doubao") {
     return {
@@ -239,7 +241,7 @@ export function doubaoSession(options: { instructions: string; tools: ToolSchema
     type: "session.create",
     session: {
       model: DOUBAO_REALTIME_MODEL,
-      instructions: options.instructions,
+      instructions: `${options.instructions}\n豆包连续讲解约定：每讲完一段且仍需继续时，调用 continue_speaking；应用会等待实际播放结束后回传结果，再继续下一段。只有全部讲完才调用 manage_presentation complete。Native continuous walkthroughs must call continue_speaking between segments; wait for its tool result before the next segment.`,
       audio: {
         input: { format: { type: "pcm", rate: 16_000 } },
         output: { format: { type: "pcm_s16le", rate: 24_000 }, voice: options.voice || DOUBAO_VOICE },
@@ -422,7 +424,8 @@ export function parseRealtimeEvent(raw: string): RealtimeNotice[] {
   const type = typeof message.type === "string" ? message.type : "";
   const responseId = stringField(message, "response_id") || stringField(recordField(message, "response") ?? {}, "id");
   const itemId = stringField(message, "item_id");
-  const identity = { ...(responseId ? { responseId } : {}), ...(itemId ? { itemId } : {}), ...(typeof message.content_index === "number" ? { contentIndex: message.content_index } : {}) };
+  const questionId = stringField(message, "question_id");
+  const identity = { ...(responseId ? { responseId } : {}), ...(itemId ? { itemId } : {}), ...(questionId ? { questionId } : {}), ...(typeof message.content_index === "number" ? { contentIndex: message.content_index } : {}) };
   if (type === "session.created") return [{ kind: "session.created" }];
   if (type === "session.updated") return [{ kind: "session.updated" }];
   if (type === "session.closed") return [{ kind: "session.closed" }];
@@ -431,8 +434,10 @@ export function parseRealtimeEvent(raw: string): RealtimeNotice[] {
   }
   if (type === "input_audio_buffer.committed") return [{ kind: "input_committed", ...identity }];
   if (type === "input_audio_buffer.speech_stopped") return [{ kind: "speech_stopped", ...identity }];
+  if (type === "conversation.item.input_audio_transcription.started") return [{ kind: "asr_started", ...identity }];
+  if (type === "response.output_audio.started") return [{ kind: "audio_started", ...identity }];
   if (type === "conversation.item.input_audio_transcription.completed") {
-    const text = stringField(message, "transcript");
+    const text = stringField(message, "transcript") || stringField(message, "text");
     return text ? [{ kind: "user_transcript", text, partial: false, ...identity }] : [];
   }
   if (type === "conversation.item.input_audio_transcription.delta") {

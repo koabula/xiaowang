@@ -338,6 +338,7 @@ export function App() {
       if (!currentCall) return currentCall;
       const muted = !currentCall.muted;
       audioRef.current.setMuted(muted);
+      window.xiaowang.callMute(muted);
       return { ...currentCall, muted };
     });
   }

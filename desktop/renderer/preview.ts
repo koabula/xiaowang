@@ -112,6 +112,7 @@ export function installPreviewBridge(): void {
     onSettingsClose() { return () => {}; },
     callPosition() {},
     callInterrupted() {},
+    callMute() {},
     async callControl() {},
     onDelta() { return () => {}; },
     onJob() { return () => {}; },

@@ -45,6 +45,7 @@ declare global {
       callStop: () => Promise<void>;
       previewVoice: (patch: SettingsPatch) => Promise<void>;
       callAudio: (audio: string) => void;
+      callMute: (muted: boolean) => void;
       callIdle: (serial: number, callId?: string) => void;
       callPosition: (position: PlaybackPosition) => void;
       callInterrupted: (receipt: InterruptionReceipt) => void;

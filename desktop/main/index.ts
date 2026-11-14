@@ -454,6 +454,7 @@ function registerIpc(): void {
   ipcMain.on("call:position", (_event, position: PlaybackPosition) => live?.notePlayback(position));
   ipcMain.on("call:interrupted", (_event, receipt: InterruptionReceipt) => live?.noteInterrupted(receipt));
   ipcMain.handle("call:control", (_event, action: "pause" | "resume" | "complete") => { if (["pause", "resume", "complete"].includes(action)) live?.control(action); });
+  ipcMain.on("call:mute", (_event, muted: boolean) => live?.setMuted(muted === true));
   ipcMain.on("call:idle", (_event, serial: number, callId?: string) => {
     live?.noteSpeakerIdle(serial, callId);
   });
@@ -553,7 +554,7 @@ function startPreview(patch: SecretPatch): void {
   if (!choice.url) throw new Error("先填写通义千问的工作空间。");
   const key = patch.realtimeKey?.trim() || keyForService(choice.service, secrets.realtimeKey, secrets.apiKey, secrets.baseUrl);
   if (!key) throw new Error("先填写这一家的密钥。");
-  const endpoint = realtimeEndpoint({ url: choice.url, model: choice.model });
+  const endpoint = realtimeEndpoint({ url: choice.url, model: choice.model, family: choice.service });
   const session = endpoint.family === "doubao"
     ? doubaoSession({ instructions: "试听音色。", tools: [], voice: choice.voice })
     : sessionUpdate({
@@ -572,7 +573,7 @@ function startCall(slug: string): void {
   const key = keyForService(choice.service, secrets.realtimeKey, secrets.apiKey, secrets.baseUrl);
   if (!key) throw new Error("先在设置里填写这一家的密钥。");
   if (!choice.url) throw new Error("先填写通义千问的工作空间。");
-  const endpoint = realtimeEndpoint({ url: choice.url, model: choice.model });
+  const endpoint = realtimeEndpoint({ url: choice.url, model: choice.model, family: choice.service });
   const bot = runtime.store.requireBot(slug);
   const person = runtime.ensureSteward().name;
   const library = runtime.store.listLibrary(bot.id).map((ref) => ({ id: ref.id, filename: ref.filename }));

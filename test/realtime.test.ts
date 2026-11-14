@@ -204,7 +204,7 @@ test("preview and end_call wait for audible goodbye completion", async t => {
 
 test("doubao tool result stays correlated and does not commit an empty audio buffer", async t => {
   const f = fixture(t, async () => "找到两篇", DOUBAO_REALTIME_URL);
-  f.begin("d1"); f.emit({ type: "response.function_call_arguments.done", response_id: "d1", items: [{ type: "function_call", call_id: "dc1", name: "search_literature", arguments: "{}" }] }); f.done("d1");
+  f.emit({ type: "response.function_call_arguments.done", question_id: "native-question", items: [{ call_id: "dc1", name: "search_literature", arguments: "{}" }] });
   await delay(30);
   assert.equal(f.sent.find(event => event.items?.[0]?.role === "tool")?.items[0].call_id, "dc1");
   assert.equal(f.sent.some(event => event.type === "input_audio_buffer.commit"), false);

@@ -72,8 +72,11 @@ function filePath(): string {
 export function loadSecrets(): SecretRecord {
   try {
     const raw = readFileSync(filePath());
-    const json = safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(raw) : raw.toString("utf8");
-    const loaded = JSON.parse(json) as Record<string, unknown>;
+    let loaded: Record<string, unknown>;
+    // Older installs may have saved plaintext while OS encryption was unavailable.
+    // Becoming able to encrypt must not make those existing settings disappear.
+    try { loaded = JSON.parse(raw.toString("utf8")) as Record<string, unknown>; }
+    catch { loaded = JSON.parse(safeStorage.decryptString(raw)) as Record<string, unknown>; }
     return Object.fromEntries(Object.entries(EMPTY).map(([key, fallback]) => [key, typeof loaded[key] === "string" ? loaded[key] : fallback])) as unknown as SecretRecord;
   } catch {
     return { ...EMPTY };
