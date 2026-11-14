@@ -65,13 +65,16 @@ test("a session carries the spoken instructions and the same tool names", () => 
   assert.match(session.instructions, /你是「阿王」/);
   assert.match(session.instructions, /投机解码/);
   assert.match(session.instructions, /ask_text/);
+  assert.match(session.instructions, /continue_speaking/);
   assert.match(session.instructions, /end_call/);
   assert.equal(session.tools[0]?.name, "search_literature");
   const voiced = voiceTools([{ name: "search_literature", description: "检索", parameters: { type: "object" } }]);
-  assert.equal(voiced.at(-2)?.name, "ask_text");
+  assert.equal(voiced.at(-3)?.name, "ask_text");
+  assert.equal(voiced.at(-2)?.name, "continue_speaking");
   assert.equal(voiced.at(-1)?.name, "end_call");
   const english = realtimeInstructions("Wang", "Task: decoding", "en");
   assert.match(english, /ask_text/);
+  assert.match(english, /continue_speaking/);
   assert.match(english, /slides/);
 });
 
@@ -539,6 +542,49 @@ test("ask_text starts the written work without reading it aloud", async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(flipped, 2);
   const flipEvents = sent.slice(beforeFlip).join("\n");
-  assert.match(flipEvents, /已翻到这一页/);
+  assert.match(flipEvents, /右栏已打开 slides\.html，第 2 页/);
   assert.doesNotMatch(flipEvents, /结果好了/);
+  assert.doesNotMatch(flipEvents, /两三句/);
+});
+
+test("continue_speaking waits for playback then starts the next segment", async () => {
+  const sent: string[] = [];
+  const listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
+  const socket = {
+    send(data: string) {
+      sent.push(data);
+    },
+    close() {},
+    addEventListener(type: string, listener: (event: { data?: unknown }) => void) {
+      const list = listeners.get(type) ?? [];
+      list.push(listener);
+      listeners.set(type, list);
+    },
+  };
+  const call = new LiveCall("wss://example.test/realtime", "key", { type: "session.update" }, {
+    onPhase() {},
+    onAudio() {},
+    onInterrupt() {},
+    onLine() {},
+    onTranscript() {},
+    async runTool() {
+      return "";
+    },
+  }, () => socket);
+  call.start();
+  const message = listeners.get("message")?.[0];
+  assert.ok(message);
+  message({ data: JSON.stringify({ type: "session.created" }) });
+  message({ data: JSON.stringify({ type: "session.updated" }) });
+  message({ data: JSON.stringify({ type: "response.created" }) });
+  message({ data: JSON.stringify({ type: "response.audio.delta", delta: Buffer.from([0, 1]).toString("base64") }) });
+  const mark = sent.length;
+  message({ data: JSON.stringify({ type: "response.function_call_arguments.done", call_id: "go_on", name: "continue_speaking", arguments: "{}" }) });
+  message({ data: JSON.stringify({ type: "response.done", response: { output: [] } }) });
+  assert.doesNotMatch(sent.slice(mark).join("\n"), /接着往下讲/);
+  call.noteSpeakerIdle(1);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const follow = sent.slice(mark).join("\n");
+  assert.match(follow, /接着往下讲/);
+  assert.match(follow, /response\.create/);
 });

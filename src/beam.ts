@@ -22,46 +22,38 @@ export function beamPalette(name: string, slab: string): string[] {
   return colors;
 }
 
-export const APP_ICON_NAME = "xiaowang";
-export const APP_ICON_INK = "#18181B";
+export const APP_ICON_NAME = "xw-6udis";
+export const APP_ICON_INK = "#2B59C3";
 
-/** 按 macOS 程序坞规格导出透明底圆角方块，内放微侧墨滴小脸，边缘与其他应用图标齐平。 */
+/** 按 macOS 程序坞规格导出透明底圆角方块，使用指定 beam 几何与色彩。 */
 export function beamSvg(name: string, colors: string[], pixels = 1024): string {
   const face = beamFace(name, colors);
+  const scale = 824 / 36;
   const mouth = face.isMouthOpen
-    ? `<path d="M454 574C490 604 544 606 582 574" stroke="${face.faceColor}" stroke-width="34" fill="none" stroke-linecap="round"/>`
-    : `<path d="M438 560A92 70 0 0 0 602 560" fill="${face.faceColor}"/>`;
+    ? `<path d="M15 ${19 + face.mouthSpread}c2 1 4 1 6 0" stroke="${face.faceColor}" fill="none" stroke-linecap="round"/>`
+    : `<path d="M13,${19 + face.mouthSpread} a1,0.75 0 0,0 10,0" fill="${face.faceColor}"/>`;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${pixels}" height="${pixels}" viewBox="0 0 1024 1024" fill="none">
   <defs>
-    <linearGradient id="xw-paper" x1="512" y1="100" x2="512" y2="924" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#FFFFFF"/>
-      <stop offset="1" stop-color="#ECECEF"/>
-    </linearGradient>
-    <linearGradient id="xw-ink" x1="260" y1="180" x2="780" y2="860" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#27272C"/>
-      <stop offset="1" stop-color="${face.wrapperColor}"/>
-    </linearGradient>
-    <filter id="xw-drop" x="40" y="56" width="944" height="944" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="20" stdDeviation="22" flood-color="#0A0A0E" flood-opacity="0.24"/>
-      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0A0A0E" flood-opacity="0.12"/>
-    </filter>
     <clipPath id="xw-squircle">
       <rect x="100" y="100" width="824" height="824" rx="185"/>
     </clipPath>
+    <filter id="xw-drop" x="40" y="56" width="944" height="944" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#0A0A0E" flood-opacity="0.22"/>
+    </filter>
   </defs>
-  <g filter="url(#xw-drop)">
-    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#xw-paper)"/>
-  </g>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="${face.backgroundColor}" filter="url(#xw-drop)"/>
   <g clip-path="url(#xw-squircle)">
-    <rect x="100" y="100" width="824" height="824" fill="url(#xw-paper)"/>
-    <g transform="translate(36 44) rotate(-8 512 512)">
-      <rect x="146" y="148" width="760" height="760" rx="340" fill="url(#xw-ink)"/>
-    </g>
-    <g transform="translate(26 16) rotate(-5 512 512)">
-      <rect x="404" y="424" width="42" height="58" rx="21" fill="${face.faceColor}"/>
-      <rect x="590" y="424" width="42" height="58" rx="21" fill="${face.faceColor}"/>
-      ${mouth}
+    <g transform="translate(100 100) scale(${scale})">
+      <rect width="36" height="36" fill="${face.backgroundColor}"/>
+      <rect x="0" y="0" width="36" height="36"
+        transform="translate(${face.wrapperTranslateX} ${face.wrapperTranslateY}) rotate(${face.wrapperRotate} 18 18) scale(${face.wrapperScale})"
+        fill="${face.wrapperColor}" rx="${face.isCircle ? 36 : 6}"/>
+      <g transform="translate(${face.faceTranslateX} ${face.faceTranslateY}) rotate(${face.faceRotate} 18 18)">
+        ${mouth}
+        <rect x="${14 - face.eyeSpread}" y="14" width="1.5" height="2" rx="1" fill="${face.faceColor}"/>
+        <rect x="${20 + face.eyeSpread}" y="14" width="1.5" height="2" rx="1" fill="${face.faceColor}"/>
+      </g>
     </g>
   </g>
   <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" stroke="#141416" stroke-opacity="0.08" stroke-width="3"/>

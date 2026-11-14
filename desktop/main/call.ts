@@ -2,6 +2,7 @@ import {
   TOOL_ACCEPTED,
   askTextResult,
   audioAppend,
+  continueCue,
   functionOutput,
   foldTranscript,
   mergeUtterance,
@@ -15,6 +16,7 @@ import {
 } from "../../src/realtime.ts";
 
 const DOUBAO_CHUNK = 3_200;
+const CONTINUE_BREATH_MS = 350;
 
 export interface CallHandlers {
   onPhase: (phase: "connecting" | "live" | "closed", detail?: string) => void;
@@ -49,6 +51,8 @@ export class LiveCall {
   private sealUser = false;
   private ending = false;
   private endReady = false;
+  private wantContinue = false;
+  private continueTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly lines: Array<{ who: "user" | "assistant"; text: string }> = [];
   private begunAt = "";
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -125,6 +129,7 @@ export class LiveCall {
   noteSpeakerIdle(serial: number): void {
     if (serial === this.audioSerial) this.speakerBusy = false;
     this.tryHangup();
+    this.scheduleContinue();
   }
 
   transcript(): Array<{ who: "user" | "assistant"; text: string }> {
@@ -142,6 +147,7 @@ export class LiveCall {
     if (this.closed) return;
     if (this.family === "doubao" && this.open) this.send({ type: "session.close" });
     this.closed = true;
+    this.clearContinue();
     if (this.timer) clearTimeout(this.timer);
     this.socket?.close();
     this.socket = null;
@@ -166,6 +172,7 @@ export class LiveCall {
     if (notice.kind === "speech_started") {
       this.userTalking = true;
       this.sealUser = false;
+      this.clearContinue();
       if (this.ending && this.speaking) {
         this.ending = false;
         this.endReady = false;
@@ -224,6 +231,7 @@ export class LiveCall {
         return;
       }
       this.flush();
+      this.scheduleContinue();
       return;
     }
     if (notice.kind === "error") this.fail(notice.message);
@@ -234,9 +242,16 @@ export class LiveCall {
     this.answered.add(callId);
     if (name === "end_call") {
       this.ending = true;
+      this.clearContinue();
       if (!this.speaking) this.endReady = true;
       this.send(functionOutput(callId, "道别说完就挂断。", this.family));
       this.tryHangup();
+      return;
+    }
+    if (name === "continue_speaking") {
+      this.wantContinue = true;
+      this.send(functionOutput(callId, "好。当前段播完后继续。", this.family));
+      this.scheduleContinue();
       return;
     }
     if (name === "ask_text") {
@@ -254,12 +269,26 @@ export class LiveCall {
       });
       return;
     }
-    const silent = name === "show_stage";
-    this.send(functionOutput(callId, silent ? "已翻到这一页。接着用两三句口语讲这一页，不要提翻页动作。" : TOOL_ACCEPTED, this.family));
+    if (name === "show_stage") {
+      void this.handlers.runTool(name, args).then((output) => {
+        if (this.closed) return;
+        this.send(functionOutput(callId, output.trim() || "右栏已更新。", this.family));
+        if (this.family !== "doubao") this.send(responseCreate());
+        this.speaking = true;
+      }).catch((error: unknown) => {
+        if (this.closed) return;
+        const message = error instanceof Error ? error.message : String(error);
+        this.send(functionOutput(callId, message, this.family));
+        if (this.family !== "doubao") this.send(responseCreate());
+        this.speaking = true;
+      });
+      return;
+    }
+    this.send(functionOutput(callId, TOOL_ACCEPTED, this.family));
     if (this.family !== "doubao") this.send(responseCreate());
     this.speaking = true;
     void this.handlers.runTool(name, args).then((output) => {
-      if (this.closed || silent) return;
+      if (this.closed) return;
       this.briefs.push(output);
       this.flush();
     }).catch((error: unknown) => {
@@ -268,6 +297,27 @@ export class LiveCall {
       this.briefs.push(message);
       this.flush();
     });
+  }
+
+  private clearContinue(): void {
+    this.wantContinue = false;
+    if (this.continueTimer) clearTimeout(this.continueTimer);
+    this.continueTimer = null;
+  }
+
+  private scheduleContinue(): void {
+    if (!this.wantContinue || this.closed || this.ending || this.userTalking || this.speaking || this.speakerBusy) return;
+    if (this.continueTimer) clearTimeout(this.continueTimer);
+    this.continueTimer = setTimeout(() => this.fireContinue(), CONTINUE_BREATH_MS);
+  }
+
+  private fireContinue(): void {
+    this.continueTimer = null;
+    if (!this.wantContinue || this.closed || this.ending || this.userTalking || this.speaking || this.speakerBusy) return;
+    this.wantContinue = false;
+    this.speaking = true;
+    this.send(continueCue(this.family));
+    this.send(this.family === "doubao" ? { type: "input_audio_buffer.commit" } : responseCreate());
   }
 
   private remember(who: "user" | "assistant", text: string, partial: boolean): void {
@@ -354,6 +404,7 @@ export class LiveCall {
   private fail(message: string): void {
     if (this.closed) return;
     this.closed = true;
+    this.clearContinue();
     if (this.timer) clearTimeout(this.timer);
     this.socket?.close();
     this.socket = null;

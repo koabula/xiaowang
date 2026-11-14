@@ -79,6 +79,30 @@ export const END_CALL_TOOL: ToolSchema = {
   parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
 };
 
+export const CONTINUE_SPEAKING_TOOL: ToolSchema = {
+  name: "continue_speaking",
+  description: "当你说完当前这一小段后还需要不等用户回应、接着往下讲下一段时调用（如连续讲多页内容、逐段讲论文或分步阐述）。当前段播完后会自动接上下一段；全部讲完或该听用户说话时不要调用。",
+  parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
+};
+
+export function continueCue(family: RealtimeFamily = "openai"): Record<string, unknown> {
+  const prompt = "用户没有打断，接着往下讲下一段；如果后面还有下一段就继续调用 continue_speaking，全部讲完就自然收尾停下，不要提系统提示。";
+  if (family === "doubao") {
+    return {
+      type: "conversation.item.create",
+      items: [{ type: "message", role: "user", content: [{ type: "input_text", text: prompt }] }],
+    };
+  }
+  return {
+    type: "conversation.item.create",
+    item: {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: prompt }],
+    },
+  };
+}
+
 export function askTextTool(locale: Locale = "zh"): ToolSchema {
   if (locale === "en") {
     return {
@@ -117,10 +141,16 @@ export function askTextResult(kind: "started" | "busy" | "missing", locale: Loca
 
 export function voiceTools(tools: ToolSchema[], locale: Locale = "zh"): ToolSchema[] {
   const names = new Set(tools.map((tool) => tool.name));
+  const keepGoing = locale === "en"
+    ? {
+      ...CONTINUE_SPEAKING_TOOL,
+      description: "Call this when you have another segment to say right after the current one without waiting for the user (such as walking through multiple pages, sections, or steps). Playback of the current segment will automatically roll into the next turn. Do not call it once you are done or waiting for the user.",
+    }
+    : CONTINUE_SPEAKING_TOOL;
   const endCall = locale === "en"
     ? { ...END_CALL_TOOL, description: "End this call. Say a short goodbye first, then call this. Do not call it before the goodbye." }
     : END_CALL_TOOL;
-  return [...tools, ...[askTextTool(locale), endCall].filter((tool) => !names.has(tool.name))];
+  return [...tools, ...[askTextTool(locale), keepGoing, endCall].filter((tool) => !names.has(tool.name))];
 }
 
 export function realtimeInstructions(personName: string, brief: string, locale: Locale = "zh"): string {
@@ -128,8 +158,9 @@ export function realtimeInstructions(personName: string, brief: string, locale: 
     return [
       `You are "${personName}". This is a voice call. Speak in short sentences.`,
       "The user only hears your voice. When you look something up or read, say one short line first, then use the tool. Do not narrate the tool, and do not say you handed the work off.",
+      "When something spans multiple pages or segments and you should keep speaking without waiting for the user, call continue_speaking on each segment; stop calling it when you finish.",
       "When the user wants a new or edited canvas, ppt, slides, report, or written note, say one short line, then call ask_text and put their words in task. Do not write the long piece yourself.",
-      "When the user asks you to present or walk through an existing canvas/ppt/slides HTML file, read it with read_file if needed, then present one slide at a time: call show_stage(mode='canvas', path=..., page=N) as you move to each slide, speak 2-3 sentences for that slide, and flip to page N+1 before talking about the next one. Do not recite the whole deck on page 1.",
+      "When presenting an existing canvas/ppt/slides HTML file, read it with read_file if needed and call show_stage(mode='canvas', path=..., page=N) as you move to each slide.",
       "When the user wants to end the call, say a short goodbye, then call end_call. The call hangs up after the goodbye.",
       "Do not invent numbers that are not in the abstract or the text.",
       "",
@@ -139,8 +170,9 @@ export function realtimeInstructions(personName: string, brief: string, locale: 
   return [
     `你是「${personName}」。这是一次语音通话，用口语短句。`,
     "用户只听见你的声音。要查文献或读资料时，先接一句再调用工具。不要念工具过程，也不要说自己把事情转交了。",
+    "一件事需要分几段或几页连续讲完、不用等用户回应时，在每一段调用 continue_speaking，当前段播完会自动接下一段；全部讲完或该听用户说话时就不再调用。",
     "用户要新做或修改一份 canvas、ppt、slides、幻灯片、演示、汇报或写下来的笔记时，先接一句，再调用 ask_text，把原话放进 task。不要自己写长文。",
-    "用户让你讲一遍已有的 canvas/ppt/幻灯片时，先看已有文件（必要时 read_file），再一页一页边翻边讲：讲第 N 页前调用 show_stage(mode='canvas', path=..., page=N) 把右栏翻过去，每页只讲两三句核心结论，讲下一页时再调 page=N+1 翻页，不要停在第一页一口气背完。",
+    "讲已有的 canvas/ppt/幻灯片时，必要时先 read_file，每讲一页调用 show_stage(mode='canvas', path=..., page=N) 把右栏翻到对应页。",
     "用户要结束通话时，先说一句简短的再见，然后调用 end_call。道别说完就会挂断。",
     "摘要和正文里没有的数字不要编。",
     "",
