@@ -66,13 +66,16 @@ export function projectVoiceBrief(
   options?: { library?: CatalogItem[] },
 ): VoiceBrief {
   const turns: VoiceBrief["recentTurns"] = [];
+  const liveCallIds = new Set(events.filter(stored => stored.event.type === "voice_line").map(stored => stored.event.type === "voice_line" ? stored.event.callId : ""));
   for (const stored of events) {
     const event = stored.event;
     if (event.type === "user_text" && event.text.trim()) {
       turns.push({ role: "user", text: clip(event.text, 180) });
     } else if (event.type === "assistant_turn" && event.text.trim()) {
       turns.push({ role: "assistant", text: clip(event.text, 180) });
-    } else if (event.type === "call") {
+    } else if (event.type === "voice_line" && event.text.trim()) {
+      turns.push({ role: event.who === "user" ? "user" : "assistant", text: clip(event.text, 180) });
+    } else if (event.type === "call" && !("callId" in event && liveCallIds.has(String(event.callId)))) {
       for (const line of event.lines) {
         if (!line.text.trim()) continue;
         turns.push({ role: line.who === "user" ? "user" : "assistant", text: clip(line.text, 180) });
@@ -195,14 +198,20 @@ function baselinesOf(events: StoredEvent[]): string[] {
 
 function groupUnits(events: StoredEvent[]): Unit[] {
   const units: Unit[] = [];
+  const liveCallIds = new Set(events.filter(stored => stored.event.type === "voice_line").map(stored => stored.event.type === "voice_line" ? stored.event.callId : ""));
   for (let i = 0; i < events.length; i += 1) {
     const event = events[i]?.event;
     if (!event) continue;
+    if (event.type === "voice_line") {
+      units.push(toUnit([{ role: event.who === "user" ? "user" : "assistant", content: event.text }]));
+      continue;
+    }
     if (event.type === "user_text") {
       units.push(toUnit([{ role: "user", content: event.text }]));
       continue;
     }
     if (event.type === "call") {
+      if (event.callId && liveCallIds.has(event.callId)) continue;
       const body = event.lines
         .filter((line) => line.text.trim())
         .map((line) => `${line.who === "user" ? "用户" : "助手"}：${line.text.trim()}`)
@@ -228,26 +237,9 @@ function groupUnits(events: StoredEvent[]): Unit[] {
       },
     ];
     if (event.toolCalls.length > 0) {
-      const seen = new Set<string>();
-      while (i + 1 < events.length) {
-        const next = events[i + 1]?.event;
-        if (!next || next.type === "user_text" || next.type === "assistant_turn" || next.type === "call") break;
-        i += 1;
-        if (next.type !== "tool_result") continue;
-        seen.add(next.callId);
-        messages.push({
-          role: "tool",
-          toolCallId: next.callId,
-          content: capToolOutput(next.output),
-        });
-      }
       for (const call of event.toolCalls) {
-        if (seen.has(call.id)) continue;
-        messages.push({
-          role: "tool",
-          toolCallId: call.id,
-          content: "工具执行被中断，没有结果。请重新调用。",
-        });
+        const result = events.find(stored => stored.event.type === "tool_result" && stored.event.callId === call.id)?.event;
+        messages.push({ role: "tool", toolCallId: call.id, content: result?.type === "tool_result" ? capToolOutput(result.output) : "工具执行被中断，没有结果。请重新调用。" });
       }
     }
     units.push(toUnit(messages));

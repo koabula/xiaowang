@@ -1,0 +1,191 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { createServer } from "node:http";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { _electron as electron, chromium } from "playwright";
+import { WebSocketServer } from "ws";
+import { Runtime } from "../src/runtime.ts";
+import { spawn } from "node:child_process";
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function until(predicate, timeout = 12000) {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) { const value = await predicate(); if (value) return value; await sleep(50); }
+  throw new Error("Expected desktop condition did not become true.");
+}
+function tone(ms = 180) {
+  const pcm = Buffer.alloc(Math.floor(24000 * ms / 1000) * 2);
+  for (let i = 0; i < pcm.length / 2; i++) pcm.writeInt16LE(Math.round(Math.sin(2 * Math.PI * 440 * i / 24000) * 7000), i * 2);
+  return pcm.toString("base64");
+}
+
+async function launchPackaged(executablePath, args, env) {
+  // Packaged executables do not install Playwright's development-only Electron hook.
+  // Attach to their real renderer over CDP and exercise the same public IPC surface.
+  const child = spawn(executablePath, ["--remote-debugging-port=0", "--use-mock-keychain", ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+  let log = "";
+  const endpoint = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`Packaged app did not expose its renderer: ${log}`)); }, 15000);
+    child.once("exit", code => { clearTimeout(timeout); reject(new Error(`Packaged app exited (${code}): ${log}`)); });
+    child.stderr.on("data", chunk => {
+      log += chunk.toString();
+      const match = log.match(/DevTools listening on (ws:\/\/[^\s]+)/);
+      if (match) { clearTimeout(timeout); resolve(match[1]); }
+    });
+  });
+  const browser = await chromium.connectOverCDP(endpoint, { timeout: 15000 });
+  return {
+    process: () => child,
+    firstWindow: () => until(() => browser.contexts().flatMap(context => context.pages()).find(page => page.url().includes("/renderer/index.html")), 15000),
+    async close() { await browser.close().catch(() => {}); child.kill("SIGTERM"); },
+  };
+}
+
+function tinyPdf(sentence) {
+  const content = `BT /F1 18 Tf 72 720 Td (${sentence}) Tj ET`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let pdf = "%PDF-1.4\n"; const offsets = [0];
+  objects.forEach((object, i) => { offsets.push(Buffer.byteLength(pdf)); pdf += `${i+1} 0 obj\n${object}\nendobj\n`; });
+  const xref = Buffer.byteLength(pdf); pdf += "xref\n0 6\n0000000000 65535 f \n";
+  offsets.slice(1).forEach(offset => { pdf += `${String(offset).padStart(10, "0")} 00000 n \n`; });
+  return Buffer.from(pdf + `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+}
+
+test("desktop: microphone, automatic slide walkthrough, actual playback, tasks and saved state", { timeout: 60000 }, async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "xw-desktop-"));
+  const home = path.join(root, "home"); const userData = path.join(root, "profile");
+  await mkdir(userData, { recursive: true });
+  const seed = Runtime.open(home);
+  const reference = seed.store.addLibraryBytes(seed.activeBot().id, "paper.pdf", tinyPdf("EVIDENCE-SENTENCE-42")).ref;
+  seed.close();
+  const model = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    const input = JSON.parse(body);
+    assert.equal(input.stream, true);
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    const readPdf = input.messages.some(message => typeof message.content === "string" && message.content.includes("阅读PDF"));
+    const evidence = input.messages.findLast(message => message.role === "tool" && typeof message.content === "string" && message.content.includes("EVIDENCE-SENTENCE-42"));
+    if (readPdf && !evidence) {
+      response.end(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "read_pdf", function: { name: "read_document", arguments: JSON.stringify({ file: reference.id }) } }] }, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`); return;
+    }
+    if (readPdf) {
+      response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: `原文：EVIDENCE-SENTENCE-42。[来源，第1页](xwref://${reference.id}?page=1)` }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`); return;
+    }
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "已核对资料" } }] })}\n\n`);
+    await sleep(120);
+    response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "，结果已经保存。" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`);
+  });
+  await new Promise(resolve => model.listen(0, "127.0.0.1", resolve));
+  const modelUrl = `http://127.0.0.1:${model.address().port}/v1`;
+  const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+  await new Promise(resolve => server.once("listening", resolve));
+  const realtimeUrl = `ws://127.0.0.1:${server.address().port}/realtime`;
+  let connection; let requests = 0; let microphonePackets = 0; const outputs = []; let latestInstructions = "";
+  server.on("connection", (socket, request) => {
+    connection = socket; assert.equal(request.headers.authorization, "Bearer test-realtime-key");
+    const emit = value => socket.send(JSON.stringify(value));
+    emit({ type: "session.created" });
+    socket.on("message", raw => {
+      const event = JSON.parse(raw.toString());
+      if (event.type === "input_audio_buffer.append") { microphonePackets++; return; }
+      if (event.type === "session.update") { latestInstructions = event.session.instructions; emit({ type: "session.updated" }); return; }
+      if (event.item?.type === "function_call_output") outputs.push(event.item);
+      if (event.type !== "response.create") return;
+      requests++;
+      const id = `r${requests}`;
+      emit({ type: "response.created", response: { id } });
+      const tool = (name, args) => emit({ type: "response.function_call_arguments.done", response_id: id, call_id: `c${requests}`, name, arguments: JSON.stringify(args) });
+      const speak = text => { emit({ type: "response.output_audio_transcript.done", response_id: id, transcript: text }); emit({ type: "response.output_audio.delta", response_id: id, item_id: `item${requests}`, content_index: 0, delta: tone() }); };
+      if (requests === 1) tool("show_stage", { mode: "canvas", path: "deck.html", page: 1 });
+      else if (requests === 2) speak("第一页：我们先明确研究问题。");
+      else if (requests === 3) tool("show_stage", { mode: "canvas", path: "deck.html", page: 2 });
+      else if (requests === 4) { speak("第二页：讨论结果和局限。这份材料已经讲完。"); tool("manage_presentation", { action: "complete" }); }
+      else if (requests === 5) tool("delegate_task", { task: "核对语音任务", notify: "when_idle" });
+      else if (requests === 6) speak("好，任务已经排队。完成后告诉你。");
+      else if (latestInstructions.includes("后台任务状态数据")) speak("核对任务完成了，结果在任务记录里。");
+      emit({ type: "response.done", response: { id, status: "completed", output: [] } });
+    });
+  });
+  let app; let stage = "launch"; const processErrors = [];
+  function reached(value) { stage = value; if (process.env.XIAOWANG_E2E_DEBUG) console.log(`Desktop check: ${value}`); }
+  t.after(async () => {
+    if (stage !== "complete") console.log(`Last desktop step: ${stage}\n${processErrors.join("").slice(-6000)}`);
+    if (app) await Promise.race([app.close().catch(() => {}), sleep(3000).then(() => { if (app.process().exitCode === null) app.process().kill("SIGKILL"); })]);
+    for (const socket of server.clients) socket.terminate();
+    await new Promise(resolve => server.close(resolve));
+    await new Promise(resolve => model.close(resolve));
+    await rm(root, { recursive: true, force: true });
+  });
+  const env = { ...process.env, XIAOWANG_HOME: home, XIAOWANG_USER_DATA: userData, XIAOWANG_REALTIME_URL: realtimeUrl,
+    XIAOWANG_MODEL: "fixture", XIAOWANG_BASE_URL: modelUrl, XIAOWANG_API_KEY: "local-test-key", XIAOWANG_REALTIME_SERVICE: "openai", XIAOWANG_REALTIME_MODEL: "gpt-realtime-2.1", XIAOWANG_REALTIME_KEY: "test-realtime-key" };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const args = ["--no-sandbox", "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--autoplay-policy=no-user-gesture-required"];
+  if (!process.env.XIAOWANG_E2E_EXECUTABLE) args.push("desktop/dist/main.js");
+  app = process.env.XIAOWANG_E2E_EXECUTABLE ? await launchPackaged(process.env.XIAOWANG_E2E_EXECUTABLE, args, env) : await electron.launch({ args, env, timeout: 15000 });
+  app.process().stderr?.on("data", data => processErrors.push(data.toString()));
+  const page = await app.firstWindow({ timeout: 15000 }); const errors = []; reached("window");
+  page.on("pageerror", error => errors.push(error.message));
+  await page.waitForFunction(() => Boolean(window.xiaowang));
+  reached("preload");
+  await page.waitForSelector(".composer");
+  await mkdir(path.join(home, "bots", "xiaowang", "workspace"), { recursive: true });
+  await writeFile(path.join(home, "bots", "xiaowang", "workspace", "deck.html"), '<!doctype html><meta charset="utf-8"><title>测试材料</title><style>body{margin:0;font:24px sans-serif}.slide{padding:40px;min-height:400px}</style><section class="slide">研究问题</section><section class="slide" style="display:none">讨论与局限</section>');
+  await page.evaluate(() => window.xiaowang.callStart("xiaowang"));
+  await page.waitForSelector(".voice-panel"); reached("microphone setup"); await until(() => microphonePackets > 0); reached("microphone packets");
+  connection.send(JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+  connection.send(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "带我把整份材料逐页讲完" }));
+  connection.send(JSON.stringify({ type: "input_audio_buffer.speech_stopped" }));
+  connection.send(JSON.stringify({ type: "input_audio_buffer.committed" }));
+  await until(() => requests >= 4); reached("walkthrough");
+  await until(async () => (await page.locator(".voice-progress").textContent())?.includes("已讲完"));
+  assert.equal(outputs.filter(output => output.call_id === "c1").length, 1);
+  assert.match(outputs.find(output => output.call_id === "c1").output, /第 1 页，共 2 页/);
+  assert.match(outputs.find(output => output.call_id === "c3").output, /第 2 页，共 2 页/);
+  const frame = page.frameLocator(".canvas-frame"); assert.equal(await frame.locator(".slide.active").textContent(), "讨论与局限");
+  await sleep(700); assert.equal(requests, 4, "Completed presentations do not loop forever.");
+  await page.getByRole("button", { name: "静音", exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "取消静音", exact: true }).getAttribute("aria-pressed"), "true");
+  const composer = page.locator(".composer textarea");
+  await composer.fill("核对这份资料");
+  await composer.dispatchEvent("keydown", { key: "Enter", code: "Enter", isComposing: true });
+  assert.equal((await page.evaluate(() => window.xiaowang.getState())).jobs.length, 0, "Confirming an IME candidate must not send a message.");
+  await composer.press("Enter");
+  await composer.fill("再核对一遍"); await composer.press("Enter");
+  await until(async () => (await page.evaluate(() => window.xiaowang.getState())).jobs.filter(job => job.status === "succeeded").length === 2);
+  const state = await page.evaluate(() => window.xiaowang.getState());
+  reached("queued text jobs");
+  assert.equal(state.jobs.length, 2); assert.ok(state.jobs.every(job => job.result === "已核对资料，结果已经保存。"));
+  connection.send(JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+  connection.send(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "帮我核对一下资料，完成后告诉我" }));
+  connection.send(JSON.stringify({ type: "input_audio_buffer.speech_stopped" }));
+  connection.send(JSON.stringify({ type: "input_audio_buffer.committed" }));
+  await until(() => requests >= 7); reached("voice job notification");
+  assert.ok(outputs.some(output => output.call_id === "c5" && JSON.parse(output.output).id));
+  await until(async () => (await page.locator(".voice-caption").textContent()).includes("核对任务完成了"));
+  reached("PDF extraction"); await page.evaluate(() => window.xiaowang.ask("xiaowang", "阅读PDF并引用来源")); reached("PDF source link");
+  await page.locator(`.bubble a[href^="xwref://"]`).last().click();
+  await page.waitForFunction(() => document.querySelector(".pdf-scroll canvas")?.width > 0);
+  await until(async () => await page.locator(".reader-loading").count() === 0);
+  assert.equal(await page.locator(".reader-error").count(), 0);
+  await page.setViewportSize({ width: 900, height: 800 });
+  await page.screenshot({ path: path.join(root, "workspace.png") });
+  if (process.env.XIAOWANG_SCREENSHOT_DIR) {
+    await mkdir(process.env.XIAOWANG_SCREENSHOT_DIR, { recursive: true });
+    await page.screenshot({ path: path.join(process.env.XIAOWANG_SCREENSHOT_DIR, "workspace.png") });
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.screenshot({ path: path.join(process.env.XIAOWANG_SCREENSHOT_DIR, "workspace-dark.png") });
+  }
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.getByRole("button", { name: "挂断", exact: true }).click();
+  await page.waitForSelector(".voice-panel", { state: "detached" });
+  assert.ok((await page.evaluate(() => window.xiaowang.events("xiaowang"))).some(item => item.kind === "call"));
+  assert.deepEqual(errors, []); reached("complete");
+  console.log(`Verified real desktop flow: ${microphonePackets} microphone packets, ${requests} voice responses, queued jobs, voice completion notification, and a PDF source link.`);
+});

@@ -1,4 +1,5 @@
 import { searchArxiv } from "./arxiv.ts";
+import { requestSignal } from "./stream.ts";
 
 export type LiteratureSource = "openalex" | "arxiv" | "crossref" | "pubmed";
 
@@ -24,10 +25,11 @@ export function parseLiteratureSource(value: string | undefined): LiteratureSour
 export async function searchLiterature(
   query: string,
   source: LiteratureSource,
-  options?: { maxResults?: number; fetchImpl?: typeof fetch },
+  options?: { maxResults?: number; fetchImpl?: typeof fetch; signal?: AbortSignal },
 ): Promise<string> {
   const max = Math.min(8, Math.max(1, options?.maxResults ?? 5));
-  const fetchImpl = options?.fetchImpl ?? fetch;
+  const baseFetch = options?.fetchImpl ?? fetch;
+  const fetchImpl: typeof fetch = (url, init) => baseFetch(url, { ...init, signal: requestSignal(options?.signal, 20_000) });
   if (source === "arxiv") {
     return searchArxiv(query, { maxResults: max, fetchImpl });
   }
@@ -36,6 +38,7 @@ export async function searchLiterature(
     if (source === "crossref") return formatLiteratureHits(source, query, await searchCrossref(query, max, fetchImpl));
     return formatLiteratureHits(source, query, await searchPubmed(query, max, fetchImpl));
   } catch (error) {
+    options?.signal?.throwIfAborted();
     const message = error instanceof Error ? error.message : String(error);
     return `${source} 检索失败：${message}。可以换关键词、改用来源，或稍后重试。不要编造没有检索到的论文。`;
   }

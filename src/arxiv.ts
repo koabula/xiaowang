@@ -1,3 +1,5 @@
+import { requestSignal } from "./stream.ts";
+
 export interface ArxivPaper {
   title: string;
   authors: string[];
@@ -64,7 +66,7 @@ export function formatArxivPapers(query: string, papers: ArxivPaper[]): string {
 
 export async function searchArxiv(
   query: string,
-  options?: { maxResults?: number; fetchImpl?: typeof fetch },
+  options?: { maxResults?: number; fetchImpl?: typeof fetch; signal?: AbortSignal },
 ): Promise<string> {
   const max = Math.min(8, Math.max(1, options?.maxResults ?? 5));
   const searchQuery = normalizeArxivQuery(query);
@@ -78,7 +80,7 @@ export async function searchArxiv(
   const fetchImpl = options?.fetchImpl ?? fetch;
   const response = await fetchImpl(`https://export.arxiv.org/api/query?${params}`, {
     headers: { "user-agent": "XiaoWang/0.1 (research assistant; mailto:local)" },
-    signal: AbortSignal.timeout(20_000),
+    signal: requestSignal(options?.signal, 20_000),
   });
   const xml = await response.text();
   if (!response.ok) {

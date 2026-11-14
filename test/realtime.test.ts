@@ -1,610 +1,238 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { LiveCall } from "../desktop/main/call.ts";
+import { LiveCall, type VoiceState } from "../desktop/main/call.ts";
 import { keyForService, realtimeKeyPage, resolveRealtime, voicesFor } from "../src/realtime-catalog.ts";
-import {
-  DOUBAO_REALTIME_MODEL,
-  PREVIEW_LINE,
-  previewCue,
-  DOUBAO_REALTIME_URL,
-  DOUBAO_VOICE,
-  QWEN_REALTIME_MODEL,
-  QWEN_REALTIME_URL,
-  TOOL_ACCEPTED,
-  askTextResult,
-  doubaoSession,
-  foldTranscript,
-  mergeUtterance,
-  voiceTools,
-  functionOutput,
-  parseRealtimeEvent,
-  pcm16FromFloat,
-  realtimeEndpoint,
-  realtimeInstructions,
-  sessionUpdate,
-  socketUrl,
-  spokenResult,
-} from "../src/realtime.ts";
+import { DOUBAO_REALTIME_URL, DOUBAO_REALTIME_MODEL, PREVIEW_LINE, QWEN_REALTIME_MODEL, QWEN_REALTIME_URL, doubaoSession, foldTranscript, functionOutput, mergeUtterance, parseRealtimeEvent, pcm16FromFloat, realtimeEndpoint, realtimeInstructions, sessionUpdate, socketUrl, voiceTools } from "../src/realtime.ts";
 
-test("Qwen is the default realtime endpoint and OpenAI keeps its own audio rate", () => {
+const delay = (ms = 15) => new Promise(resolve => setTimeout(resolve, ms));
+function fixture(t: { after(fn: () => void): void }, runTool: (name: string, args: string) => Promise<string> = async () => "实际结果", url = "wss://api.openai.com/v1/realtime", preview = "") {
+  const sent: Record<string, any>[] = [];
+  const listeners = new Map<string, (event: { data?: unknown }) => void>();
+  const states: VoiceState[] = [];
+  let interruptions = 0;
+  const socket = { send: (data: string) => sent.push(JSON.parse(data)), close() {}, addEventListener: (type: string, fn: (event: { data?: unknown }) => void) => { listeners.set(type, fn); } };
+  const isDoubao = url === DOUBAO_REALTIME_URL;
+  const call = new LiveCall(url, "test-key", isDoubao ? doubaoSession({ instructions: "小王", tools: [] }) : { type: "session.update", session: { instructions: "小王" } }, {
+    onPhase() {}, onAudio() {}, onInterrupt() { interruptions++; }, onLine() {}, onTranscript() {}, onState(state) { states.push(state); }, runTool,
+  }, () => socket, preview);
+  t.after(() => call.hangup());
+  call.start(); listeners.get("open")?.({});
+  const emit = (data: unknown) => listeners.get("message")?.({ data: JSON.stringify(data) });
+  emit({ type: "session.created" }); if (!isDoubao) emit({ type: "session.updated" });
+  const begin = (id: string) => emit({ type: "response.created", response: { id } });
+  const done = (id: string, status = "completed") => emit({ type: "response.done", response: { id, status, output: [] } });
+  const tool = (id: string, callId: string, name: string, args = "{}") => emit({ type: "response.function_call_arguments.done", response_id: id, call_id: callId, name, arguments: args });
+  const audio = (id: string, itemId = `item_${id}`) => emit({ type: "response.output_audio.delta", response_id: id, item_id: itemId, content_index: 0, delta: Buffer.alloc(480).toString("base64") });
+  const creates = () => sent.filter(event => event.type === "response.create");
+  return { call, sent, states, emit, begin, done, tool, audio, creates, interruptions: () => interruptions };
+}
+
+test("provider-specific session configuration and audio rates", () => {
   const qwen = realtimeEndpoint();
-  assert.equal(qwen.url, QWEN_REALTIME_URL);
-  assert.equal(qwen.model, QWEN_REALTIME_MODEL);
-  assert.equal(qwen.inputRate, 16_000);
-  assert.equal(qwen.outputRate, 24_000);
-  assert.equal(qwen.audioFormat, "pcm");
-  assert.equal(socketUrl(qwen), `${QWEN_REALTIME_URL}?model=${QWEN_REALTIME_MODEL}`);
+  assert.equal(qwen.family, "qwen"); assert.equal(qwen.url, QWEN_REALTIME_URL); assert.equal(qwen.model, QWEN_REALTIME_MODEL);
+  assert.equal(qwen.inputRate, 16_000); assert.equal(qwen.outputRate, 24_000); assert.equal(qwen.transcriptionModel, "qwen3-asr-flash-realtime");
+  assert.match(socketUrl(qwen), /model=qwen3.5/);
+  const tools = [{ name: "read_file", description: "read", parameters: { type: "object" } }];
+  const q = sessionUpdate({ instructions: "小王", tools, audioFormat: "pcm", transcriptionModel: qwen.transcriptionModel }).session as any;
+  assert.equal(q.tools[0].function.name, "read_file"); assert.equal(q.audio.input.format.sample_rate, 16000);
+  const o = sessionUpdate({ instructions: "小王", tools, audioFormat: "pcm16", transcriptionModel: "gpt-4o-mini-transcribe" }).session as any;
+  assert.equal(o.type, "realtime"); assert.deepEqual(o.output_modalities, ["audio"]); assert.equal(o.tools[0].name, "read_file");
+  assert.equal(o.audio.input.turn_detection.create_response, false); assert.equal(o.audio.input.turn_detection.interrupt_response, false);
+  assert.equal(realtimeEndpoint({ url: "wss://api.openai.com/v1/realtime" }).inputRate, 24000);
+  const d = doubaoSession({ instructions: "小王", tools }).session as any;
+  assert.equal(d.model, DOUBAO_REALTIME_MODEL); assert.equal(d.audio.output.format.rate, 24000);
+});
 
-  const openai = realtimeEndpoint({ url: "wss://api.openai.com/v1/realtime", model: "gpt-realtime" });
-  assert.equal(openai.inputRate, 24_000);
-  assert.equal(openai.audioFormat, "pcm16");
-  assert.match(socketUrl(openai), /model=gpt-realtime/);
+test("voice tools expose durable delegation and presentation controls in both languages", () => {
+  for (const locale of ["zh", "en"] as const) {
+    const instructions = realtimeInstructions("王", "任务：research", locale);
+    assert.match(instructions, /delegate_task/); assert.match(instructions, /manage_presentation/);
+    const tools = voiceTools([], locale).map(tool => tool.name);
+    for (const name of ["delegate_task", "get_task", "manage_presentation", "continue_speaking", "end_call", "ask_text"]) assert.ok(tools.includes(name));
+  }
+});
 
-  const preset = realtimeEndpoint({
-    url: "wss://space.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime?model=qwen3.8-omni-flash-realtime",
-    model: "ignored",
+test("event identity, response status and real audio completion stay distinct", () => {
+  assert.deepEqual(parseRealtimeEvent("not-json"), []);
+  assert.deepEqual(parseRealtimeEvent('{"type":"session.updated"}'), [{ kind: "session.updated" }]);
+  const audio = parseRealtimeEvent(JSON.stringify({ type: "response.output_audio.delta", response_id: "r1", item_id: "i1", content_index: 0, delta: "AAE=" }))[0];
+  assert.equal(audio?.responseId, "r1"); assert.equal(audio?.itemId, "i1");
+  assert.equal(parseRealtimeEvent('{"type":"response.output_audio.done"}')[0]?.kind, "audio_done");
+  const failed = parseRealtimeEvent(JSON.stringify({ type: "response.done", response: { id: "r2", status: "failed", status_details: { error: { message: "capacity" } } } }))[0];
+  assert.equal(failed?.kind, "response_done"); if (failed?.kind === "response_done") { assert.equal(failed.status, "failed"); assert.equal(failed.error, "capacity"); }
+  const result = parseRealtimeEvent(JSON.stringify({ type: "response.done", response: { id: "r3", status: "completed", output: [{ type: "function_call", call_id: "c1", name: "read_file", arguments: "{}" }] } }));
+  assert.equal(result[0]?.kind, "function_call"); assert.equal(result.at(-1)?.kind, "response_done");
+  const transcript = parseRealtimeEvent('{"type":"conversation.item.input_audio_transcription.completed","transcript":"你好"}');
+  assert.equal(transcript.length, 1); assert.equal(transcript[0]?.kind, "user_transcript");
+});
+
+test("tools return actual results under their own call IDs and a batch starts one response", async t => {
+  const f = fixture(t, async name => `result:${name}`);
+  f.begin("r1"); f.tool("r1", "a", "read_file"); f.tool("r1", "b", "list_library");
+  await delay(); assert.equal(f.creates().length, 0);
+  f.done("r1"); await delay(30);
+  assert.equal(f.creates().length, 1);
+  const outputs = f.sent.filter(event => event.item?.type === "function_call_output");
+  assert.deepEqual(outputs.map(event => [event.item.call_id, event.item.output]), [["a", "result:read_file"], ["b", "result:list_library"]]);
+  assert.equal(f.sent.some(event => event.item?.role === "user"), false);
+  f.tool("r1", "a", "read_file"); await delay(); assert.equal(f.creates().length, 1);
+});
+
+test("a persistent walkthrough continues without continue_speaking and waits for actual playback", async t => {
+  const f = fixture(t);
+  f.emit({ type: "conversation.item.input_audio_transcription.completed", transcript: "带我把整份材料逐页讲完" });
+  f.call.locate("deck.html", 1, 3);
+  f.begin("r1"); f.audio("r1"); f.done("r1");
+  await delay(400); assert.equal(f.creates().length, 0);
+  f.call.noteSpeakerIdle(1); await delay(400); assert.equal(f.creates().length, 1);
+  assert.equal(f.call.presentation.snapshot().status, "active");
+  assert.match(JSON.stringify(f.sent), /deck.html/);
+});
+
+test("acknowledgments and questions preserve a walkthrough; explicit pause and stop do not resume", async t => {
+  const f = fixture(t);
+  f.call.presentation.start("讲完"); f.call.locate("deck.html", 2, 5);
+  f.begin("r1"); f.audio("r1");
+  f.call.notePlayback({ serial: 1, itemId: "item_r1", contentIndex: 0, playedMs: 100 });
+  f.emit({ type: "input_audio_buffer.speech_started" });
+  assert.equal(f.interruptions(), 1);
+  assert.equal(f.sent.find(event => event.type === "conversation.item.truncate")?.audio_end_ms, 100);
+  f.emit({ type: "input_audio_buffer.speech_stopped" }); f.emit({ type: "input_audio_buffer.committed" });
+  f.emit({ type: "conversation.item.input_audio_transcription.completed", transcript: "OK" });
+  f.done("r1", "cancelled"); await delay(30);
+  assert.equal(f.creates().length, 1);
+  f.begin("r2"); f.audio("r2"); f.done("r2"); f.call.noteSpeakerIdle(2);
+  await delay(400); assert.equal(f.creates().length, 2);
+  assert.equal(f.call.presentation.snapshot().page, 2);
+  f.begin("r3"); f.audio("r3"); f.done("r3"); f.call.noteSpeakerIdle(3);
+  f.emit({ type: "conversation.item.input_audio_transcription.completed", transcript: "先停一下" });
+  await delay(400); assert.equal(f.creates().length, 2); assert.equal(f.call.presentation.snapshot().status, "paused");
+  f.emit({ type: "conversation.item.input_audio_transcription.completed", transcript: "不用讲了" });
+  assert.equal(f.call.presentation.snapshot().status, "completed");
+});
+
+test("late audio, tool calls and completion from an interrupted response cannot corrupt the next response", async t => {
+  let tools = 0;
+  const f = fixture(t, async () => { tools++; return "ok"; });
+  f.begin("old"); f.audio("old"); f.emit({ type: "input_audio_buffer.speech_started" }); f.done("old", "cancelled");
+  f.emit({ type: "input_audio_buffer.speech_stopped" }); f.emit({ type: "input_audio_buffer.committed" }); await delay();
+  f.begin("new"); const before = f.states.length;
+  f.audio("old"); f.tool("old", "late", "write_file"); f.done("old");
+  assert.equal(tools, 0); assert.equal(f.states.length, before);
+  f.audio("new"); assert.equal(f.states.at(-1)?.phase, "speaking");
+});
+
+test("queued job results wait until the user and speaker are idle, and notify only once", async t => {
+  const f = fixture(t);
+  f.emit({ type: "input_audio_buffer.speech_started" }); f.call.notify("job1", "资料整理好了");
+  await delay(400); assert.equal(f.creates().length, 0);
+  f.emit({ type: "input_audio_buffer.speech_stopped" }); f.emit({ type: "input_audio_buffer.committed" }); await delay();
+  f.begin("r1"); f.audio("r1"); f.done("r1");
+  await delay(400); assert.equal(f.creates().length, 1);
+  f.call.noteSpeakerIdle(1); await delay(400); assert.equal(f.creates().length, 2);
+  assert.match(JSON.stringify(f.sent), /资料整理好了/);
+  f.begin("r2"); f.done("r2"); f.call.notify("job1", "资料整理好了"); await delay(400);
+  assert.equal(f.creates().length, 2);
+});
+
+test("response failure pauses automatic continuation and remains visible", async t => {
+  const f = fixture(t); f.call.presentation.start("present"); f.begin("r1"); f.done("r1", "failed");
+  await delay(400); assert.equal(f.creates().length, 0); assert.equal(f.call.presentation.snapshot().status, "paused"); assert.equal(f.states.at(-1)?.phase, "error");
+});
+
+test("OpenAI VAD waits for input commit and triggers only one user response", async t => {
+  const f = fixture(t); f.emit({ type: "input_audio_buffer.speech_started" }); f.emit({ type: "input_audio_buffer.speech_stopped" });
+  await delay(); assert.equal(f.creates().length, 0);
+  f.emit({ type: "input_audio_buffer.committed" }); await delay(); assert.equal(f.creates().length, 1);
+  f.emit({ type: "conversation.item.input_audio_transcription.completed", transcript: "你好" }); await delay(); assert.equal(f.creates().length, 1);
+});
+
+test("preview and end_call wait for audible goodbye completion", async t => {
+  for (const preview of ["", PREVIEW_LINE]) {
+    const f = fixture(t, undefined, undefined, preview); f.begin(`bye${preview}`); f.audio(`bye${preview}`);
+    if (!preview) f.tool(`bye${preview}`, "end", "end_call");
+    f.done(`bye${preview}`); await delay(); assert.equal(f.call.isClosed(), false);
+    f.call.noteSpeakerIdle(1); await delay(); assert.equal(f.call.isClosed(), true);
+  }
+});
+
+test("doubao tool result stays correlated and does not commit an empty audio buffer", async t => {
+  const f = fixture(t, async () => "找到两篇", DOUBAO_REALTIME_URL);
+  f.begin("d1"); f.emit({ type: "response.function_call_arguments.done", response_id: "d1", items: [{ type: "function_call", call_id: "dc1", name: "search_literature", arguments: "{}" }] }); f.done("d1");
+  await delay(30);
+  assert.equal(f.sent.find(event => event.items?.[0]?.role === "tool")?.items[0].call_id, "dc1");
+  assert.equal(f.sent.some(event => event.type === "input_audio_buffer.commit"), false);
+  assert.equal(f.sent.some(event => event.type === "response.create"), false);
+  assert.equal((functionOutput("x", "结果", "doubao").items as any[])[0].role, "tool");
+});
+
+test("transcript revisions replace rather than duplicate, while separate utterances remain separate", () => {
+  assert.equal(foldTranscript("Hello", "Hello there"), "Hello there");
+  assert.equal(mergeUtterance("第九页", "第9页讲完"), "第9页讲完");
+  assert.equal(mergeUtterance("你好", "你好"), "你好");
+  const pcm = pcm16FromFloat(new Float32Array([0, .5, -1, 1]), 32000, 16000);
+  assert.equal(pcm.length, 4); assert.equal(new DataView(pcm.buffer).getInt16(0, true), Math.round(.25 * 0x7fff));
+});
+
+test("service catalogs retain selected voices and service-specific keys", () => {
+  const q = resolveRealtime({ service: "qwen", model: "qwen3.8-omni-flash-realtime", workspace: "space", region: "singapore" });
+  assert.match(q.url, /space.ap-southeast-1/);
+  assert.ok(voicesFor("openai", "").some(voice => voice.id === "marin"));
+  assert.equal(keyForService("openai", "", "text", "https://api.deepseek.com/v1"), "");
+  assert.equal(keyForService("openai", "", "text", "https://api.openai.com/v1"), "text");
+  assert.match(realtimeKeyPage("doubao", ""), /volcengine/);
+});
+
+test("opening a different source preserves the suspended presentation position", t => {
+  const f = fixture(t); f.call.presentation.start("present"); f.call.locate("deck.html", 4, 8);
+  f.call.control("pause"); f.call.locate("source.pdf", 1, 10, "file");
+  assert.equal(f.call.presentation.snapshot().path, "deck.html"); assert.equal(f.call.presentation.snapshot().page, 4);
+  f.call.control("complete"); f.call.locate("source.pdf", 2, 10, "file");
+  assert.equal(f.call.presentation.snapshot().page, 4);
+});
+
+test("playback acknowledgments from another call cannot advance this call", async t => {
+  const f = fixture(t); f.call.presentation.start("present"); f.begin("r1"); f.audio("r1"); f.done("r1");
+  f.call.noteSpeakerIdle(1, "another-call"); await delay(400); assert.equal(f.creates().length, 0);
+  f.call.noteSpeakerIdle(1, f.call.id); await delay(400); assert.equal(f.creates().length, 1);
+});
+
+test("late ASR completion updates its own utterance and cannot undo the latest pause command", t => {
+  const f = fixture(t); f.call.presentation.start("present");
+  f.emit({ type: "input_audio_buffer.speech_started", item_id: "first" });
+  f.emit({ type: "input_audio_buffer.speech_stopped" }); f.emit({ type: "input_audio_buffer.committed", item_id: "first" });
+  f.emit({ type: "input_audio_buffer.speech_started", item_id: "second" });
+  f.emit({ type: "input_audio_buffer.speech_stopped" }); f.emit({ type: "input_audio_buffer.committed", item_id: "second" });
+  f.emit({ type: "conversation.item.input_audio_transcription.completed", item_id: "second", transcript: "先停一下" });
+  f.emit({ type: "conversation.item.input_audio_transcription.completed", item_id: "first", transcript: "继续" });
+  assert.equal(f.call.presentation.snapshot().status, "paused");
+  assert.deepEqual(f.call.transcript(), [{ who: "user", text: "继续" }, { who: "user", text: "先停一下" }]);
+});
+
+test("a transport reconnect keeps the task but never replays an old tool call", async t => {
+  const sockets: Array<{ sent: any[]; emit(type: string, data?: unknown): void }> = [];
+  const states: VoiceState[] = [];
+  let runs = 0; let release: (() => void) | undefined;
+  const call = new LiveCall("wss://api.openai.com/v1/realtime", "key", { type: "session.update", session: { instructions: "小王" } }, {
+    onPhase() {}, onState(state) { states.push(state); }, onAudio() {}, onInterrupt() {}, onLine() {}, onTranscript() {},
+    async runTool() { runs++; await new Promise<void>(resolve => { release = resolve; }); return "已完成读取"; },
+  }, () => {
+    const listeners = new Map<string, (event: { data?: unknown }) => void>();
+    const sent: any[] = [];
+    sockets.push({ sent, emit(type, data) { listeners.get(type)?.({ data: typeof data === "string" ? data : JSON.stringify(data) }); } });
+    return { send(data) { sent.push(JSON.parse(data)); }, close() {}, addEventListener(type, listener) { listeners.set(type, listener); } };
   });
-  assert.equal(socketUrl(preset), "wss://space.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime?model=qwen3.8-omni-flash-realtime");
-
-  const doubao = realtimeEndpoint({ url: DOUBAO_REALTIME_URL, model: "qwen3.5-omni-plus-realtime" });
-  assert.equal(doubao.family, "doubao");
-  assert.equal(doubao.model, DOUBAO_REALTIME_MODEL);
-  assert.equal(doubao.inputRate, 16_000);
-  assert.equal(doubao.audioFormat, "pcm_s16le");
-  assert.equal(socketUrl(doubao), DOUBAO_REALTIME_URL);
-});
-
-test("a session carries the spoken instructions and the same tool names", () => {
-  const update = sessionUpdate({
-    instructions: realtimeInstructions("阿王", "任务：投机解码"),
-    tools: [{ name: "search_literature", description: "检索", parameters: { type: "object" } }],
-    audioFormat: "pcm",
-    transcriptionModel: "gummy-realtime-v1",
-  });
-  const session = update.session as { instructions: string; tools: Array<{ name: string }> };
-  assert.match(session.instructions, /你是「阿王」/);
-  assert.match(session.instructions, /投机解码/);
-  assert.match(session.instructions, /ask_text/);
-  assert.match(session.instructions, /continue_speaking/);
-  assert.match(session.instructions, /end_call/);
-  assert.equal(session.tools[0]?.name, "search_literature");
-  const voiced = voiceTools([{ name: "search_literature", description: "检索", parameters: { type: "object" } }]);
-  assert.equal(voiced.at(-3)?.name, "ask_text");
-  assert.equal(voiced.at(-2)?.name, "continue_speaking");
-  assert.equal(voiced.at(-1)?.name, "end_call");
-  const english = realtimeInstructions("Wang", "Task: decoding", "en");
-  assert.match(english, /ask_text/);
-  assert.match(english, /continue_speaking/);
-  assert.match(english, /slides/);
-});
-
-test("server events become audio, transcripts, and one function call", () => {
-  assert.deepEqual(parseRealtimeEvent(JSON.stringify({ type: "session.updated" })), [{ kind: "session.updated" }]);
-  const audio = parseRealtimeEvent(JSON.stringify({ type: "response.audio.delta", delta: Buffer.from("hi").toString("base64") }));
-  assert.equal(audio[0]?.kind, "audio");
-  if (audio[0]?.kind === "audio") assert.equal(audio[0].pcm.toString(), "hi");
-
-  const done = parseRealtimeEvent(JSON.stringify({
-    type: "response.done",
-    response: { output: [{ type: "function_call", call_id: "call_1", name: "list_library", arguments: "{}" }] },
-  }));
-  assert.deepEqual(done[1], { kind: "function_call", callId: "call_1", name: "list_library", arguments: "{}" });
-
-  const accepted = functionOutput("call_1", TOOL_ACCEPTED);
-  assert.equal((accepted.item as { output: string }).output, TOOL_ACCEPTED);
-  const later = spokenResult("找到 2 篇。");
-  assert.match(JSON.stringify(later), /找到 2 篇/);
-});
-
-test("microphone samples become 16-bit little-endian pcm at the target rate", () => {
-  const input = new Float32Array([0, 0.5, -1, 1]);
-  const pcm = pcm16FromFloat(input, 32_000, 16_000);
-  const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-  assert.equal(pcm.length, 4);
-  assert.equal(view.getInt16(0, true), Math.round(0.25 * 0x7fff));
-  assert.equal(view.getInt16(2, true), 0);
-});
-
-test("doubao events use tool items, spoken text, and 16-bit audio", () => {
-  const session = doubaoSession({
-    instructions: realtimeInstructions("阿王", "任务：投机解码"),
-    tools: [{ name: "search_literature", description: "检索", parameters: { type: "object" } }],
-  });
-  const body = session.session as { model: string; audio: { output: { voice: string; format: { type: string } } }; tools: Array<{ name: string }> };
-  assert.equal(session.type, "session.create");
-  assert.equal(body.model, DOUBAO_REALTIME_MODEL);
-  assert.equal(body.audio.output.voice, DOUBAO_VOICE);
-  assert.equal(body.audio.output.format.type, "pcm_s16le");
-  assert.equal(body.tools[0]?.name, "search_literature");
-
-  const calls = parseRealtimeEvent(JSON.stringify({
-    type: "response.function_call_arguments.done",
-    items: [{ type: "function_call", call_id: "call_weather_001", name: "search_literature", arguments: "{\"source\":\"openalex\"}" }],
-  }));
-  assert.equal(calls[0]?.kind, "function_call");
-  const done = parseRealtimeEvent(JSON.stringify({ type: "response.output_text.done", text: "先看这一篇。" }));
-  assert.deepEqual(done, [{ kind: "assistant_transcript", text: "先看这一篇。", partial: false }]);
-  const heard = parseRealtimeEvent(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "帮我查一下" }));
-  assert.equal(heard[0]?.kind, "speech_stopped");
-  assert.deepEqual(heard[1], { kind: "user_transcript", text: "帮我查一下", partial: false });
-
-  const tool = functionOutput("call_weather_001", "找到 2 篇。", "doubao");
-  const item = (tool.items as Array<{ role: string; call_id: string; content: Array<{ text: string }> }>)[0];
-  assert.equal(item?.role, "tool");
-  assert.equal(item?.call_id, "call_weather_001");
-  assert.match(item?.content[0]?.text ?? "", /找到 2 篇/);
-});
-
-test("a doubao call sends the session on open and keeps the tool result in its own item", async () => {
-  const sent: string[] = [];
-  const listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
-  let headers: Record<string, string> = {};
-  const socket = {
-    send(data: string) {
-      sent.push(data);
-    },
-    close() {},
-    addEventListener(type: string, listener: (event: { data?: unknown }) => void) {
-      const list = listeners.get(type) ?? [];
-      list.push(listener);
-      listeners.set(type, list);
-    },
-  };
-  let finish = (_output: string) => {};
-  const phases: string[] = [];
-  const call = new LiveCall(DOUBAO_REALTIME_URL, "volc-key", doubaoSession({ instructions: "你是阿王", tools: [] }), {
-    onPhase(phase) {
-      phases.push(phase);
-    },
-    onAudio() {},
-    onInterrupt() {},
-    onLine() {},
-    onTranscript() {},
-    runTool() {
-      return new Promise((resolve) => {
-        finish = resolve;
-      });
-    },
-  }, (_url, nextHeaders) => {
-    headers = nextHeaders;
-    return socket;
-  });
-  call.start();
-  assert.deepEqual(headers, { "X-Api-Key": "volc-key" });
-  listeners.get("open")?.[0]?.({});
-  assert.equal(JSON.parse(sent[0] ?? "{}").type, "session.create");
-  listeners.get("message")?.[0]?.({ data: JSON.stringify({ type: "session.created", session: { id: "dlg_1" } }) });
-  assert.deepEqual(phases, ["connecting", "live"]);
-  listeners.get("message")?.[0]?.({
-    data: JSON.stringify({
-      type: "response.function_call_arguments.done",
-      items: [{ type: "function_call", call_id: "call_1", name: "list_files", arguments: "{}" }],
-    }),
-  });
-  const accepted = JSON.parse(sent.at(-1) ?? "{}") as { type: string; items?: Array<{ role?: string; content?: Array<{ text?: string }> }> };
-  assert.equal(accepted.type, "conversation.item.create");
-  assert.equal(accepted.items?.[0]?.role, "tool");
-  assert.equal(accepted.items?.[0]?.content?.[0]?.text, TOOL_ACCEPTED);
-  assert.equal(sent.some((item) => JSON.parse(item).type === "response.create"), false);
-  listeners.get("message")?.[0]?.({ data: JSON.stringify({ type: "response.done" }) });
-  finish("工作区是空的。");
-  await Promise.resolve();
-  const tail = sent.slice(-2).map((item) => JSON.parse(item) as { type: string; items?: Array<{ content?: Array<{ text?: string }> }> });
-  assert.match(tail[0]?.items?.[0]?.content?.[0]?.text ?? "", /工作区是空的/);
-  assert.equal(tail[1]?.type, "input_audio_buffer.commit");
-  call.hangup();
-});
-
-test("a call accepts a tool immediately and speaks the result after the turn", async () => {
-  const sent: string[] = [];
-  const listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
-  const socket = {
-    send(data: string) {
-      sent.push(data);
-    },
-    close() {},
-    addEventListener(type: string, listener: (event: { data?: unknown }) => void) {
-      const list = listeners.get(type) ?? [];
-      list.push(listener);
-      listeners.set(type, list);
-    },
-  };
-  let finish = (_output: string) => {};
-  const phases: string[] = [];
-  const call = new LiveCall("wss://example.test/realtime?model=qwen", "key", { type: "session.update" }, {
-    onPhase(phase) {
-      phases.push(phase);
-    },
-    onAudio() {},
-    onInterrupt() {},
-    onLine() {},
-    onTranscript() {},
-    runTool() {
-      return new Promise((resolve) => {
-        finish = resolve;
-      });
-    },
-  }, () => socket);
-  call.start();
-  const message = listeners.get("message")?.[0];
-  assert.ok(message);
-  message({ data: JSON.stringify({ type: "session.created" }) });
-  assert.equal(JSON.parse(sent[0] ?? "{}").type, "session.update");
-  message({ data: JSON.stringify({ type: "session.updated" }) });
-  assert.deepEqual(phases, ["connecting", "live"]);
-  message({ data: Buffer.from(JSON.stringify({ type: "response.function_call_arguments.done", call_id: "call_9", name: "list_files", arguments: "{}" })) });
-  const accepted = sent.slice(1).map((item) => JSON.parse(item) as { type: string; item?: { output?: string } });
-  assert.equal(accepted[0]?.item?.output, TOOL_ACCEPTED);
-  assert.equal(accepted[1]?.type, "response.create");
-  message({ data: JSON.stringify({ type: "response.done", response: { output: [] } }) });
-  finish("工作区是空的。");
-  await Promise.resolve();
-  const spoken = JSON.parse(sent.at(-2) ?? "{}") as { item?: { content?: Array<{ text?: string }> } };
-  assert.match(spoken.item?.content?.[0]?.text ?? "", /工作区是空的/);
-  assert.equal(JSON.parse(sent.at(-1) ?? "{}").type, "response.create");
-});
-
-test("realtime settings resolve a service, model, and hardcoded voice", () => {
-  const qwen = resolveRealtime({});
-  assert.equal(qwen.service, "qwen");
-  assert.equal(qwen.model, "qwen3.5-omni-plus-realtime");
-  assert.equal(qwen.voice, "Tina");
-  assert.equal(qwen.url, QWEN_REALTIME_URL);
-
-  const flash = resolveRealtime({ service: "qwen", model: "qwen3.5-omni-flash-realtime", region: "singapore", voice: "Ethan" });
-  assert.equal(flash.url, "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime");
-  assert.equal(voicesFor("qwen", flash.model).some((voice) => voice.id === "Zane"), false);
-  assert.equal(voicesFor("qwen", "qwen3.8-omni-flash-realtime").some((voice) => voice.id === "Ethan"), false);
-  assert.equal(voicesFor("qwen", "qwen3.8-omni-flash-realtime").some((voice) => voice.id === "Liora Mira"), true);
-
-  const workspace = resolveRealtime({ service: "qwen", model: "qwen3.8-omni-flash-realtime", workspace: "space-1" });
-  assert.equal(workspace.url, "wss://space-1.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime");
-  const full = resolveRealtime({ service: "qwen", model: "qwen3.8-omni-flash-realtime", workspace: "wss://custom.example/realtime" });
-  assert.equal(full.url, "wss://custom.example/realtime");
-
-  const openai = resolveRealtime({ service: "openai" });
-  assert.equal(openai.model, "gpt-realtime-2.1");
-  assert.equal(openai.voice, "marin");
-  assert.equal(openai.url, "wss://api.openai.com/v1/realtime");
-
-  const legacy = resolveRealtime({ url: "wss://space-1.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime" });
-  assert.equal(legacy.service, "qwen");
-  assert.equal(legacy.model, "qwen3.8-omni-flash-realtime");
-  assert.equal(legacy.workspace, "wss://space-1.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime");
-
-  const doubao = resolveRealtime({ url: DOUBAO_REALTIME_URL });
-  assert.equal(doubao.service, "doubao");
-  assert.equal(doubao.model, DOUBAO_REALTIME_MODEL);
-  assert.equal(doubao.voice, DOUBAO_VOICE);
-  assert.equal(keyForService("doubao", "", "deepseek-key", "https://api.deepseek.com/v1"), "");
-  assert.equal(keyForService("qwen", "", "dash-key", "https://dashscope.aliyuncs.com/compatible-mode/v1"), "dash-key");
-  assert.equal(keyForService("openai", "own-key", "dash-key", "https://dashscope.aliyuncs.com/compatible-mode/v1"), "own-key");
-  assert.equal(realtimeKeyPage("qwen", "beijing"), "https://bailian.console.aliyun.com/cn-beijing/model/settings/api-key");
-  assert.equal(realtimeKeyPage("qwen", "singapore"), "https://modelstudio.console.alibabacloud.com/ap-southeast-1/settings/api-key");
-  assert.equal(realtimeKeyPage("openai", "beijing"), "https://platform.openai.com/api-keys");
-  assert.equal(realtimeKeyPage("doubao", ""), "https://console.volcengine.com/speech/new/setting/apikeys?projectName=default");
-});
-
-test("a voice preview asks for the sample line and hangs up when it finishes", () => {
-  const sent: string[] = [];
-  const listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
-  const socket = {
-    send(data: string) {
-      sent.push(data);
-    },
-    close() {},
-    addEventListener(type: string, listener: (event: { data?: unknown }) => void) {
-      const list = listeners.get(type) ?? [];
-      list.push(listener);
-      listeners.set(type, list);
-    },
-  };
-  const phases: string[] = [];
-  const call = new LiveCall("wss://example.test/realtime", "key", { type: "session.update" }, {
-    onPhase(phase) {
-      phases.push(phase);
-    },
-    onAudio() {},
-    onInterrupt() {},
-    onLine() {},
-    onTranscript() {},
-    async runTool() {
-      return "";
-    },
-  }, () => socket, PREVIEW_LINE);
-  call.start();
-  const message = listeners.get("message")?.[0];
-  assert.ok(message);
-  message({ data: JSON.stringify({ type: "session.created" }) });
-  message({ data: JSON.stringify({ type: "session.updated" }) });
-  const cue = sent.slice(1).map((item) => JSON.parse(item) as { type: string; item?: { content?: Array<{ text?: string }> } });
-  assert.equal(cue[0]?.item?.content?.[0]?.text, `请一字不差地说：${PREVIEW_LINE}`);
-  assert.equal(cue[1]?.type, "response.create");
-  message({ data: JSON.stringify({ type: "response.done", response: { output: [] } }) });
-  assert.equal(phases.at(-1), "closed");
-  assert.deepEqual(previewCue("doubao"), [{ type: "speech_text_buffer.commit", text: PREVIEW_LINE }]);
-});
-
-test("transcript snapshots replace the line instead of repeating it", () => {
-  assert.equal(foldTranscript("以说", "以说这个东西"), "以说这个东西");
-  assert.equal(foldTranscript("以说这个东西", "以说这个东西"), "以说这个东西");
-  assert.equal(foldTranscript("你好", "世界"), "你好世界");
-  assert.equal(
-    mergeUtterance("嗯 ok 汇报一下刚刚这么一个工作OK，", "汇报一下刚刚这么一个工作。"),
-    "汇报一下刚刚这么一个工作。",
-  );
-  assert.equal(
-    mergeUtterance("嗯你把这个 ppt 完整的讲一遍", "你把这个 PPT 完整的讲一遍。"),
-    "你把这个 PPT 完整的讲一遍。",
-  );
-  assert.equal(
-    mergeUtterance("", "嗯你把这个 ppt 完整的讲一遍你把这个 PPT 完整的讲一遍。"),
-    "你把这个 PPT 完整的讲一遍。",
-  );
-  assert.equal(
-    mergeUtterance("等等这是第八页的内容吗", "这是第 8 页的内容吗？"),
-    "这是第 8 页的内容吗？",
-  );
-  assert.equal(mergeUtterance("你好", "世界"), "你好世界");
-});
-
-test("user speech cuts audio that is still in the speaker", () => {
-  const sent: string[] = [];
-  const listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
-  const socket = {
-    send(data: string) {
-      sent.push(data);
-    },
-    close() {},
-    addEventListener(type: string, listener: (event: { data?: unknown }) => void) {
-      const list = listeners.get(type) ?? [];
-      list.push(listener);
-      listeners.set(type, list);
-    },
-  };
-  let interrupted = 0;
-  const call = new LiveCall("wss://example.test/realtime", "key", { type: "session.update" }, {
-    onPhase() {},
-    onAudio() {},
-    onInterrupt() {
-      interrupted += 1;
-    },
-    onLine() {},
-    onTranscript() {},
-    async runTool() {
-      return "";
-    },
-  }, () => socket);
-  call.start();
-  const message = listeners.get("message")?.[0];
-  assert.ok(message);
-  message({ data: JSON.stringify({ type: "session.created" }) });
-  message({ data: JSON.stringify({ type: "session.updated" }) });
-  message({ data: JSON.stringify({ type: "response.created" }) });
-  message({ data: JSON.stringify({ type: "response.audio.delta", delta: Buffer.from([0, 1]).toString("base64") }) });
-  message({ data: JSON.stringify({ type: "response.done", response: { output: [] } }) });
-  const mark = sent.length;
-  message({ data: JSON.stringify({ type: "input_audio_buffer.speech_started" }) });
-  assert.equal(interrupted, 1);
-  assert.equal(sent.slice(mark).some((item) => JSON.parse(item).type === "response.cancel"), false);
-  call.noteSpeakerIdle(1);
-  message({ data: JSON.stringify({ type: "input_audio_buffer.speech_stopped" }) });
-  message({ data: JSON.stringify({ type: "response.created" }) });
-  message({ data: JSON.stringify({ type: "input_audio_buffer.speech_started" }) });
-  assert.equal(interrupted, 2);
-  assert.equal(sent.some((item) => JSON.parse(item).type === "response.cancel"), true);
-});
-
-test("a user turn is kept when speech stops, before the final transcript", () => {
-  const listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
-  const socket = {
-    send() {},
-    close() {},
-    addEventListener(type: string, listener: (event: { data?: unknown }) => void) {
-      const list = listeners.get(type) ?? [];
-      list.push(listener);
-      listeners.set(type, list);
-    },
-  };
-  const call = new LiveCall("wss://example.test/realtime", "key", { type: "session.update" }, {
-    onPhase() {},
-    onAudio() {},
-    onInterrupt() {},
-    onLine() {},
-    onTranscript() {},
-    async runTool() {
-      return "";
-    },
-  }, () => socket);
-  call.start();
-  const message = listeners.get("message")?.[0];
-  assert.ok(message);
-  message({ data: JSON.stringify({ type: "session.created" }) });
-  message({ data: JSON.stringify({ type: "session.updated" }) });
-  message({ data: JSON.stringify({ type: "conversation.item.input_audio_transcription.delta", delta: "你好" }) });
-  message({ data: JSON.stringify({ type: "input_audio_buffer.speech_stopped" }) });
-  assert.deepEqual(call.transcript(), [{ who: "user", text: "你好" }]);
-  message({ data: JSON.stringify({ type: "input_audio_buffer.speech_started" }) });
-  message({ data: JSON.stringify({ type: "conversation.item.input_audio_transcription.delta", delta: "下一句" }) });
-  message({ data: JSON.stringify({ type: "input_audio_buffer.speech_stopped" }) });
-  assert.deepEqual(call.transcript(), [
-    { who: "user", text: "你好" },
-    { who: "user", text: "下一句" },
-  ]);
-  message({ data: JSON.stringify({ type: "input_audio_buffer.speech_started" }) });
-  message({ data: JSON.stringify({ type: "conversation.item.input_audio_transcription.delta", delta: "嗯 ok 汇报一下刚刚这么一个工作OK，" }) });
-  message({ data: JSON.stringify({ type: "conversation.item.input_audio_transcription.delta", delta: "汇报一下刚刚这么一个工作。" }) });
-  message({ data: JSON.stringify({ type: "input_audio_buffer.speech_stopped" }) });
-  message({ data: JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "汇报一下刚刚这么一个工作。" }) });
-  assert.deepEqual(call.transcript().at(-1), { who: "user", text: "汇报一下刚刚这么一个工作。" });
-});
-
-test("end_call waits until the goodbye finishes playing", () => {
-  const sent: string[] = [];
-  const listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
-  const socket = {
-    send(data: string) {
-      sent.push(data);
-    },
-    close() {},
-    addEventListener(type: string, listener: (event: { data?: unknown }) => void) {
-      const list = listeners.get(type) ?? [];
-      list.push(listener);
-      listeners.set(type, list);
-    },
-  };
-  const phases: string[] = [];
-  const call = new LiveCall("wss://example.test/realtime", "key", { type: "session.update" }, {
-    onPhase(phase) {
-      phases.push(phase);
-    },
-    onAudio() {},
-    onInterrupt() {},
-    onLine() {},
-    onTranscript() {},
-    async runTool() {
-      return "不该执行";
-    },
-  }, () => socket);
-  call.start();
-  const message = listeners.get("message")?.[0];
-  assert.ok(message);
-  message({ data: JSON.stringify({ type: "session.created" }) });
-  message({ data: JSON.stringify({ type: "session.updated" }) });
-  message({ data: JSON.stringify({ type: "response.created" }) });
-  message({ data: JSON.stringify({ type: "response.audio.delta", delta: Buffer.from([0, 1]).toString("base64") }) });
-  const mark = sent.length;
-  message({ data: JSON.stringify({ type: "response.function_call_arguments.done", call_id: "bye", name: "end_call", arguments: "{}" }) });
-  const follow = sent.slice(mark).map((item) => JSON.parse(item) as { type: string });
-  assert.equal(follow.some((item) => item.type === "response.create"), false);
-  assert.equal(phases.includes("closed"), false);
-  message({ data: JSON.stringify({ type: "response.done", response: { output: [] } }) });
-  assert.equal(phases.includes("closed"), false);
-  call.noteSpeakerIdle(1);
-  assert.equal(phases.at(-1), "closed");
-});
-
-test("ask_text starts the written work without reading it aloud", async () => {
-  const sent: string[] = [];
-  const listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
-  const socket = {
-    send(data: string) {
-      sent.push(data);
-    },
-    close() {},
-    addEventListener(type: string, listener: (event: { data?: unknown }) => void) {
-      const list = listeners.get(type) ?? [];
-      list.push(listener);
-      listeners.set(type, list);
-    },
-  };
-  const call = new LiveCall("wss://example.test/realtime", "key", { type: "session.update" }, {
-    onPhase() {},
-    onAudio() {},
-    onInterrupt() {},
-    onLine() {},
-    onTranscript() {},
-    runTool(name) {
-      assert.equal(name, "ask_text");
-      return Promise.resolve(askTextResult("started"));
-    },
-  }, () => socket);
-  call.start();
-  const message = listeners.get("message")?.[0];
-  assert.ok(message);
-  message({ data: JSON.stringify({ type: "session.created" }) });
-  message({ data: JSON.stringify({ type: "session.updated" }) });
-  const mark = sent.length;
-  message({ data: JSON.stringify({ type: "response.function_call_arguments.done", call_id: "page", name: "ask_text", arguments: "{\"task\":\"做一份幻灯片\"}" }) });
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  const follow = sent.slice(mark).join("\n");
-  assert.match(follow, /已经开始/);
-  assert.doesNotMatch(follow, /结果好了/);
-  assert.equal(askTextResult("busy", "en").includes("previous piece"), true);
-
-  let flipped = 0;
-  const deckCall = new LiveCall("wss://example.test/realtime", "key", { type: "session.update" }, {
-    onPhase() {},
-    onAudio() {},
-    onInterrupt() {},
-    onLine() {},
-    onTranscript() {},
-    async runTool(name, args) {
-      assert.equal(name, "show_stage");
-      flipped = (JSON.parse(args) as { page?: number }).page ?? 0;
-      return "右栏已打开 slides.html，第 2 页。";
-    },
-  }, () => socket);
-  deckCall.start();
-  const deckMessage = listeners.get("message")?.at(-1);
-  assert.ok(deckMessage);
-  deckMessage({ data: JSON.stringify({ type: "session.created" }) });
-  deckMessage({ data: JSON.stringify({ type: "session.updated" }) });
-  deckCall.sendAudio(Buffer.alloc(640));
-  const beforeFlip = sent.length;
-  deckMessage({ data: JSON.stringify({ type: "response.function_call_arguments.done", call_id: "flip_2", name: "show_stage", arguments: "{\"mode\":\"canvas\",\"path\":\"slides.html\",\"page\":2}" }) });
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(flipped, 2);
-  const flipEvents = sent.slice(beforeFlip).join("\n");
-  assert.match(flipEvents, /右栏已打开 slides\.html，第 2 页/);
-  assert.doesNotMatch(flipEvents, /结果好了/);
-  assert.doesNotMatch(flipEvents, /两三句/);
-});
-
-test("a finished turn stays quiet until continue_speaking, and a cancelled user turn is answered", async () => {
-  const sent: string[] = [];
-  const listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
-  const socket = {
-    send(data: string) {
-      sent.push(data);
-    },
-    close() {},
-    addEventListener(type: string, listener: (event: { data?: unknown }) => void) {
-      const list = listeners.get(type) ?? [];
-      list.push(listener);
-      listeners.set(type, list);
-    },
-  };
-  const call = new LiveCall("wss://example.test/realtime", "key", { type: "session.update" }, {
-    onPhase() {},
-    onAudio() {},
-    onInterrupt() {},
-    onLine() {},
-    onTranscript() {},
-    async runTool() {
-      return "";
-    },
-  }, () => socket);
-  call.start();
-  const message = listeners.get("message")?.[0];
-  assert.ok(message);
-  message({ data: JSON.stringify({ type: "session.created" }) });
-  message({ data: JSON.stringify({ type: "session.updated" }) });
-  message({ data: JSON.stringify({ type: "response.created" }) });
-  message({ data: JSON.stringify({ type: "response.audio.delta", delta: Buffer.from([0, 1]).toString("base64") }) });
-  const quiet = sent.length;
-  message({ data: JSON.stringify({ type: "response.done", response: { output: [] } }) });
-  call.noteSpeakerIdle(1);
-  await new Promise((resolve) => setTimeout(resolve, 400));
-  assert.doesNotMatch(sent.slice(quiet).join("\n"), /接着讲下一段/);
-
-  message({ data: JSON.stringify({ type: "response.created" }) });
-  message({ data: JSON.stringify({ type: "response.audio.delta", delta: Buffer.from([0, 1]).toString("base64") }) });
-  message({ data: JSON.stringify({ type: "response.function_call_arguments.done", call_id: "next", name: "continue_speaking", arguments: "{}" }) });
-  const marked = sent.length;
-  message({ data: JSON.stringify({ type: "response.done", response: { output: [] } }) });
-  call.noteSpeakerIdle(2);
-  await new Promise((resolve) => setTimeout(resolve, 400));
-  const follow = sent.slice(marked).join("\n");
-  assert.match(follow, /接着讲下一段/);
-  assert.match(follow, /response\.create/);
-
-  message({ data: JSON.stringify({ type: "response.created" }) });
-  message({ data: JSON.stringify({ type: "response.audio.delta", delta: Buffer.from([0, 2]).toString("base64") }) });
-  const barge = sent.length;
-  message({ data: JSON.stringify({ type: "input_audio_buffer.speech_started" }) });
-  message({ data: JSON.stringify({ type: "input_audio_buffer.speech_stopped" }) });
-  const afterBarge = sent.slice(barge).join("\n");
-  assert.match(afterBarge, /response\.cancel/);
-  assert.match(afterBarge, /response\.create/);
+  t.after(() => call.hangup()); call.start();
+  sockets[0]!.emit("message", { type: "session.created" }); sockets[0]!.emit("message", { type: "session.updated" });
+  call.presentation.start("讲完材料"); call.locate("deck.html", 2, 5);
+  sockets[0]!.emit("message", { type: "response.created", response: { id: "old" } });
+  sockets[0]!.emit("message", { type: "response.function_call_arguments.done", response_id: "old", call_id: "once", name: "read_file", arguments: "{}" });
+  sockets[0]!.emit("close"); await delay(550);
+  assert.equal(sockets.length, 2);
+  sockets[1]!.emit("message", { type: "session.created" }); sockets[1]!.emit("message", { type: "session.updated" });
+  sockets[0]!.emit("message", { type: "response.function_call_arguments.done", response_id: "old", call_id: "late", name: "write_file", arguments: "{}" });
+  release!(); await delay(20);
+  assert.equal(runs, 1); assert.equal(call.presentation.snapshot().page, 2);
+  assert.ok(states.some(state => state.phase === "reconnecting"));
+  assert.equal(sockets[1]!.sent.some(event => event.item?.call_id === "once"), false);
 });

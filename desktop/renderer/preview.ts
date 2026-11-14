@@ -90,6 +90,9 @@ export function installPreviewBridge(): void {
     async openPage(_slug, path) {
       return { title: path, html: "<!doctype html><title>Deck</title><section>One</section><section>Two</section>", page: 1 };
     },
+    async openArtifact() {},
+    async openReference() {},
+    async openLink(url) { window.open(url, "_blank", "noopener,noreferrer"); },
     async readFile() {
       return new TextEncoder().encode("# 阅读笔记\n\n投机解码用小模型起草，大模型逐段确认。\n");
     },
@@ -102,11 +105,20 @@ export function installPreviewBridge(): void {
       return next;
     },
     async stop(_slug?: string) {},
+    async cancelJob() {},
+    async retryJob() { throw new Error("界面预览不执行后台任务。"); },
+    async stageAck() { return true; },
+    async stagePosition() {},
+    callPosition() {},
+    async callControl() {},
+    onDelta() { return () => {}; },
+    onJob() { return () => {}; },
     async callStart(slug) {
       const note = (phase: CallNote["phase"], extra: Partial<CallNote> = {}) => {
         listeners.call.forEach((callback) => callback({ slug, phase, ...extra }));
       };
       note("live", { inputRate: 16_000, outputRate: 24_000 });
+      note("state", { state: { phase: "listening", presentation: { status: "idle", path: "", mode: "canvas", page: 1, totalPages: 0, segments: 0, goal: "" }, detail: "界面预览 · 语音未连接" } });
       note("line", { who: "assistant", text: "你好，我是小王同学。", partial: false });
       note("line", { who: "user", text: "今天先看到这里。", partial: true });
       note("line", { who: "user", text: "今天先看到这里。", partial: false });

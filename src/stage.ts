@@ -6,8 +6,9 @@ export type StageView =
   | { mode: "canvas"; title: string; html: string; page?: number };
 
 export interface StageDriver {
-  show(view: StageView): void;
+  show(view: StageView): void | Promise<StageReceipt | void>;
 }
+export interface StageReceipt { page: number; totalPages: number; title?: string }
 
 export interface BrowserDriver {
   holder(): "bot" | "user";

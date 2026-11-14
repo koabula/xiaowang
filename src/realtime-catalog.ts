@@ -215,7 +215,7 @@ function workspaceOf(url: string): string {
 function urlFor(service: RealtimeServiceId, model: string, region: RealtimeRegion, workspace: string): string {
   if (service === "openai") return OPENAI_URL;
   if (service === "doubao") return DOUBAO_REALTIME_URL;
-  if (model.startsWith("qwen3.8")) return workspaceUrl(workspace, region);
+  if (workspace || model.startsWith("qwen3.8")) return workspaceUrl(workspace, region);
   return region === "singapore" ? QWEN_SINGAPORE : QWEN_BEIJING;
 }
 

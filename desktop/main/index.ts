@@ -1,8 +1,12 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, session, shell } from "electron";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { LiveCall } from "./call.ts";
+import { LiveCall, type PlaybackPosition, type VoiceState } from "./call.ts";
+import { JobQueue, type JobOutput } from "../../src/jobs.ts";
+import { StageRequests } from "./stage.ts";
+import type { TaskJob } from "../../src/types.ts";
+import type { PresentationState } from "../../src/presentation.ts";
 import { runTurn } from "../../src/harness.ts";
 import { formatVoiceBrief, projectVoiceBrief } from "../../src/project.ts";
 import { checkModel, configFromEnv, createProvider, listModels } from "../../src/provider.ts";
@@ -13,7 +17,7 @@ import { Runtime } from "../../src/runtime.ts";
 import { resolveHome } from "../../src/store.ts";
 import { executeTool, toolSchemas } from "../../src/tools.ts";
 import type { BrowserDriver, StageView } from "../../src/stage.ts";
-import { BROWSER_BUSY, CANVAS_HTML_CAP } from "../../src/stage.ts";
+import { BROWSER_BUSY, CANVAS_HTML_CAP, assertHttpUrl } from "../../src/stage.ts";
 import type { Channel, SessionEvent } from "../../src/types.ts";
 import { listCanvasPages, resolveInsideWorkspace } from "../../src/workspace.ts";
 import { BrowserPane } from "./browser.ts";
@@ -27,6 +31,11 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+if (process.env.XIAOWANG_USER_DATA) {
+  const directory = path.resolve(process.env.XIAOWANG_USER_DATA);
+  mkdirSync(directory, { recursive: true });
+  app.setPath("userData", directory);
+}
 const devUrl = process.env.XIAOWANG_DESKTOP_URL ?? "";
 
 let runtime: Runtime;
@@ -47,6 +56,7 @@ let secrets: SecretRecord = {
   realtimeVoice: "",
   realtimeRegion: "",
   realtimeWorkspace: "",
+  locale: "zh",
 };
 
 interface ChatItem {
@@ -60,6 +70,7 @@ interface ChatItem {
 }
 
 interface BotRow {
+  id: string;
   slug: string;
   name: string;
   preview: string;
@@ -85,6 +96,7 @@ function previewOf(botId: string): string {
 
 function botRows(): BotRow[] {
   return runtime.store.listBots().map((bot) => ({
+    id: bot.id,
     slug: bot.slug,
     name: bot.name,
     preview: previewOf(bot.id),
@@ -136,7 +148,7 @@ function present(id: number, event: SessionEvent): ChatItem | null {
 
 function publish(): void {
   const active = runtime.activeBot();
-  send("state", { bots: botRows(), activeSlug: active.slug, settings: publicSettings(secrets) });
+  send("state", { bots: botRows(), activeSlug: active.slug, settings: publicSettings(secrets), jobs: jobs?.list() ?? [] });
 }
 
 function envFromSecrets(): NodeJS.ProcessEnv {
@@ -149,6 +161,9 @@ function envFromRecord(record: SecretRecord): NodeJS.ProcessEnv {
     XIAOWANG_BASE_URL: record.baseUrl,
     XIAOWANG_API_STYLE: record.apiStyle,
     XIAOWANG_API_KEY: record.apiKey,
+    XIAOWANG_SEARCH_KEY: record.searchKey,
+    XIAOWANG_SEARCH_URL: record.searchUrl,
+    XIAOWANG_SEARCH_PROVIDER: record.searchProvider,
   };
 }
 
@@ -171,57 +186,46 @@ function libraryOf(slug: string) {
   }));
 }
 
-async function ask(slug: string, text: string, signal: AbortSignal, channel: Channel = "text"): Promise<void> {
-  const bot = runtime.store.requireBot(slug);
+let jobs: JobQueue;
+let live: LiveCall | null = null;
+let liveSlug = "";
+let liveState: VoiceState | null = null;
+const stages = new StageRequests(note => send("stage", note));
+
+async function ask(job: TaskJob, signal: AbortSignal, activity: (text: string) => void): Promise<JobOutput> {
+  const bot = runtime.store.requireBot(job.botId);
+  const before = runtime.store.getEvents(bot.id).at(-1)?.id ?? 0;
   const provider = createProvider(configFromEnv(envFromSecrets()));
-  await runTurn(runtime, {
-    botId: bot.id,
-    input: text,
-    channel,
-    provider,
-    env: envFromSecrets(),
-    locale: localeOf(secrets.locale),
-    signal,
-    browser: browserFor(slug),
-    stage: {
-      show(view: StageView) {
-        send("stage", { slug: bot.slug, ...view });
-        publish();
-      },
-    },
+  const result = await runTurn(runtime, {
+    botId: bot.id, input: job.task, channel: job.channel, provider,
+    env: envFromSecrets(), locale: localeOf(secrets.locale), signal,
+    browser: browserFor(bot.slug),
+    stage: { show: view => stages.show(bot.slug, view) },
+    onKickoff: kickoff => { jobs.enqueue({ botId: kickoff.botId, task: kickoff.task, channel: "system" }); },
+    onTextDelta(current, text) { send("delta", { slug: current.slug, jobId: job.id, text }); },
     onStep(step) {
-      send("step", {
-        slug: step.bot.slug,
-        kind: step.kind,
-        name: step.name ?? "",
-        text: step.text,
-        isError: Boolean(step.isError),
-        activity: step.activity ?? "",
-      });
+      if (step.activity) activity(step.activity);
+      send("step", { slug: step.bot.slug, jobId: job.id, kind: step.kind, name: step.name ?? "", text: step.text, isError: Boolean(step.isError), activity: step.activity ?? "" });
     },
   });
-  publish();
+  if (result.steps >= 40 && runtime.store.getEvents(bot.id).at(-1)?.event.type === "tool_result") throw new Error("本轮达到处理步数上限。已有结果已保存，可拆小任务后继续。");
+  const artifacts = runtime.store.getEvents(bot.id, { afterId: before }).flatMap(({ event }) => event.type === "artifact" ? [event.path] : []);
+  if (!result.finalText.trim() && !artifacts.length) throw new Error("模型没有返回可用结果，请重试。");
+  return { text: result.finalText, artifacts };
 }
 
-let turns = new Map<string, AbortController>();
-let live: LiveCall | null = null;
-
-function beginTurn(slug: string, text: string, channel: Channel): boolean {
-  if (turns.has(slug)) return false;
-  const controller = new AbortController();
-  turns.set(slug, controller);
-  send("turn", { slug, busy: true });
-  let failure = "";
-  void ask(slug, text, controller.signal, channel)
-    .catch((error: unknown) => {
-      failure = error instanceof Error ? error.message : String(error);
-    })
-    .finally(() => {
-      const current = turns.get(slug) === controller;
-      if (current) turns.delete(slug);
-      if (current) send("turn", { slug, busy: false, error: failure });
-    });
-  return true;
+function jobChanged(job: TaskJob): void {
+  const bot = runtime.store.requireBot(job.botId);
+  const busy = jobs?.busy(job.botId) ?? job.status === "running";
+  send("job", { ...job, slug: bot.slug });
+  send("turn", { slug: bot.slug, busy, error: job.status === "failed" ? job.error : "" });
+  publish();
+  if (live && liveSlug === bot.slug) {
+    live.updateContext(`job:${job.id}`, JSON.stringify({ id: job.id, status: job.status, activity: job.activity, artifacts: job.artifacts }));
+    if (job.notify === "when_idle" && (job.status === "succeeded" || job.status === "failed")) {
+      live.notify(`${job.id}:${job.attempts}:${job.status}`, JSON.stringify({ id: job.id, task: job.task.slice(0, 300), status: job.status, result: job.result.slice(0, 1800), error: job.error, artifacts: job.artifacts }));
+    }
+  }
 }
 
 function handoffText(task: string, lines: Array<{ who: "user" | "assistant"; text: string }>, person: string, locale: ReturnType<typeof localeOf>): string {
@@ -249,7 +253,7 @@ function taskArgument(args: string): string {
 function browserFor(slug: string): BrowserDriver {
   const claim = (): string | null => {
     const owner = browser.ownerSlug;
-    if (owner && owner !== slug && turns.has(owner)) return BROWSER_BUSY;
+    if (owner && owner !== slug && jobs.busy(runtime.store.requireBot(owner).id)) return BROWSER_BUSY;
     browser.actingSlug = slug;
     browser.ownerSlug = slug;
     return null;
@@ -275,7 +279,8 @@ function registerIpc(): void {
   ipcMain.handle("state:get", () => ({
     bots: botRows(),
     activeSlug: runtime.activeBot().slug,
-    settings: publicSettings(secrets),
+    settings: publicSettings(secrets), jobs: jobs.list(),
+    call: live ? { slug: liveSlug, state: liveState } : null,
   }));
   ipcMain.handle("bot:active", (_event, slug: string) => {
     runtime.store.setActiveBot(runtime.store.requireBot(slug).id);
@@ -308,6 +313,17 @@ function registerIpc(): void {
   });
   ipcMain.handle("chat:events", (_event, slug: string) => chatItems(slug));
   ipcMain.handle("library:list", (_event, slug: string) => libraryOf(slug));
+  ipcMain.handle("library:openReference", (_event, slug: string, id: string, page: number) => {
+    const bot = runtime.store.requireBot(slug);
+    const ref = runtime.store.resolveLibraryRef(bot.id, id);
+    if (!Number.isSafeInteger(page) || page < 1) throw new Error("无效的来源页码。");
+    send("stage", { slug, mode: "file", id: ref.id, filename: ref.filename, page });
+  });
+  ipcMain.handle("link:open", (_event, url: string) => {
+    const checked = assertHttpUrl(url);
+    if (typeof checked !== "string") throw new Error(checked.error);
+    return shell.openExternal(checked);
+  });
   ipcMain.handle("library:text", (_event, slug: string, id: string) => {
     const bot = runtime.store.requireBot(slug);
     const ref = runtime.store.resolveLibraryRef(bot.id, id);
@@ -316,6 +332,21 @@ function registerIpc(): void {
   ipcMain.handle("workspace:pages", (_event, slug: string) => {
     const bot = runtime.store.requireBot(slug);
     return listCanvasPages(bot.workspaceDir);
+  });
+  ipcMain.handle("workspace:openArtifact", (_event, slug: string, rel: string) => {
+    const bot = runtime.store.requireBot(slug);
+    const resolved = resolveInsideWorkspace(bot.workspaceDir, rel);
+    if (!resolved.ok) throw new Error(resolved.error);
+    if (/\.html?$/i.test(resolved.rel)) {
+      const html = readFileSync(resolved.abs, "utf8");
+      if (Buffer.byteLength(html) > CANVAS_HTML_CAP) throw new Error("这份页面过大。");
+      send("stage", { slug, mode: "canvas", title: resolved.rel, html, page: 1 });
+    } else {
+      if (!/\.(pdf|md|markdown|txt|csv|json|jsonl)$/i.test(resolved.rel)) throw new Error("暂时不能预览这种文件。");
+      const result = runtime.store.addLibraryBytes(bot.id, path.basename(resolved.rel), readFileSync(resolved.abs));
+      send("stage", { slug, mode: "file", id: result.ref.id, filename: result.ref.filename, page: 1 });
+    }
+    publish();
   });
   ipcMain.handle("workspace:openPage", (_event, slug: string, rel: string, page = 1) => {
     const bot = runtime.store.requireBot(slug);
@@ -342,18 +373,22 @@ function registerIpc(): void {
     publish();
   });
   ipcMain.handle("chat:ask", async (_event, slug: string, text: string) => {
-    turns.get(slug)?.abort();
-    const controller = new AbortController();
-    turns.set(slug, controller);
-    try {
-      await ask(slug, text, controller.signal);
-    } finally {
-      if (turns.get(slug) === controller) turns.delete(slug);
-    }
+    const bot = runtime.store.requireBot(slug);
+    const job = jobs.enqueue({ botId: bot.id, task: text, channel: "text" });
+    const result = await jobs.wait(job.id);
+    if (result.status === "failed") throw new Error(result.error);
     return chatItems(slug);
   });
   ipcMain.handle("chat:stop", (_event, slug: string) => {
-    if (typeof slug === "string") turns.get(slug)?.abort();
+    const bot = runtime.store.requireBot(slug);
+    for (const job of jobs.list(bot.id)) if (job.status === "running") jobs.cancel(job.id);
+  });
+  ipcMain.handle("job:cancel", (_event, id: string) => jobs.cancel(id));
+  ipcMain.handle("job:retry", (_event, id: string) => jobs.retry(id));
+  ipcMain.handle("stage:ack", (_event, slug: string, requestId: string, receipt: { page: number; totalPages: number; title?: string; error?: string }) => stages.acknowledge(slug, requestId, receipt));
+  ipcMain.handle("stage:position", (_event, slug: string, position: { path: string; page: number; totalPages: number; mode: "canvas" | "file" }) => {
+    runtime.store.requireBot(slug);
+    if (Number.isSafeInteger(position.page) && Number.isSafeInteger(position.totalPages) && position.page > 0 && position.page <= position.totalPages && liveSlug === slug) live?.locate(position.path, position.page, position.totalPages, position.mode);
   });
   ipcMain.handle("settings:models", async (_event, patch: SecretPatch) => {
     const draft = draftSecrets(patch);
@@ -383,7 +418,7 @@ function registerIpc(): void {
       realtimeModel: choice.model,
       realtimeVoice: choice.voice,
       realtimeRegion: choice.region,
-      realtimeWorkspace: choice.model.startsWith("qwen3.8") ? choice.workspace : "",
+      realtimeWorkspace: choice.service === "qwen" ? choice.workspace : "",
       realtimeUrl: choice.url,
     });
     publish();
@@ -403,8 +438,10 @@ function registerIpc(): void {
     if (typeof audio !== "string" || !audio) return;
     live?.sendAudio(Buffer.from(audio, "base64"));
   });
-  ipcMain.on("call:idle", (_event, serial: number) => {
-    live?.noteSpeakerIdle(serial);
+  ipcMain.on("call:position", (_event, position: PlaybackPosition) => live?.notePlayback(position));
+  ipcMain.handle("call:control", (_event, action: "pause" | "resume" | "complete") => { if (["pause", "resume", "complete"].includes(action)) live?.control(action); });
+  ipcMain.on("call:idle", (_event, serial: number, callId?: string) => {
+    live?.noteSpeakerIdle(serial, callId);
   });
   ipcMain.handle("browser:bounds", (_event, bounds: { x: number; y: number; width: number; height: number } | null) => {
     browser.setBounds(bounds);
@@ -433,7 +470,7 @@ function attachDownloads(): void {
         const bytes = readFileSync(savePath);
         const bot = runtime.store.requireBot(browser.ownerSlug || runtime.activeBot().slug);
         const added = runtime.store.addLibraryBytes(bot.id, filename, bytes);
-        send("stage", { mode: "file", id: added.ref.id, filename: added.ref.filename, page: 1 });
+        send("stage", { slug: bot.slug, mode: "file", id: added.ref.id, filename: added.ref.filename, page: 1 });
         send("download", { slug: bot.slug, id: added.ref.id, filename: added.ref.filename });
         publish();
       } catch (error) {
@@ -445,7 +482,7 @@ function attachDownloads(): void {
 }
 
 function appIcon() {
-  return nativeImage.createFromPath(path.join(here, "../icon.png"));
+  return nativeImage.createFromPath(path.join(here, "icon.png"));
 }
 
 async function createWindow(): Promise<void> {
@@ -454,7 +491,7 @@ async function createWindow(): Promise<void> {
   window = new BrowserWindow({
     width: 1280,
     height: 840,
-    minWidth: 980,
+    minWidth: 760,
     minHeight: 680,
     icon,
     titleBarStyle: "hiddenInset",
@@ -469,14 +506,14 @@ async function createWindow(): Promise<void> {
   });
   browser.attach(window);
   if (devUrl) await window.loadURL(devUrl);
-  else await window.loadFile(path.join(here, "../renderer/index.html"));
+  else await window.loadFile(path.join(here, "renderer/index.html"));
   window.on("closed", () => {
     window = null;
   });
 }
 
 function realtimeChoice() {
-  return resolveRealtime({
+  const choice = resolveRealtime({
     service: secrets.realtimeService,
     model: secrets.realtimeModel,
     voice: secrets.realtimeVoice,
@@ -484,6 +521,7 @@ function realtimeChoice() {
     workspace: secrets.realtimeWorkspace,
     url: secrets.realtimeUrl,
   });
+  return { ...choice, url: process.env.XIAOWANG_REALTIME_URL?.trim() || choice.url };
 }
 
 function startPreview(patch: SecretPatch): void {
@@ -506,6 +544,7 @@ function startPreview(patch: SecretPatch): void {
       tools: [],
       audioFormat: endpoint.audioFormat,
       transcriptionModel: endpoint.transcriptionModel,
+      family: endpoint.family,
       voice: choice.voice,
     });
   openCall(socketUrl(endpoint), key, session, endpoint.inputRate, endpoint.outputRate, "", PREVIEW_LINE);
@@ -531,15 +570,24 @@ function startCall(slug: string): void {
       tools,
       audioFormat: endpoint.audioFormat,
       transcriptionModel: endpoint.transcriptionModel,
+      family: endpoint.family,
       voice: choice.voice,
     });
   openCall(socketUrl(endpoint), key, session, endpoint.inputRate, endpoint.outputRate, slug, "", {
-    async runTool(name, args) {
-      if (name === "ask_text") {
+    async runTool(name, args, callId, signal) {
+      if (name === "ask_text" || name === "delegate_task") {
         const task = taskArgument(args);
         if (!task) return askTextResult("missing", locale);
-        if (!beginTurn(slug, handoffText(task, live?.transcript() ?? [], bot.name, locale), "voice")) return askTextResult("busy", locale);
-        return askTextResult("started", locale);
+        let notify: TaskJob["notify"] = "when_idle";
+        try { if (JSON.parse(args).notify === "silent") notify = "silent"; } catch { /* validated by taskArgument */ }
+        const job = jobs.enqueue({ botId: bot.id, task: handoffText(task, live?.transcript() ?? [], bot.name, locale), channel: "voice", notify, sourceCallId: callId });
+        return JSON.stringify({ id: job.id, status: job.status, notify, message: locale === "en" ? "Task saved and queued. Completion will be reported according to notify." : "任务已保存并排队，按通知设置反馈完成结果。" });
+      }
+      if (name === "get_task") {
+        const id = JSON.parse(args || "{}").id;
+        const job = jobs.get(typeof id === "string" ? id : "");
+        if (job.botId !== bot.id) throw new Error("这个任务属于其他工作区。");
+        return JSON.stringify(job);
       }
       let input: unknown = {};
       try {
@@ -550,23 +598,15 @@ function startCall(slug: string): void {
       const outcome = await executeTool(name, input, {
         store: runtime.store,
         bot,
-        enqueueKickoff: (job) => runtime.enqueueKickoff(job),
+        enqueueKickoff: job => { jobs.enqueue({ botId: job.botId, task: job.task, channel: "system" }); },
         env: envFromSecrets(),
         browser: browserFor(slug),
-        stage: {
-          show(view) {
-            send("stage", { slug: bot.slug, ...view });
-            publish();
-          },
-        },
+        signal,
+        stage: { show: view => stages.show(bot.slug, view) },
       });
-      runtime.store.append(bot.id, {
-        type: "tool_result",
-        callId: `voice_${Date.now()}`,
-        name,
-        output: outcome.output,
-        isError: outcome.isError,
-      });
+      runtime.store.append(bot.id, { type: "assistant_turn", channel: "voice", text: "", toolCalls: [{ id: callId || `voice_${Date.now()}`, name, input }] });
+      runtime.store.append(bot.id, { type: "tool_result", callId: callId || `voice_${Date.now()}`, name, output: outcome.output, isError: outcome.isError });
+      if (outcome.artifact) runtime.store.append(bot.id, { type: "artifact", ...outcome.artifact });
       publish();
       return outcome.output;
     },
@@ -583,42 +623,56 @@ function openCall(
   previewText: string,
   extra?: {
     onTranscript?: (who: "user" | "assistant", text: string) => void;
-    runTool?: (name: string, args: string) => Promise<string>;
+    runTool?: (name: string, args: string, callId?: string, signal?: AbortSignal) => Promise<string>;
   },
 ): void {
   const preview = Boolean(previewText);
   live?.hangup();
+  liveSlug = slug;
+  liveState = null;
+  const initial = slug ? runtime.store.getEvents(runtime.store.requireBot(slug).id).findLast(item => item.event.type === "presentation")?.event : undefined;
+  let previousPresentation = "";
   let call: LiveCall;
   call = new LiveCall(url, key, session, {
+    onState(state) {
+      liveState = state;
+      send("call", { slug, callId: call.id, phase: "state", state, preview });
+      const next = JSON.stringify(state.presentation);
+      if (slug && next !== previousPresentation) {
+        previousPresentation = next;
+        runtime.store.append(runtime.store.requireBot(slug).id, { type: "presentation", state: state.presentation });
+      }
+    },
     onPhase(phase, detail) {
       if (phase === "closed" && !preview && slug) {
         const lines = call.transcript();
         if (lines.length > 0) {
           const bot = runtime.store.requireBot(slug);
-          runtime.store.append(bot.id, { type: "call", startedAt: call.startedAt(), endedAt: new Date().toISOString(), lines });
+          runtime.store.append(bot.id, { type: "call", callId: call.id, startedAt: call.startedAt(), endedAt: new Date().toISOString(), lines });
           publish();
-          send("call", { slug, phase: "saved" });
+          send("call", { slug, callId: call.id, phase: "saved" });
         }
       }
-      send("call", { slug, phase, detail: detail ?? "", preview, inputRate, outputRate });
-      if (phase === "closed") live = null;
+      send("call", { slug, callId: call.id, phase, detail: detail ?? "", preview, inputRate, outputRate });
+      if (phase === "closed" && live === call) { live = null; liveSlug = ""; liveState = null; }
     },
-    onAudio(pcm, serial) {
-      send("call", { slug, phase: "audio", preview, audio: pcm.toString("base64"), serial });
+    onAudio(pcm, serial, identity) {
+      send("call", { slug, callId: call.id, phase: "audio", preview, audio: pcm.toString("base64"), serial, identity });
     },
     onInterrupt() {
-      if (!preview) send("call", { slug, phase: "interrupt" });
+      if (!preview) send("call", { slug, callId: call.id, phase: "interrupt" });
     },
-    onLine(who, text, partial) {
-      if (!preview) send("call", { slug, phase: "line", who, text, partial });
+    onLine(who, text, partial, itemId, order) {
+      if (!preview) send("call", { slug, callId: call.id, phase: "line", who, text, partial, itemId, order });
     },
     onTranscript(who, text) {
+      if (slug && text.trim()) runtime.store.append(runtime.store.requireBot(slug).id, { type: "voice_line", callId: call.id, who, text });
       extra?.onTranscript?.(who, text);
     },
-    runTool(name, args) {
-      return extra?.runTool?.(name, args) ?? Promise.resolve("");
+    runTool(name, args, callId, signal) {
+      return extra?.runTool?.(name, args, callId, signal) ?? Promise.resolve("");
     },
-  }, undefined, previewText);
+  }, undefined, previewText, initial?.type === "presentation" ? initial.state : undefined);
   live = call;
   call.start();
 }
@@ -643,6 +697,13 @@ app.whenReady().then(async () => {
     }
   });
   secrets = loadSecrets();
+  // Environment configuration stays in memory and never rewrites stored keys.
+  const overrides: Array<[keyof SecretRecord, string]> = [
+    ["model", "XIAOWANG_MODEL"], ["baseUrl", "XIAOWANG_BASE_URL"], ["apiStyle", "XIAOWANG_API_STYLE"], ["apiKey", "XIAOWANG_API_KEY"],
+    ["searchProvider", "XIAOWANG_SEARCH_PROVIDER"], ["searchUrl", "XIAOWANG_SEARCH_URL"], ["searchKey", "XIAOWANG_SEARCH_KEY"],
+    ["realtimeService", "XIAOWANG_REALTIME_SERVICE"], ["realtimeModel", "XIAOWANG_REALTIME_MODEL"], ["realtimeKey", "XIAOWANG_REALTIME_KEY"],
+  ];
+  for (const [field, variable] of overrides) if (process.env[variable]?.trim()) secrets[field] = process.env[variable]!.trim();
   attachDownloads();
   browser = new BrowserPane(
     () => runtime.activeBot().slug,
@@ -650,20 +711,29 @@ app.whenReady().then(async () => {
     (filename, bytes) => {
       const bot = runtime.store.requireBot(browser.ownerSlug || runtime.activeBot().slug);
       const added = runtime.store.addLibraryBytes(bot.id, filename, bytes);
-      send("stage", { mode: "file", id: added.ref.id, filename: added.ref.filename, page: 1 });
+      send("stage", { slug: bot.slug, mode: "file", id: added.ref.id, filename: added.ref.filename, page: 1 });
       send("download", { slug: bot.slug, id: added.ref.id, filename: added.ref.filename });
       publish();
       return { id: added.ref.id, filename: added.ref.filename };
     },
   );
+  jobs = new JobQueue(runtime.store, ask, jobChanged);
   registerIpc();
   await createWindow();
+  jobs.start();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow();
   });
 });
 
 app.on("window-all-closed", () => {
-  runtime?.close();
+  live?.hangup();
+  stages.dispose();
   if (process.platform !== "darwin") app.quit();
+});
+app.on("before-quit", () => {
+  live?.hangup();
+  jobs?.shutdown();
+  stages.dispose();
+  runtime?.close();
 });

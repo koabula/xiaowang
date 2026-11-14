@@ -56,11 +56,11 @@ export class BrowserPane {
 
   private frameType = "";
 
-  constructor(
-    private currentSlug: () => string,
-    private onState: (state: BrowserViewState) => void,
-    private onPdf: (filename: string, bytes: Buffer) => SavedPdf,
-  ) {
+  private readonly currentSlug: () => string;
+  private readonly onState: (state: BrowserViewState) => void;
+  private readonly onPdf: (filename: string, bytes: Buffer) => SavedPdf;
+  constructor(currentSlug: () => string, onState: (state: BrowserViewState) => void, onPdf: (filename: string, bytes: Buffer) => SavedPdf) {
+    this.currentSlug = currentSlug; this.onState = onState; this.onPdf = onPdf;
     this.driver = {
       holder: () => this.holder,
       navigate: (url) => this.navigate(url),
@@ -191,7 +191,7 @@ export class BrowserPane {
   private async capturePdf(pageUrl: string): Promise<SavedPdf | null> {
     const looksLikePdf = this.frameType.toLowerCase().includes("pdf") || /\/pdf(\/|$)/i.test(pageUrl);
     if (!looksLikePdf) return null;
-    const response = await net.fetch(pageUrl, { session: session.fromPartition("persist:xiaowang") });
+    const response = await session.fromPartition("persist:xiaowang").fetch(pageUrl);
     const type = response.headers.get("content-type") ?? "";
     const bytes = Buffer.from(await response.arrayBuffer());
     const header = bytes.subarray(0, 5).toString("utf8");

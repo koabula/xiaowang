@@ -6,7 +6,7 @@ export function inkFor(slug: string): string {
   if (slug === "xiaowang") return "#18181B";
   let hash = 0;
   for (const char of slug) hash = (hash * 33 + char.charCodeAt(0)) >>> 0;
-  return INKS[hash % INKS.length] ?? INKS[0];
+  return INKS[hash % INKS.length] ?? "#18181B";
 }
 
 export function shadeId(slug: string): string {

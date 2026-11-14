@@ -1,4 +1,7 @@
-export {};
+import type { TaskJob } from "../../src/types.ts";
+import type { AudioIdentity, PlaybackPosition, VoiceState } from "../main/call.ts";
+import type { StageReceipt } from "../../src/stage.ts";
+export type { TaskJob, VoiceState };
 
 declare global {
   interface Window {
@@ -14,9 +17,16 @@ declare global {
       readFile: (slug: string, id: string) => Promise<Uint8Array>;
       pages: (slug: string) => Promise<CanvasPage[]>;
       openPage: (slug: string, path: string, page?: number) => Promise<{ title: string; html: string; page: number }>;
+      openArtifact: (slug: string, path: string) => Promise<void>;
+      openReference: (slug: string, id: string, page: number) => Promise<void>;
+      openLink: (url: string) => Promise<void>;
       addFiles: () => Promise<void>;
       ask: (slug: string, text: string) => Promise<ChatItem[]>;
       stop: (slug: string) => Promise<void>;
+      cancelJob: (id: string) => Promise<void>;
+      retryJob: (id: string) => Promise<TaskJob>;
+      stageAck: (slug: string, requestId: string, receipt: StageReceipt & { error?: string }) => Promise<boolean>;
+      stagePosition: (slug: string, position: { path: string; page: number; totalPages: number; mode: "canvas" | "file" }) => Promise<void>;
       saveSettings: (patch: SettingsPatch) => Promise<SettingsView>;
       listModels: (patch: SettingsPatch) => Promise<string[]>;
       checkSettings: (patch: SettingsPatch) => Promise<string>;
@@ -30,7 +40,11 @@ declare global {
       callStop: () => Promise<void>;
       previewVoice: (patch: SettingsPatch) => Promise<void>;
       callAudio: (audio: string) => void;
-      callIdle: (serial: number) => void;
+      callIdle: (serial: number, callId?: string) => void;
+      callPosition: (position: PlaybackPosition) => void;
+      callControl: (action: "pause" | "resume" | "complete") => Promise<void>;
+      onDelta: (callback: (note: { slug: string; jobId: string; text: string }) => void) => () => void;
+      onJob: (callback: (job: TaskJob & { slug: string }) => void) => () => void;
       onState: (callback: (state: AppState) => void) => () => void;
       onStep: (callback: (step: StepNote) => void) => () => void;
       onTurn: (callback: (note: TurnNote) => void) => () => void;
@@ -46,9 +60,12 @@ export interface AppState {
   bots: BotRow[];
   activeSlug: string;
   settings: SettingsView;
+  jobs?: TaskJob[];
+  call?: { slug: string; state: VoiceState | null } | null;
 }
 
 export interface BotRow {
+  id?: string;
   slug: string;
   name: string;
   preview: string;
@@ -115,12 +132,17 @@ export interface SettingsPatch {
 }
 
 export interface CallNote {
+  callId?: string;
   slug: string;
-  phase: "connecting" | "live" | "closed" | "audio" | "interrupt" | "line" | "saved";
+  phase: "connecting" | "live" | "closed" | "audio" | "interrupt" | "line" | "saved" | "state";
+  state?: VoiceState;
+  identity?: AudioIdentity;
   detail?: string;
   who?: "user" | "assistant";
   text?: string;
   partial?: boolean;
+  itemId?: string;
+  order?: number;
   audio?: string;
   serial?: number;
   inputRate?: number;
@@ -148,9 +170,10 @@ export interface StepNote {
   text: string;
   isError: boolean;
   activity?: string;
+  jobId?: string;
 }
 
-export type StageNote = { slug: string } & (
+export type StageNote = { slug: string; requestId?: string } & (
   | { mode: "file"; id: string; filename: string; page: number }
   | { mode: "browser"; url: string }
   | { mode: "canvas"; title: string; html: string; page?: number }

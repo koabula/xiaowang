@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "小王同学无头 Agent 内核：多 Bot 会话、工具循环、文献检索",
+  "description": "小王同学 · Realtime voice and research agent",
   "bin": {
     "xiaowang": "./src/cli.ts"
   },
@@ -13,16 +13,28 @@
   "scripts": {
     "xiaowang": "node src/cli.ts",
     "desktop": "node desktop/scripts/dev.mjs",
-    "test": "node --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "test": "node --test --test-timeout=30000 test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "node desktop/scripts/build.mjs",
+    "preview": "vite --config desktop/vite.config.ts",
+    "start": "electron .",
+    "pack": "npm run build && electron-builder --dir --publish never",
+    "dist": "npm run build && electron-builder --publish never",
+    "dist:mac": "npm run build && electron-builder --mac --publish never",
+    "dist:win": "npm run build && electron-builder --win --publish never",
+    "dist:linux": "npm run build && electron-builder --linux --publish never",
+    "test:desktop": "node --test --test-timeout=60000 e2e/*.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^6.3.0",
     "electron": "^45.3.2",
+    "electron-builder": "^26.18.0",
     "esbuild": "^0.28.2",
+    "playwright": "^1.65.1",
     "typescript": "^5.9.3",
     "vite": "^8.3.8"
   },
@@ -36,6 +48,9 @@
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "unpdf": "^2.1.0"
-  }
+    "unpdf": "^2.1.0",
+    "ws": "^8.23.0"
+  },
+  "main": "desktop/dist/main.js",
+  "author": "XiaoWang contributors"
 }

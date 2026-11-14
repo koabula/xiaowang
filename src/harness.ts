@@ -38,6 +38,8 @@ export interface RunTurnOptions {
   locale?: Locale;
   signal?: AbortSignal;
   onStep?: (step: StepEvent) => void;
+  onTextDelta?: (bot: Bot, text: string) => void;
+  onKickoff?: (job: import("./types.ts").Kickoff) => void;
 }
 
 /**
@@ -46,6 +48,7 @@ export interface RunTurnOptions {
  */
 export async function runTurn(runtime: Runtime, options: RunTurnOptions): Promise<TurnResult> {
   const primary = await runTurnOnce(runtime, options);
+  if (options.onKickoff) return primary;
   const kickoffs: TurnResult[] = [];
   let ran = 0;
   while (runtime.kickoffs.length > 0 && ran < MAX_KICKOFFS) {
@@ -90,7 +93,10 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
       system: projected.system,
       messages: projected.messages,
       tools: toolSchemas(),
+      signal: options.signal,
+      onTextDelta: options.onTextDelta ? (text) => options.onTextDelta?.(current, text) : undefined,
     });
+    options.signal?.throwIfAborted();
     lastText = result.text;
     const toolCalls = normalizeToolCalls(result, step);
     if (!result.text.trim() && toolCalls.length === 0) {
@@ -138,11 +144,12 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
       const outcome = await executeTool(call.name, call.input, {
         store: runtime.store,
         bot: runtime.store.requireBot(bot.id),
-        enqueueKickoff: (job) => runtime.enqueueKickoff(job),
+        enqueueKickoff: (job) => options.onKickoff ? options.onKickoff(job) : runtime.enqueueKickoff(job),
         fetchImpl: options.fetchImpl,
         env: options.env ?? process.env,
         browser: options.browser,
         stage: options.stage,
+        signal: options.signal,
       });
       runtime.store.append(bot.id, {
         type: "tool_result",

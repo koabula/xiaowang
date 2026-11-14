@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, AudioLines, Check, ChevronDown, ChevronRight, ChevronUp, ExternalLink, Eye, FileText, Frame, Globe, Maximize2, MessageSquareText, Mic, MicOff, Minimize2, MousePointer2, PanelRight, Phone, PhoneOff, Play, Plus, RefreshCw, Search, Settings, Square, X } from "lucide-react";
 import * as Select from "@radix-ui/react-select";
 import Markdown from "react-markdown";
@@ -6,6 +6,11 @@ import remarkGfm from "remark-gfm";
 import { Avatar, nextAvatarSeed } from "./avatar.tsx";
 import { INK_CHOICES, inkFor } from "./ink.ts";
 import { createCallAudio } from "./call-audio.ts";
+import { VoicePanel, type LiveCallView, type LiveCaption } from "./voice-panel.tsx";
+import { TaskPanel } from "./task-panel.tsx";
+import { RichText } from "./rich-text.tsx";
+const DocumentReader = lazy(() => import("./document-reader.tsx").then(module => ({ default: module.DocumentReader })));
+import { withCanvasPager } from "./canvas-pager.ts";
 import { copyFor, localeOf, type Copy, type Locale } from "./copy.ts";
 import { REALTIME_SERVICES, modelsFor, resolveRealtime, voicesFor, type RealtimeRegion, type RealtimeServiceId } from "../../src/realtime-catalog.ts";
 import { mergeUtterance } from "../../src/realtime.ts";
@@ -14,8 +19,8 @@ import type { AppState, BotRow, BrowserNote, CallNote, CanvasPage, ChatItem, Lib
 type StageSnap = {
   mode: "file" | "browser" | "canvas" | "profile";
   open: boolean;
-  file: { id: string; filename: string; page: number } | null;
-  canvas: { title: string; html: string; page: number } | null;
+  file: { id: string; filename: string; page: number; requestId?: string } | null;
+  canvas: { title: string; html: string; page: number; requestId?: string } | null;
 };
 
 const EMPTY_STAGE: StageSnap = { mode: "file", open: true, file: null, canvas: null };
@@ -52,9 +57,11 @@ export function App() {
   const [botName, setBotName] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [call, setCall] = useState<LiveCallView | null>(null);
+  const [streamBySlug, setStreamBySlug] = useState<Record<string, { jobId: string; text: string }>>({});
   const audioRef = useRef(createCallAudio(
     (audio) => window.xiaowang.callAudio(audio),
-    (serial) => window.xiaowang.callIdle(serial),
+    (serial, callId) => window.xiaowang.callIdle(serial, callId),
+    position => window.xiaowang.callPosition(position),
   ));
   const [toast, setToast] = useState("");
   const [rightWidth, setRightWidth] = useState(420);
@@ -66,6 +73,8 @@ export function App() {
   const holeRef = useRef<HTMLDivElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef("");
+  const liveCallId = useRef("");
+  const finishedJobs = useRef(new Set<string>());
   const active = state?.activeSlug ?? "";
   activeRef.current = active;
   const stage = stageBySlug[active] ?? EMPTY_STAGE;
@@ -74,7 +83,7 @@ export function App() {
   const canvas = stage.canvas;
   const stageOpen = stage.open;
   const copy = copyFor(localeOf(state?.settings.locale));
-  const busy = Boolean(busyBySlug[active]);
+  const busy = Boolean(busyBySlug[active]) || Boolean(state?.jobs?.some(job => job.botId === state.bots.find(bot => bot.slug === active)?.id && (job.status === "running" || job.status === "queued")));
   const draft = draftBySlug[active] ?? "";
   const activity = activityBySlug[active] ?? "";
   const current = state?.bots.find((bot) => bot.slug === active);
@@ -90,6 +99,14 @@ export function App() {
   useEffect(() => {
     void window.xiaowang.getState().then(setState);
     const stops = [
+      window.xiaowang.onDelta(note => { if (!finishedJobs.current.has(note.jobId)) setStreamBySlug(prev => ({ ...prev, [note.slug]: { jobId: note.jobId, text: (prev[note.slug]?.jobId === note.jobId ? prev[note.slug]?.text || "" : "") + note.text } })); }),
+      window.xiaowang.onJob(job => {
+        if (["succeeded", "cancelled", "failed", "interrupted"].includes(job.status)) {
+          finishedJobs.current.add(job.id);
+          setStreamBySlug(prev => prev[job.slug]?.jobId === job.id ? { ...prev, [job.slug]: { jobId: job.id, text: "" } } : prev);
+        } else finishedJobs.current.delete(job.id);
+        setState(prev => prev ? { ...prev, jobs: [...(prev.jobs ?? []).filter(item => item.id !== job.id), job] } : prev);
+      }),
       window.xiaowang.onState(setState),
       window.xiaowang.onBrowser((next) => {
         setBrowser(next);
@@ -97,13 +114,17 @@ export function App() {
       }),
       window.xiaowang.onDownload((note) => {
         setToast(note.error ? note.error : `已放入资料库 ${note.filename ?? ""}`);
-        if (note.slug && note.slug === activeRef.current) void window.xiaowang.library(note.slug).then(setLibrary);
+        if (note.slug && note.slug === activeRef.current) void window.xiaowang.library(note.slug).then(refs => { if (activeRef.current === note.slug) setLibrary(refs); });
       }),
       window.xiaowang.onStage((view) => rememberStage(view)),
       window.xiaowang.onCall((note) => {
         void hearCall(note);
       }),
       window.xiaowang.onStep((step) => {
+        if (step.kind === "assistant") {
+          if (step.slug === activeRef.current) void window.xiaowang.events(step.slug).then(items => { if (activeRef.current === step.slug) setItems(items); });
+          setStreamBySlug(prev => ({ ...prev, [step.slug]: { jobId: step.jobId || "", text: "" } }));
+        }
         if (!step.activity?.trim()) return;
         setActivityBySlug((prev) => ({ ...prev, [step.slug]: step.activity!.trim() }));
       }),
@@ -115,8 +136,8 @@ export function App() {
         }
         if (note.error) setToast(note.error.length > 160 ? `${note.error.slice(0, 160)}…` : note.error);
         if (activeRef.current !== note.slug) return;
-        void window.xiaowang.events(note.slug).then(setItems);
-        void window.xiaowang.library(note.slug).then(setLibrary);
+        void window.xiaowang.events(note.slug).then(items => { if (activeRef.current === note.slug) setItems(items); });
+        void window.xiaowang.library(note.slug).then(refs => { if (activeRef.current === note.slug) setLibrary(refs); });
       }),
     ];
     return () => stops.forEach((stop) => stop());
@@ -124,9 +145,11 @@ export function App() {
 
   useEffect(() => {
     if (!active) return;
-    void window.xiaowang.events(active).then(setItems);
-    void window.xiaowang.library(active).then(setLibrary);
-    void window.xiaowang.pages(active).then(setPages).catch(() => setPages([]));
+    let cancelled = false;
+    void Promise.all([window.xiaowang.events(active), window.xiaowang.library(active), window.xiaowang.pages(active)]).then(([events, refs, pages]) => {
+      if (!cancelled && activeRef.current === active) { setItems(events); setLibrary(refs); setPages(pages); }
+    }).catch(error => { if (!cancelled) setToast(plainError(error)); });
+    return () => { cancelled = true; };
   }, [active]);
 
   useEffect(() => {
@@ -192,20 +215,20 @@ export function App() {
     if (!view.slug) return;
     if (view.mode === "file") {
       pinTab(view.slug, "files", view.id);
-      patchStage(view.slug, { mode: "file", open: true, file: { id: view.id, filename: view.filename, page: view.page } });
+      patchStage(view.slug, { mode: "file", open: true, file: { id: view.id, filename: view.filename, page: view.page, requestId: view.requestId } });
     } else if (view.mode === "browser") {
       patchStage(view.slug, { mode: "browser", open: true });
       if (view.url && view.slug === activeRef.current) setAddress(view.url);
     } else {
       pinTab(view.slug, "pages", view.title);
-      patchStage(view.slug, { mode: "canvas", open: true, canvas: { title: view.title, html: view.html, page: view.page ?? 1 } });
+      patchStage(view.slug, { mode: "canvas", open: true, canvas: { title: view.title, html: view.html, page: view.page ?? 1, requestId: view.requestId } });
     }
   }
 
   async function sendMessage() {
     const slug = activeRef.current;
     const text = (draftBySlug[slug] ?? "").trim();
-    if (!text || !slug || busyBySlug[slug]) return;
+    if (!text || !slug) return;
     setDraftBySlug((prev) => ({ ...prev, [slug]: "" }));
     setBusyBySlug((prev) => ({ ...prev, [slug]: true }));
     setActivityBySlug((prev) => ({ ...prev, [slug]: "" }));
@@ -219,7 +242,7 @@ export function App() {
     } catch (error) {
       setToast(plainError(error));
     } finally {
-      setBusyBySlug((prev) => ({ ...prev, [slug]: false }));
+      setBusyBySlug(prev => ({ ...prev, [slug]: false }));
     }
   }
 
@@ -249,10 +272,18 @@ export function App() {
 
   async function hearCall(note: CallNote) {
     if (note.preview) return;
+    if (note.callId && note.phase === "connecting") liveCallId.current = note.callId;
+    if (note.callId && liveCallId.current && note.callId !== liveCallId.current) return;
+    if (note.callId) liveCallId.current = note.callId;
+    if (note.phase === "state" && note.state) {
+      setCall(prev => prev ? { ...prev, state: note.state } : note.state?.phase !== "ended" ? { slug: note.slug, phase: "connecting", captions: [], muted: false, audioReady: false, state: note.state } : null);
+      return;
+    }
     if (note.phase === "live") {
-      setCall({ phase: "live", captions: [], muted: false });
+      setCall(prev => ({ slug: note.slug, phase: "live", captions: prev?.captions ?? [], muted: false, audioReady: false, state: prev?.state }));
       try {
         await audioRef.current.start(note.inputRate || 16_000, note.outputRate || 24_000);
+        setCall(prev => prev ? { ...prev, audioReady: true } : null);
       } catch (error) {
         audioRef.current.stop();
         setCall(null);
@@ -262,7 +293,7 @@ export function App() {
       return;
     }
     if (note.phase === "audio" && note.audio) {
-      audioRef.current.play(note.audio, note.serial);
+      audioRef.current.play(note.audio, note.serial, note.identity);
       return;
     }
     if (note.phase === "interrupt") {
@@ -273,7 +304,7 @@ export function App() {
       const who = note.who;
       const text = note.text;
       const partial = Boolean(note.partial);
-      setCall((currentCall) => currentCall ? { ...currentCall, captions: foldCaption(currentCall.captions, who, text, partial) } : currentCall);
+      setCall((currentCall) => currentCall ? { ...currentCall, captions: foldCaption(currentCall.captions, who, text, partial, note.itemId, note.order) } : currentCall);
       return;
     }
     if (note.phase === "saved" && note.slug === activeRef.current) {
@@ -281,6 +312,7 @@ export function App() {
       return;
     }
     if (note.phase === "closed") {
+      liveCallId.current = "";
       audioRef.current.stop();
       setCall(null);
       if (note.detail) setToast(note.detail);
@@ -307,7 +339,8 @@ export function App() {
       await endCall();
       return;
     }
-    setCall({ phase: "connecting", captions: [], muted: false });
+    liveCallId.current = "";
+    setCall({ slug: activeRef.current, phase: "connecting", captions: [], muted: false, audioReady: false });
     try {
       await window.xiaowang.callStart(activeRef.current);
     } catch (error) {
@@ -378,30 +411,21 @@ export function App() {
             <PanelRight size={16} />
           </button>
         </header>
-        {call ? (
-          <section className="call-stage">
-            <Avatar slug={active || "xiaowang"} seed={current?.avatarSeed} ink={current?.avatarInk} size={88} mood={callMood(call)} />
-            <p>{callStatus(call, copy)}</p>
-            <CallLines lines={call.captions} ink={ink} />
-            <div className="call-controls">
-              <button type="button" title={call.muted ? copy.unmute : copy.mute} onClick={toggleMute}>
-                {call.muted ? <MicOff size={16} /> : <Mic size={16} />}
-              </button>
-              <button className="end" type="button" title={copy.hangup} onClick={() => void endCall()}><PhoneOff size={16} /></button>
-            </div>
-          </section>
-        ) : null}
         <div className="messages" ref={threadRef}>
-          {items.filter(isConversation).map((item) => <Message key={item.id} item={item} ink={ink} name={current?.name || "小王同学"} copy={copy} />)}
-          {busy ? (
+          {items.filter(isConversation).length === 0 && !busy ? <div className="welcome"><Avatar slug={active || "xiaowang"} seed={current?.avatarSeed} ink={ink} size={56} /><h1>{localeOf(state?.settings.locale) === "en" ? "What shall we explore?" : "今天一起研究什么？"}</h1><p>{localeOf(state?.settings.locale) === "en" ? "Bring a paper, ask a question, or start a voice conversation." : "放入一篇论文，提出一个问题，或直接与小王聊聊。"}</p></div> : null}
+          <TaskPanel slug={active} jobs={(state?.jobs ?? []).filter(job => job.botId === state?.bots.find(bot => bot.slug === active)?.id)} locale={localeOf(state?.settings.locale)} onError={setToast} />
+          {items.filter(isConversation).map((item) => <Message key={item.id} slug={active} item={item} ink={ink} name={current?.name || "小王同学"} copy={copy} />)}
+          {streamBySlug[active]?.text ? <article className="bubble assistant streaming"><RichText slug={active} text={streamBySlug[active]?.text || ""} /><span className="stream-caret" /></article> : null}
+          {busy && !streamBySlug[active]?.text ? (
             <div className="thinking">
               <Avatar slug={active || "xiaowang"} seed={current?.avatarSeed} ink={current?.avatarInk} size={28} mood="think" />
               {activity ? <em key={activity}>{activity}</em> : <span className="dots" aria-hidden="true"><i /><i /><i /></span>}
             </div>
           ) : null}
         </div>
+        {call && call.slug === active ? <VoicePanel call={call} audio={audioRef.current} name={current?.name || "小王"} seed={current?.avatarSeed} ink={ink} locale={localeOf(state?.settings.locale)} onMute={toggleMute} onEnd={() => void endCall()} /> : call ? <button className="call-away" type="button" onClick={() => void window.xiaowang.setActive(call.slug)}><Phone size={14} />{localeOf(state?.settings.locale) === "en" ? "Return to your call" : "返回正在进行的通话"}</button> : null}
         <form className="composer" onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
-          <button className="icon" type="button" title={copy.addToLibrary} onClick={() => void window.xiaowang.addFiles().then(() => active && window.xiaowang.library(active).then(setLibrary))}><Plus size={18} /></button>
+          <button className="icon" type="button" title={copy.addToLibrary} onClick={() => void window.xiaowang.addFiles().then(async () => { if (active) setLibrary(await window.xiaowang.library(active)); })}><Plus size={18} /></button>
           <textarea
             rows={1}
             value={draft}
@@ -412,16 +436,14 @@ export function App() {
               setDraftBySlug((prev) => ({ ...prev, [slug]: value }));
             }}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 void sendMessage();
               }
             }}
           />
           {busy ? <button className="call stop" type="button" title={copy.stop} onClick={() => void window.xiaowang.stop(active)}><Square size={14} /></button> : null}
-          <button className={call ? "call stop" : "call"} style={call ? undefined : { background: ink }} type="button" title={call ? copy.hangup : copy.call} onClick={() => void toggleCall()}>
-            {call ? <PhoneOff size={16} /> : <><span /><span /><span /><span /></>}
-          </button>
+          {!call ? <button className="call" style={{ background: ink }} type="button" title={copy.call} aria-label={copy.call} onClick={() => void toggleCall()}><span /><span /><span /><span /></button> : null}
         </form>
       </main>
 
@@ -553,12 +575,12 @@ function plainError(error: unknown): string {
   return message.length > 160 ? `${message.slice(0, 160)}…` : message;
 }
 
-function Message({ item, ink, name, copy }: { item: ChatItem; ink: string; name: string; copy: Copy }) {
+function Message({ item, ink, name, copy, slug }: { item: ChatItem; ink: string; name: string; copy: Copy; slug: string }) {
   if (item.kind === "call") return <CallCard item={item} name={name} ink={ink} copy={copy} />;
   if (item.kind === "user") return <div className="bubble user" style={{ background: ink }}>{item.text}</div>;
   return (
     <div className="bubble assistant">
-      <Markdown remarkPlugins={[remarkGfm]}>{item.text}</Markdown>
+      <RichText slug={slug} text={item.text} />
     </div>
   );
 }
@@ -590,22 +612,17 @@ function CallLines({ lines, ink }: { lines: Array<{ who: "user" | "assistant"; t
   );
 }
 
-interface LiveCaption {
-  who: "user" | "assistant";
-  text: string;
-  live: boolean;
-}
-
-interface LiveCallView {
-  phase: "connecting" | "live";
-  captions: LiveCaption[];
-  muted: boolean;
-}
-
-function foldCaption(captions: LiveCaption[], who: "user" | "assistant", text: string, partial: boolean): LiveCaption[] {
+function foldCaption(captions: LiveCaption[], who: "user" | "assistant", text: string, partial: boolean, itemId?: string, order?: number): LiveCaption[] {
+  if (itemId) {
+    const index = captions.findIndex(line => line.itemId === itemId && line.who === who);
+    const next = captions.map(line => ({ ...line }));
+    const line: LiveCaption = { who, text, live: partial, itemId, order };
+    if (index === -1) next.push(line); else next[index] = line;
+    return next.sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER));
+  }
   const clean = who === "user" ? mergeUtterance("", text) : text.trim();
   if (!clean) return captions;
-  const next = captions.slice(-6);
+  const next = captions.map(line => ({ ...line }));
   const last = next[next.length - 1];
   const merged = last && who === "user" ? mergeUtterance(last.text, clean) : clean;
   const revised = Boolean(last && who === "user" && merged === clean);
@@ -615,20 +632,7 @@ function foldCaption(captions: LiveCaption[], who: "user" | "assistant", text: s
   } else {
     next.push({ who, text: clean, live: partial });
   }
-  return next.slice(-4);
-}
-
-function callStatus(call: LiveCallView, copy: Copy): string {
-  if (call.phase === "connecting") return copy.connecting;
-  const last = call.captions[call.captions.length - 1];
-  if (last?.live && last.who === "user") return copy.listening;
-  if (last?.live && last.who === "assistant") return copy.speaking;
-  return copy.inCall;
-}
-
-function callMood(call: LiveCallView): "idle" | "think" {
-  const last = call.captions[call.captions.length - 1];
-  return last?.live && last.who === "assistant" ? "think" : "idle";
+  return next;
 }
 
 function leafName(label: string): string {
@@ -723,7 +727,7 @@ function FileStage({
 }: {
   slug: string;
   library: LibraryItem[];
-  file: { id: string; filename: string; page: number } | null;
+  file: { id: string; filename: string; page: number; requestId?: string } | null;
   openIds: string[];
   menu: boolean;
   copy: Copy;
@@ -751,84 +755,9 @@ function FileStage({
         onClose={onClose}
       />
       ) : null}
-      {file && slug ? <Reader slug={slug} file={file} /> : <p className="empty">{copy.pickFile}</p>}
+      {file && slug ? <Suspense fallback={<p className="empty">Loading…</p>}><DocumentReader slug={slug} file={file} /></Suspense> : <p className="empty">{copy.pickFile}</p>}
     </div>
   );
-}
-
-function Reader({ slug, file }: { slug: string; file: { id: string; filename: string; page: number } }) {
-  const [text, setText] = useState("");
-  const isPdf = file.filename.toLowerCase().endsWith(".pdf");
-  useEffect(() => {
-    if (isPdf) return;
-    let stop = false;
-    void window.xiaowang.readFile(slug, file.id).then((bytes) => {
-      if (stop) return;
-      const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-      setText(new TextDecoder().decode(data));
-    });
-    return () => {
-      stop = true;
-    };
-  }, [slug, file.id, isPdf]);
-  if (isPdf) {
-    const src = `xwlib://view/${encodeURIComponent(slug)}/${encodeURIComponent(file.id)}#page=${file.page}`;
-    return <iframe className="pdf-frame" title={file.filename} src={src} />;
-  }
-  if (file.filename.toLowerCase().endsWith(".md") || file.filename.toLowerCase().endsWith(".markdown")) {
-    return <div className="prose"><Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown></div>;
-  }
-  return <pre className="plain">{text}</pre>;
-}
-
-const CANVAS_PAGER_SHIM = `<script>(function(){
-function flip(page){
-  var n=Number(page); if(!Number.isFinite(n)||n<1)return;
-  var idx=Math.round(n)-1;
-  var hooks=["goToSlide","goTo","showSlide","setSlide","go"];
-  for(var i=0;i<hooks.length;i++){
-    var fn=window[hooks[i]];
-    if(typeof fn==="function"){ try{ fn(idx); return; }catch(_){} }
-  }
-  var groups=["section.slide",".slide","[data-slide]","main > section","body > section","article > section"];
-  var slides=null;
-  for(var g=0;g<groups.length;g++){
-    var list=document.querySelectorAll(groups[g]);
-    if(list.length>1){ slides=list; break; }
-  }
-  if(!slides||!slides.length)return;
-  var target=Math.min(slides.length-1,Math.max(0,idx));
-  var current=-1;
-  for(var s=0;s<slides.length;s++){
-    var el=slides[s], cs=getComputedStyle(el);
-    if(el.classList.contains("active")||el.classList.contains("current")||el.getAttribute("aria-hidden")==="false"){ current=s; break; }
-    if(current<0&&cs.display!=="none"&&cs.visibility!=="hidden"&&Number(cs.opacity||1)>0.1) current=s;
-  }
-  if(current>=0&&current!==target){
-    var delta=target-current, key=delta>0?"ArrowRight":"ArrowLeft", code=delta>0?39:37, steps=Math.abs(delta);
-    for(var k=0;k<steps;k++){
-      var ev=new KeyboardEvent("keydown",{key:key,code:key,keyCode:code,which:code,bubbles:true,cancelable:true});
-      document.dispatchEvent(ev); window.dispatchEvent(ev);
-    }
-  }
-  var chosen=slides[target];
-  if(chosen&&getComputedStyle(chosen).display==="none"){
-    for(var h=0;h<slides.length;h++){
-      slides[h].classList.toggle("active",h===target);
-      slides[h].style.display=h===target?"":"none";
-    }
-  } else if(chosen&&chosen.scrollIntoView){
-    chosen.scrollIntoView({behavior:"smooth",block:"start"});
-  }
-}
-window.addEventListener("message",function(e){
-  if(e&&e.data&&e.data.type==="xiaowang:page") flip(e.data.page);
-});
-})();</script>`;
-
-function withCanvasPager(html: string): string {
-  if (html.includes("xiaowang:page")) return html;
-  return html.includes("</body>") ? html.replace("</body>", `${CANVAS_PAGER_SHIM}</body>`) : `${html}${CANVAS_PAGER_SHIM}`;
 }
 
 function CanvasStage({
@@ -843,7 +772,7 @@ function CanvasStage({
 }: {
   slug: string;
   pages: CanvasPage[];
-  canvas: { title: string; html: string; page: number } | null;
+  canvas: { title: string; html: string; page: number; requestId?: string } | null;
   openPaths: string[];
   menu: boolean;
   copy: Copy;
@@ -851,11 +780,28 @@ function CanvasStage({
   onClose: (path: string) => void;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const page = canvas?.page ?? 1;
+  const [page, setPage] = useState(canvas?.page ?? 1);
+  const [totalPages, setTotalPages] = useState(0);
+  const [pageError, setPageError] = useState("");
+  useEffect(() => { setPage(canvas?.page ?? 1); }, [canvas?.title, canvas?.page, canvas?.requestId]);
   useEffect(() => {
     if (!canvas) return;
-    frameRef.current?.contentWindow?.postMessage({ type: "xiaowang:page", page }, "*");
-  }, [canvas?.title, canvas?.html, page]);
+    const listener = (event: MessageEvent) => {
+      if (event.source !== frameRef.current?.contentWindow || event.data?.type !== "xiaowang:position") return;
+      const data = event.data as { page: number; totalPages: number; title?: string; requestId?: string; error?: string };
+      if (!Number.isSafeInteger(data.page) || !Number.isSafeInteger(data.totalPages) || data.totalPages < 1) return;
+      setTotalPages(data.totalPages); setPageError(data.error || "");
+      if (!data.error && data.page >= 1 && data.page <= data.totalPages) {
+        setPage(data.page);
+        void window.xiaowang.stagePosition(slug, { path: canvas.title, page: data.page, totalPages: data.totalPages, mode: "canvas" });
+      }
+      if (data.requestId && data.requestId === canvas.requestId) void window.xiaowang.stageAck(slug, data.requestId, data);
+    };
+    window.addEventListener("message", listener); return () => window.removeEventListener("message", listener);
+  }, [slug, canvas?.title, canvas?.requestId]);
+  useEffect(() => {
+    if (canvas) frameRef.current?.contentWindow?.postMessage({ type: "xiaowang:page", page, requestId: canvas.requestId }, "*");
+  }, [canvas?.title, canvas?.html, canvas?.requestId, page]);
   const openItems = openPaths.map((path) => ({ key: path, label: path }));
   return (
     <div className="canvas-stage">
@@ -871,6 +817,8 @@ function CanvasStage({
         onClose={onClose}
       />
       ) : null}
+      {canvas ? <div className="reader-toolbar"><Frame size={14} /><span>{canvas.title}</span><div className="reader-pager"><button type="button" aria-label="Previous page / 上一页" disabled={page <= 1} onClick={() => setPage(page - 1)}><ArrowLeft size={15} /></button><span>{page} / {totalPages || "…"}</span><button type="button" aria-label="Next page / 下一页" disabled={!totalPages || page >= totalPages} onClick={() => setPage(page + 1)}><ArrowRight size={15} /></button></div></div> : null}
+      {pageError ? <p className="reader-error" role="alert">{pageError}</p> : null}
       {canvas && slug ? (
         <iframe
           ref={frameRef}
@@ -878,7 +826,7 @@ function CanvasStage({
           title={canvas.title}
           sandbox="allow-scripts"
           srcDoc={withCanvasPager(canvas.html)}
-          onLoad={() => frameRef.current?.contentWindow?.postMessage({ type: "xiaowang:page", page }, "*")}
+          onLoad={() => frameRef.current?.contentWindow?.postMessage({ type: "xiaowang:page", page, requestId: canvas.requestId }, "*")}
         />
       ) : (
         <p className="empty">{copy.emptyCanvas}</p>
@@ -954,12 +902,15 @@ function SettingsPanel({
   const [region, setRegion] = useState<RealtimeRegion>(saved.region);
   const [workspace, setWorkspace] = useState(saved.workspace);
   const [realtimeKey, setRealtimeKey] = useState("");
+  const [searchProvider, setSearchProvider] = useState(settings?.searchProvider || "none");
+  const [searchUrl, setSearchUrl] = useState(settings?.searchUrl || "");
+  const [searchKey, setSearchKey] = useState("");
   const [locale, setLocale] = useState<Locale>(localeOf(settings?.locale));
   const [notice, setNotice] = useState("");
   const copy = copyFor(locale);
   const [busy, setBusy] = useState(false);
   const [previewing, setPreviewing] = useState(false);
-  const previewAudio = useRef(createCallAudio(() => {}));
+  const previewAudio = useRef(createCallAudio(() => {}, (serial, callId) => window.xiaowang.callIdle(serial, callId), position => window.xiaowang.callPosition(position)));
   const patch: SettingsPatch = {
     model,
     baseUrl,
@@ -971,11 +922,13 @@ function SettingsPanel({
     realtimeRegion: region,
     realtimeWorkspace: workspace,
     realtimeKey,
+    searchProvider,
+    searchUrl, searchKey,
     locale,
   };
   const voiceChoices = voicesFor(service, realtimeModel);
   const modelChoices = modelsFor(service);
-  const needsWorkspace = service === "qwen" && realtimeModel.startsWith("qwen3.8");
+  const needsWorkspace = service === "qwen";
 
   useEffect(() => {
     const audio = previewAudio.current;
@@ -985,7 +938,7 @@ function SettingsPanel({
         setPreviewing(true);
         void audio.startPlayback(note.outputRate ?? 24_000);
       }
-      if (note.phase === "audio" && note.audio) audio.play(note.audio);
+      if (note.phase === "audio" && note.audio) audio.play(note.audio, note.serial, note.identity);
       if (note.phase === "closed") {
         setPreviewing(false);
         if (note.detail) setNotice(note.detail);
@@ -1083,6 +1036,11 @@ function SettingsPanel({
               <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="deepseek-chat" />
             )}
           </label>
+          <div className="search-config">
+            <h2><Search size={16} strokeWidth={1.75} />{locale === "en" ? "Web search" : "网页搜索"}</h2>
+            <label>{locale === "en" ? "Provider" : "搜索服务"}<FieldSelect label="Search provider" value={searchProvider} onChange={setSearchProvider} options={[{ value: "none", label: locale === "en" ? "Not configured" : "暂不配置" }, { value: "brave", label: "Brave" }, { value: "searxng", label: "SearxNG" }]} /></label>
+            {searchProvider !== "none" ? <><label>{locale === "en" ? "Search URL" : "搜索地址"}<input value={searchUrl} onChange={event => setSearchUrl(event.target.value)} placeholder={searchProvider === "brave" ? "https://api.search.brave.com/res/v1/web/search" : "https://your-searxng.example"} /></label><label>{locale === "en" ? "Search key" : "搜索密钥"}<input type="password" value={searchKey} onChange={event => setSearchKey(event.target.value)} placeholder={settings?.searchKeyHint || "····"} /></label></> : null}
+          </div>
         </section>
         <section>
           <h2><AudioLines size={16} strokeWidth={1.75} />{copy.callSection}</h2>

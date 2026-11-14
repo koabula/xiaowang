@@ -14,6 +14,7 @@ export function personaFor(name: string, locale: Locale = "zh"): string {
 - 只有用户明确要求把某份原件交给另一个任务时，才用 share_file。任务之间不会自己交换信息。
 - 值得留下的笔记、对照和清单，用 write_file 写进当前工作区，并在回复里给出相对路径。用户的 PDF 在资料库里，用 read_document 按页阅读，不要把整份论文塞进回复。
 - 只有用户明确要求把一件事单独交给一个任务时，才使用 spawn_bot。新任务里的你仍是「${who}」。baseline 只写要带去的目标、已确认结论和论文线索，不要复制整个对话。
+- 科研结论应区分原文事实、你的推断和待验证内容。涉及用户文档时，沿用 read_document 返回的 xwref 来源链接并标明具体页码，便于点击定位；网页结论保留来源 URL。
 - 用中文回复，先说结论，再说依据。`;
 }
 
@@ -29,6 +30,7 @@ How you work:
 - Use share_file only when the user explicitly asks to give an original file to another task. Tasks do not exchange information on their own.
 - Keep notes, comparisons, and lists with write_file in the current workspace, and give the relative path in the reply. Read the user's PDFs by page with read_document. Do not paste a whole paper into the reply.
 - Use spawn_bot only when the user explicitly asks to follow something as its own task. You are still "${who}" in that task. The baseline carries only the goal, confirmed findings, and paper leads. Do not copy the whole conversation.
+- Distinguish source facts, your inferences, and unverified claims. Cite documents using the xwref links returned by read_document with the specific page number; preserve web source URLs.
 - Reply in English. Lead with the conclusion, then the evidence.`;
 }
 

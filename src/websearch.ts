@@ -1,3 +1,5 @@
+import { requestSignal } from "./stream.ts";
+
 export interface WebHit {
   title: string;
   url: string;
@@ -14,6 +16,7 @@ export function searchConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Searc
   const provider = env.XIAOWANG_SEARCH_PROVIDER?.trim().toLowerCase() ?? "";
   const url = env.XIAOWANG_SEARCH_URL?.trim().replace(/\/+$/, "") ?? "";
   const apiKey = env.XIAOWANG_SEARCH_KEY?.trim() ?? "";
+  if (provider === "none") return { provider: "none", url: "", apiKey: "" };
   if (provider === "searxng" || (url && !url.includes("api.search.brave.com") && provider !== "brave")) {
     return { provider: url ? "searxng" : "none", url, apiKey };
   }
@@ -34,13 +37,14 @@ export function missingSearchConfigMessage(): string {
 export async function webSearch(
   query: string,
   config: SearchConfig,
-  options?: { maxResults?: number; fetchImpl?: typeof fetch },
+  options?: { maxResults?: number; fetchImpl?: typeof fetch; signal?: AbortSignal },
 ): Promise<string> {
   if (config.provider === "none" || (config.provider === "brave" && !config.apiKey) || (config.provider === "searxng" && !config.url)) {
     return missingSearchConfigMessage();
   }
   const max = Math.min(8, Math.max(1, options?.maxResults ?? 5));
-  const fetchImpl = options?.fetchImpl ?? fetch;
+  const baseFetch = options?.fetchImpl ?? fetch;
+  const fetchImpl: typeof fetch = (url, init) => baseFetch(url, { ...init, signal: requestSignal(options?.signal, 20_000) });
   try {
     const hits =
       config.provider === "brave"
@@ -48,6 +52,7 @@ export async function webSearch(
         : await searchSearxng(query, max, config, fetchImpl);
     return formatWebHits(query, hits);
   } catch (error) {
+    options?.signal?.throwIfAborted();
     const message = error instanceof Error ? error.message : String(error);
     return `网络搜索失败：${redact(message, config.apiKey)}。可以换关键词或稍后重试。不要编造链接。`;
   }

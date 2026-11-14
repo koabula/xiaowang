@@ -1,4 +1,5 @@
 import type { CompletionRequest, CompletionResult, LlmProvider, ModelMessage, ToolSchema } from "./types.ts";
+import { readEventStream, requestSignal } from "./stream.ts";
 
 export type ApiStyle = "openai" | "anthropic";
 
@@ -153,6 +154,7 @@ async function completeOpenAI(config: ProviderConfig, request: CompletionRequest
     model: config.model,
     messages: toOpenAIMessages(request.system, request.messages),
     max_tokens: request.tools.length === 0 ? 32 : 4096,
+    ...(request.onTextDelta ? { stream: true } : {}),
   };
   if (request.tools.length > 0) {
     body.tools = toOpenAITools(request.tools);
@@ -165,8 +167,31 @@ async function completeOpenAI(config: ProviderConfig, request: CompletionRequest
       "content-type": "application/json",
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120_000),
+    signal: requestSignal(request.signal),
   });
+  if (response.ok && response.headers.get("content-type")?.includes("text/event-stream")) {
+    let text = "";
+    const calls = new Map<number, { id: string; name: string; arguments: string }>();
+    let finished = false;
+    for await (const event of readEventStream(response)) {
+      if (event.data === "[DONE]") { finished = true; break; }
+      const chunk = JSON.parse(event.data) as { error?: { message?: string }; choices?: Array<{ finish_reason?: string | null; delta?: { content?: string; tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> } }> };
+      if (chunk.error) throw new Error(formatHttpError(502, chunk.error.message || "模型流中断", config.apiKey));
+      const choice = chunk.choices?.[0];
+      if (choice?.finish_reason) finished = true;
+      const delta = choice?.delta;
+      if (delta?.content) { text += delta.content; request.onTextDelta?.(delta.content); }
+      for (const call of delta?.tool_calls ?? []) {
+        const current = calls.get(call.index) ?? { id: "", name: "", arguments: "" };
+        current.id ||= call.id || "";
+        current.name += call.function?.name || "";
+        current.arguments += call.function?.arguments || "";
+        calls.set(call.index, current);
+      }
+    }
+    if (!finished) throw new Error("模型响应提前断开，请重试。未完成的工具不会执行。");
+    return { text, toolCalls: [...calls.entries()].sort(([a], [b]) => a - b).map(([index, call]) => ({ ...call, id: call.id || `call_${index}` })) };
+  }
   const raw = await response.text();
   if (!response.ok) throw new Error(formatHttpError(response.status, raw, config.apiKey));
   const json = JSON.parse(raw) as {
@@ -197,6 +222,7 @@ async function completeAnthropic(config: ProviderConfig, request: CompletionRequ
     system: request.system,
     messages: toAnthropicMessages(request.messages),
     max_tokens: request.tools.length === 0 ? 32 : 4096,
+    ...(request.onTextDelta ? { stream: true } : {}),
   };
   if (request.tools.length > 0) body.tools = toAnthropicTools(request.tools);
   const response = await fetch(anthropicMessagesUrl(config.baseUrl), {
@@ -207,8 +233,30 @@ async function completeAnthropic(config: ProviderConfig, request: CompletionRequ
       "content-type": "application/json",
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120_000),
+    signal: requestSignal(request.signal),
   });
+  if (response.ok && response.headers.get("content-type")?.includes("text/event-stream")) {
+    let text = "";
+    let finished = false;
+    const calls = new Map<number, { id: string; name: string; arguments: string }>();
+    for await (const event of readEventStream(response)) {
+      const chunk = JSON.parse(event.data) as { type: string; index: number; error?: { message?: string }; content_block?: { type?: string; id?: string; name?: string; text?: string; input?: unknown }; delta?: { type?: string; text?: string; partial_json?: string } };
+      if (chunk.type === "error") throw new Error(formatHttpError(502, chunk.error?.message || "模型流中断", config.apiKey));
+      if (chunk.type === "message_stop") finished = true;
+      if (chunk.type === "content_block_start") {
+        const block = chunk.content_block;
+        if (block?.type === "tool_use") calls.set(chunk.index, { id: block.id || `tool_${chunk.index}`, name: block.name || "", arguments: block.input && Object.keys(block.input as object).length ? JSON.stringify(block.input) : "" });
+        if (block?.type === "text" && block.text) { text += block.text; request.onTextDelta?.(block.text); }
+      }
+      if (chunk.delta?.type === "text_delta" && chunk.delta.text) { text += chunk.delta.text; request.onTextDelta?.(chunk.delta.text); }
+      if (chunk.delta?.type === "input_json_delta") {
+        const call = calls.get(chunk.index);
+        if (call) call.arguments += chunk.delta.partial_json || "";
+      }
+    }
+    if (!finished) throw new Error("模型响应提前断开，请重试。未完成的工具不会执行。");
+    return { text, toolCalls: [...calls.values()].map(call => ({ ...call, arguments: call.arguments || "{}" })) };
+  }
   const raw = await response.text();
   if (!response.ok) throw new Error(formatHttpError(response.status, raw, config.apiKey));
   const json = JSON.parse(raw) as {
