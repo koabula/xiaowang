@@ -1,3 +1,4 @@
+import type { Locale } from "./locale.ts";
 import { personaFor, STEWARD_NAME, STEWARD_SLUG } from "./persona.ts";
 import type { Bot, ModelMessage, StoredEvent, Term } from "./types.ts";
 
@@ -34,10 +35,11 @@ interface Unit {
 export function projectLlmContext(
   bot: Bot,
   events: StoredEvent[],
-  options?: { budget?: number; library?: CatalogItem[]; personName?: string },
+  options?: { budget?: number; library?: CatalogItem[]; personName?: string; locale?: Locale },
 ): LlmProjection {
   const budget = options?.budget ?? DEFAULT_BUDGET;
-  const system = buildSystem(bot, events, options?.library, options?.personName?.trim() || STEWARD_NAME);
+  const locale = options?.locale === "en" ? "en" : "zh";
+  const system = buildSystem(bot, events, options?.library, options?.personName?.trim() || STEWARD_NAME, locale);
   const units = groupUnits(events);
   let dropped = 0;
   while (units.length > 1 && system.length + charCount(units) > budget) {
@@ -48,7 +50,9 @@ export function projectLlmContext(
   if (dropped > 0) {
     messages.push({
       role: "user",
-      content: `更早的 ${dropped} 段对话仍在会话记录里，这次没有放进上下文。需要细节时去工作区读笔记，或根据任务说明继续。`,
+      content: locale === "en"
+        ? `The earlier ${dropped} turns are still in the session log and were left out of this context. Read notes in the workspace, or continue from the task brief, when you need the detail.`
+        : `更早的 ${dropped} 段对话仍在会话记录里，这次没有放进上下文。需要细节时去工作区读笔记，或根据任务说明继续。`,
     });
   }
   for (const unit of units) messages.push(...unit.messages);
@@ -91,70 +95,89 @@ export function projectVoiceBrief(
   return brief;
 }
 
-export function formatVoiceBrief(brief: VoiceBrief, personName = STEWARD_NAME): string {
+export function formatVoiceBrief(brief: VoiceBrief, personName = STEWARD_NAME, locale: Locale = "zh"): string {
+  const english = locale === "en";
   const lines = [
-    `任务：${brief.botName}（${brief.slug}）`,
-    `目标：${brief.goal || "还没有写下任务目标。"}`,
+    english ? `Task: ${brief.botName} (${brief.slug})` : `任务：${brief.botName}（${brief.slug}）`,
+    english ? `Goal: ${brief.goal || "No task goal has been written yet."}` : `目标：${brief.goal || "还没有写下任务目标。"}`,
   ];
   if (brief.glossary.length > 0) {
-    lines.push(
-      `术语：${brief.glossary
-        .map((term) => (term.alias ? `${term.term}（${term.alias}）` : term.term))
-        .join("、")}`,
-    );
+    const terms = brief.glossary.map((term) => (term.alias ? `${term.term} (${term.alias})` : term.term));
+    lines.push(english ? `Terms: ${terms.join(", ")}` : `术语：${terms.join("、")}`);
   }
   if (brief.artifacts.length > 0) {
-    lines.push(`已有文件：${brief.artifacts.join("、")}`);
+    lines.push(english ? `Files: ${brief.artifacts.join(", ")}` : `已有文件：${brief.artifacts.join("、")}`);
   }
   if (brief.library) {
-    lines.push(brief.library.length > 0 ? `资料库：${brief.library.join("、")}` : "资料库：还没有引用。");
+    lines.push(
+      brief.library.length > 0
+        ? english ? `Library: ${brief.library.join(", ")}` : `资料库：${brief.library.join("、")}`
+        : english ? "Library: no references yet." : "资料库：还没有引用。",
+    );
   }
   if (brief.recentTurns.length === 0) {
-    lines.push("最近对话：还没有。");
+    lines.push(english ? "Recent turns: none." : "最近对话：还没有。");
   } else {
-    lines.push("最近对话：");
+    lines.push(english ? "Recent turns:" : "最近对话：");
     for (const turn of brief.recentTurns) {
-      const who = turn.role === "user" ? "用户" : personName;
-      lines.push(`- ${who}：${turn.text}`);
+      const who = turn.role === "user" ? (english ? "User" : "用户") : personName;
+      lines.push(english ? `- ${who}: ${turn.text}` : `- ${who}：${turn.text}`);
     }
   }
   return lines.join("\n");
 }
 
-function buildSystem(bot: Bot, events: StoredEvent[], library: CatalogItem[] | undefined, personName: string): string {
+function buildSystem(bot: Bot, events: StoredEvent[], library: CatalogItem[] | undefined, personName: string, locale: Locale): string {
   const entrance = bot.slug === STEWARD_SLUG;
+  const english = locale === "en";
   const parts = [
-    personaFor(personName),
+    personaFor(personName, locale),
     "",
     entrance
-      ? `你是「${personName}」的总入口。还没有单独开任务的对话留在这里。`
-      : `当前任务：${bot.name}（${bot.slug}）`,
-    `工作区根目录：${bot.workspaceDir}`,
-    "文件工具只接受这个工作区内的相对路径，例如 notes/reading.md。不要使用 ..，也不要读写别的 Bot 的目录。",
+      ? english
+        ? `You are the home for "${personName}". Conversations that are not their own task stay here.`
+        : `你是「${personName}」的总入口。还没有单独开任务的对话留在这里。`
+      : english
+        ? `Current task: ${bot.name} (${bot.slug})`
+        : `当前任务：${bot.name}（${bot.slug}）`,
+    english ? `Workspace root: ${bot.workspaceDir}` : `工作区根目录：${bot.workspaceDir}`,
+    english
+      ? "File tools only accept a relative path inside this workspace, such as notes/reading.md. Do not use .., and do not read or write another bot's directory."
+      : "文件工具只接受这个工作区内的相对路径，例如 notes/reading.md。不要使用 ..，也不要读写别的 Bot 的目录。",
   ];
   if (library) {
     const shown = catalogLines(library);
     parts.push(
       "",
       shown.length > 0
-        ? `这个任务的资料库：\n${shown.map((line) => `- ${line}`).join("\n")}`
-        : "这个任务的资料库还没有引用。用户交给这个任务的 PDF 会出现在这里，用 read_document 阅读。",
+        ? english
+          ? `This task's library:\n${shown.map((line) => `- ${line}`).join("\n")}`
+          : `这个任务的资料库：\n${shown.map((line) => `- ${line}`).join("\n")}`
+        : english
+          ? "This task's library has no references yet. A PDF the user gives this task shows up here. Read it with read_document."
+          : "这个任务的资料库还没有引用。用户交给这个任务的 PDF 会出现在这里，用 read_document 阅读。",
     );
-    if (library.length > shown.length) parts.push(`还有 ${library.length - shown.length} 份引用没有列在这里。需要时用 list_library。`);
+    if (library.length > shown.length) {
+      parts.push(
+        english
+          ? `${library.length - shown.length} more references are not listed. Use list_library when you need them.`
+          : `还有 ${library.length - shown.length} 份引用没有列在这里。需要时用 list_library。`,
+      );
+    }
   }
   const baselines = entrance ? [] : baselinesOf(events);
   const prompt = entrance ? "" : bot.systemPrompt.trim();
   if (prompt && !baselines.includes(prompt)) {
-    parts.push("", "任务要求：", prompt);
+    parts.push("", english ? "Task request:" : "任务要求：", prompt);
   }
   if (baselines.length > 0) {
-    parts.push("", "任务说明：");
+    parts.push("", english ? "Task brief:" : "任务说明：");
     for (const baseline of baselines) parts.push(`- ${baseline}`);
   }
   if (bot.glossary.length > 0) {
-    parts.push("", "任务术语：");
+    parts.push("", english ? "Task terms:" : "任务术语：");
     for (const term of bot.glossary) {
-      parts.push(term.alias ? `- ${term.term}：${term.alias}` : `- ${term.term}`);
+      parts.push(term.alias ? `- ${term.term}: ${term.alias}` : `- ${term.term}`);
     }
   }
   return parts.join("\n");

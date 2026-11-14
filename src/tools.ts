@@ -7,8 +7,8 @@ import type { Bot, Kickoff, Term, ToolSchema } from "./types.ts";
 import {
   assertHttpUrl,
   BROWSER_ABSENT,
+  CANVAS_HTML_CAP,
   isSensitiveBrowserTarget,
-  splitSlides,
   USER_HAS_BROWSER,
   type BrowserDriver,
   type StageDriver,
@@ -234,13 +234,13 @@ const TOOLS: Tool[] = [
     schema: {
       name: "show_stage",
       description:
-        "把内容放到桌面右栏给用户看。mode=file 打开当前任务资料库里的 PDF 或文本并翻到 page；mode=browser 打开右栏浏览器；mode=slides 把一份用 --- 分页的 Markdown 做成幻灯片。用户能看见右栏时再用。",
+        "把内容放到桌面右栏给用户看。mode=file 打开当前任务资料库里的 PDF 或文本并翻到 page；mode=browser 打开右栏浏览器；mode=canvas 打开工作区里一份自包含的 HTML（CSS 排版，需要翻页或交互时写少量 JS）。讲解、对照和示意图用 canvas，不要交 Markdown 幻灯片。用户能看见右栏时再用。Show a self-contained HTML file with mode=canvas.",
       parameters: objectSchema(
         {
-          mode: { type: "string", description: "file、browser 或 slides。" },
+          mode: { type: "string", description: "file、browser 或 canvas。" },
           file: { type: "string", description: "mode=file 时的资料 id 或文件名。" },
           page: { type: "integer", description: "PDF 页码，从 1 开始。" },
-          path: { type: "string", description: "mode=slides 时工作区里的 Markdown 相对路径。" },
+          path: { type: "string", description: "mode=canvas 时工作区里的 HTML 相对路径。" },
           url: { type: "string", description: "mode=browser 时要打开的地址，可省略。" },
         },
         ["mode"],
@@ -267,18 +267,21 @@ const TOOLS: Tool[] = [
         if (blocked) return { isError: true, output: blocked };
         return browserOutcome(await host.browser.navigate(url));
       }
-      if (mode === "slides") {
+      if (mode === "canvas") {
         const pathArg = requireString(input, "path");
         if (typeof pathArg !== "string") return { isError: true, output: pathArg.error };
         const resolved = resolveInsideWorkspace(host.bot.workspaceDir, pathArg);
         if (!resolved.ok) return { isError: true, output: resolved.error };
+        if (!/\.html?$/i.test(resolved.rel)) return { isError: true, output: "Canvas 需要工作区里的一份 .html 文件。" };
         const stat = statOrNull(resolved.abs);
         if (!stat?.isFile()) return { isError: true, output: missingFile(host.bot.workspaceDir, resolved.rel) };
-        const pages = splitSlides(readFileSync(resolved.abs, "utf8"));
-        host.stage?.show({ mode: "slides", title: resolved.rel, pages });
-        return { isError: false, output: host.stage ? `右栏正在放映 ${resolved.rel}，共 ${pages.length} 页。` : `桌面右栏还没接上。${resolved.rel} 共 ${pages.length} 页。` };
+        if (stat.size > CANVAS_HTML_CAP) return { isError: true, output: "这份 HTML 太大，右栏放不下。" };
+        const html = readFileSync(resolved.abs, "utf8");
+        host.stage?.show({ mode: "canvas", title: resolved.rel, html });
+        return { isError: false, output: host.stage ? `右栏已打开 ${resolved.rel}。` : `桌面右栏还没接上。页面在 ${resolved.rel}。` };
       }
-      return { isError: true, output: "mode 只能是 file、browser 或 slides。" };
+      if (mode === "slides") return { isError: true, output: "请把页面写成自包含的 HTML，再用 mode=canvas 打开。" };
+      return { isError: true, output: "mode 只能是 file、browser 或 canvas。" };
     },
   },
   {

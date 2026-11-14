@@ -17,6 +17,7 @@ export interface SecretRecord {
   realtimeVoice: string;
   realtimeRegion: string;
   realtimeWorkspace: string;
+  locale: string;
 }
 
 export interface SecretPatch {
@@ -34,6 +35,7 @@ export interface SecretPatch {
   realtimeVoice?: string;
   realtimeRegion?: string;
   realtimeWorkspace?: string;
+  locale?: string;
 }
 
 export interface SettingsView {
@@ -51,6 +53,7 @@ export interface SettingsView {
   realtimeVoice: string;
   realtimeRegion: string;
   realtimeWorkspace: string;
+  locale: string;
   ready: boolean;
 }
 
@@ -69,6 +72,7 @@ const EMPTY: SecretRecord = {
   realtimeVoice: "",
   realtimeRegion: "",
   realtimeWorkspace: "",
+  locale: "zh",
 };
 
 function filePath(): string {
@@ -93,6 +97,10 @@ export function mergeSecrets(current: SecretRecord, patch: SecretPatch): SecretR
     const value = patch[key];
     if (typeof value !== "string") continue;
     if ((key === "apiKey" || key === "searchKey" || key === "realtimeKey") && !value.trim()) continue;
+    if (key === "locale") {
+      next.locale = value.trim() === "en" ? "en" : "zh";
+      continue;
+    }
     next[key] = value.trim();
   }
   const payload = JSON.stringify(next);
@@ -118,6 +126,7 @@ export function publicSettings(secrets: SecretRecord): SettingsView {
     realtimeVoice: secrets.realtimeVoice,
     realtimeRegion: secrets.realtimeRegion,
     realtimeWorkspace: secrets.realtimeWorkspace,
+    locale: secrets.locale === "en" ? "en" : "zh",
     ready: Boolean(secrets.model) && (Boolean(secrets.apiKey) || local),
   };
 }

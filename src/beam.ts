@@ -21,3 +21,76 @@ export function beamPalette(name: string, slab: string): string[] {
   colors[(hash + 13) % colors.length] = PAPER;
   return colors;
 }
+
+export const APP_ICON_NAME = "xiaowang";
+export const APP_ICON_INK = "#18181B";
+
+/** 和 boring-avatars · beam 同一套几何，用来导出不会随换脸变化的应用图标。 */
+export function beamSvg(name: string, colors: string[], pixels = 1024): string {
+  const face = beamFace(name, colors);
+  const size = 36;
+  const mouth = face.isMouthOpen
+    ? `<path d="M15 ${19 + face.mouthSpread}c2 1 4 1 6 0" stroke="${face.faceColor}" fill="none" stroke-linecap="round"/>`
+    : `<path d="M13,${19 + face.mouthSpread} a1,0.75 0 0,0 10,0" fill="${face.faceColor}"/>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${pixels}" height="${pixels}" viewBox="0 0 ${size} ${size}" fill="none">
+  <rect width="${size}" height="${size}" fill="${PAPER}"/>
+  <mask id="beam" maskUnits="userSpaceOnUse" x="0" y="0" width="${size}" height="${size}">
+    <rect width="${size}" height="${size}" rx="${size * 2}" fill="#FFFFFF"/>
+  </mask>
+  <g mask="url(#beam)">
+    <rect width="${size}" height="${size}" fill="${face.backgroundColor}"/>
+    <rect width="${size}" height="${size}" rx="${face.isCircle ? size : size / 6}" fill="${face.wrapperColor}" transform="translate(${face.wrapperTranslateX} ${face.wrapperTranslateY}) rotate(${face.wrapperRotate} ${size / 2} ${size / 2}) scale(${face.wrapperScale})"/>
+    <g transform="translate(${face.faceTranslateX} ${face.faceTranslateY}) rotate(${face.faceRotate} ${size / 2} ${size / 2})">
+      ${mouth}
+      <rect x="${14 - face.eyeSpread}" y="14" width="1.5" height="2" rx="1" fill="${face.faceColor}"/>
+      <rect x="${20 + face.eyeSpread}" y="14" width="1.5" height="2" rx="1" fill="${face.faceColor}"/>
+    </g>
+  </g>
+</svg>
+`;
+}
+
+function beamFace(name: string, colors: string[]) {
+  const hash = beamHash(name);
+  const count = colors.length || 1;
+  const pick = (offset: number) => colors[(hash + offset) % count] ?? "#18181B";
+  const rawX = signed(hash, 10, 1);
+  const rawY = signed(hash, 10, 2);
+  const wrapperTranslateX = rawX < 5 ? rawX + 4 : rawX;
+  const wrapperTranslateY = rawY < 5 ? rawY + 4 : rawY;
+  const wrapperColor = pick(0);
+  return {
+    wrapperColor,
+    faceColor: contrast(wrapperColor),
+    backgroundColor: pick(13),
+    wrapperTranslateX,
+    wrapperTranslateY,
+    wrapperRotate: signed(hash, 360),
+    wrapperScale: 1 + signed(hash, 3) / 10,
+    isMouthOpen: digit(hash, 2) % 2 === 0,
+    isCircle: digit(hash, 1) % 2 === 0,
+    eyeSpread: signed(hash, 5),
+    mouthSpread: signed(hash, 3),
+    faceRotate: signed(hash, 10, 3),
+    faceTranslateX: wrapperTranslateX > 6 ? wrapperTranslateX / 2 : signed(hash, 8, 1),
+    faceTranslateY: wrapperTranslateY > 6 ? wrapperTranslateY / 2 : signed(hash, 7, 2),
+  };
+}
+
+function digit(value: number, index: number): number {
+  return Math.floor(value / 10 ** index) % 10;
+}
+
+function signed(value: number, range: number, index?: number): number {
+  const mod = value % range;
+  return index !== undefined && digit(value, index) % 2 === 0 ? -mod : mod;
+}
+
+function contrast(hex: string): string {
+  const value = hex.startsWith("#") ? hex.slice(1) : hex;
+  const red = Number.parseInt(value.slice(0, 2), 16);
+  const green = Number.parseInt(value.slice(2, 4), 16);
+  const blue = Number.parseInt(value.slice(4, 6), 16);
+  return (red * 299 + green * 587 + blue * 114) / 1000 >= 128 ? "#000000" : "#FFFFFF";
+}

@@ -1,3 +1,4 @@
+import type { Locale } from "./locale.ts";
 import type { ToolSchema } from "./types.ts";
 
 export const QWEN_REALTIME_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime";
@@ -78,12 +79,25 @@ export const END_CALL_TOOL: ToolSchema = {
   parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
 };
 
-export function voiceTools(tools: ToolSchema[]): ToolSchema[] {
+export function voiceTools(tools: ToolSchema[], locale: Locale = "zh"): ToolSchema[] {
   if (tools.some((tool) => tool.name === "end_call")) return tools;
-  return [...tools, END_CALL_TOOL];
+  const tool = locale === "en"
+    ? { ...END_CALL_TOOL, description: "End this call. Say a short goodbye first, then call this. Do not call it before the goodbye." }
+    : END_CALL_TOOL;
+  return [...tools, tool];
 }
 
-export function realtimeInstructions(personName: string, brief: string): string {
+export function realtimeInstructions(personName: string, brief: string, locale: Locale = "zh"): string {
+  if (locale === "en") {
+    return [
+      `You are "${personName}". This is a voice call. Speak in short sentences.`,
+      "The user only hears your voice. When you look something up, read, or write a note, say one short line first, then use the tool. Do not narrate the tool, and do not say you handed the work off.",
+      "When the user wants to end the call, say a short goodbye, then call end_call. The call hangs up after the goodbye.",
+      "Do not invent numbers that are not in the abstract or the text.",
+      "",
+      brief,
+    ].join("\n");
+  }
   return [
     `你是「${personName}」。这是一次语音通话，用口语短句。`,
     "用户只听见你的声音。要查文献、读资料或写笔记时，先接一句再调用工具。不要念工具过程，也不要说自己把事情转交了。",

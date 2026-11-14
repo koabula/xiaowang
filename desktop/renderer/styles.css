@@ -352,9 +352,15 @@ nav { overflow: auto; display: flex; flex-direction: column; gap: 2px; padding-t
   font-weight: 650;
 }
 .modal h2 svg { color: var(--muted); }
-.modal header { display: flex; justify-content: space-between; align-items: center; }
+.modal header { display: flex; align-items: center; gap: 16px; }
+.modal header .lang { margin-right: auto; }
+.lang { display: flex; padding: 3px; background: #f4f4f6; border-radius: 12px; }
+.lang button { border: 0; background: transparent; color: var(--muted); height: 32px; padding: 0 12px; border-radius: 9px; font-size: 14px; }
+.lang button.on { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(15, 15, 20, 0.06); }
+.canvas-stage { flex: 1; min-height: 0; display: flex; }
+.canvas-frame { flex: 1; min-height: 0; margin: 0 12px 12px; border: 0; border-radius: 16px; background: #fff; }
 .modal header strong { font-size: 18px; }
-.modal header button {
+.modal header > button {
   width: 32px;
   height: 32px;
   border: 0;
@@ -364,7 +370,7 @@ nav { overflow: auto; display: flex; flex-direction: column; gap: 2px; padding-t
   display: grid;
   place-items: center;
 }
-.modal header button:hover { background: rgba(20, 20, 22, 0.05); }
+.modal header > button:hover { background: rgba(20, 20, 22, 0.05); }
 .modal label, .modal .field-block { display: grid; gap: 6px; color: var(--muted); font-size: 13.5px; }
 .modal input, .modal .field {
   width: 100%;

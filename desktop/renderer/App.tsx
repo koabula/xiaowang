@@ -1,23 +1,24 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, AudioLines, Check, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Eye, FileText, Globe, MessageSquareText, Mic, MicOff, MousePointer2, PanelRight, Phone, PhoneOff, Play, Plus, Presentation, RefreshCw, Search, Settings, Square, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, AudioLines, Check, ChevronDown, ChevronRight, ExternalLink, Eye, FileText, Frame, Globe, MessageSquareText, Mic, MicOff, MousePointer2, PanelRight, Phone, PhoneOff, Play, Plus, RefreshCw, Search, Settings, Square, X } from "lucide-react";
 import * as Select from "@radix-ui/react-select";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Avatar, nextAvatarSeed } from "./avatar.tsx";
 import { INK_CHOICES, inkFor } from "./ink.ts";
 import { createCallAudio } from "./call-audio.ts";
+import { copyFor, localeOf, type Copy, type Locale } from "./copy.ts";
 import { REALTIME_SERVICES, modelsFor, resolveRealtime, voicesFor, type RealtimeRegion, type RealtimeServiceId } from "../../src/realtime-catalog.ts";
 import { mergeUtterance } from "../../src/realtime.ts";
 import type { AppState, BotRow, BrowserNote, CallNote, ChatItem, LibraryItem, SettingsPatch, StageNote } from "./types.ts";
 
 type StageSnap = {
-  mode: "file" | "browser" | "slides" | "profile";
+  mode: "file" | "browser" | "canvas" | "profile";
   open: boolean;
   file: { id: string; filename: string; page: number } | null;
-  slides: { title: string; pages: string[]; index: number } | null;
+  canvas: { title: string; html: string } | null;
 };
 
-const EMPTY_STAGE: StageSnap = { mode: "file", open: true, file: null, slides: null };
+const EMPTY_STAGE: StageSnap = { mode: "file", open: true, file: null, canvas: null };
 
 export function App() {
   const [state, setState] = useState<AppState | null>(null);
@@ -49,8 +50,9 @@ export function App() {
   const stage = stageBySlug[active] ?? EMPTY_STAGE;
   const mode = stage.mode;
   const file = stage.file;
-  const slides = stage.slides;
+  const canvas = stage.canvas;
   const stageOpen = stage.open;
+  const copy = copyFor(localeOf(state?.settings.locale));
   const busy = Boolean(busyBySlug[active]);
   const draft = draftBySlug[active] ?? "";
   const activity = activityBySlug[active] ?? "";
@@ -125,7 +127,7 @@ export function App() {
     else if (view.mode === "browser") {
       patchStage(view.slug, { mode: "browser", open: true });
       if (view.url && view.slug === activeRef.current) setAddress(view.url);
-    } else patchStage(view.slug, { mode: "slides", open: true, slides: { title: view.title, pages: view.pages, index: 0 } });
+    } else patchStage(view.slug, { mode: "canvas", open: true, canvas: { title: view.title, html: view.html } });
   }
 
   async function sendMessage() {
@@ -256,19 +258,19 @@ export function App() {
     <div className="shell">
       <aside className="rail" style={{ width: leftWidth }}>
         <div className="traffic-space">
-          <button className="icon" title="搜索" type="button"><Search size={16} /></button>
-          <button className="icon" title="新任务" type="button" onClick={() => setCreating(true)}><Plus size={16} /></button>
+          <button className="icon" title={copy.search} type="button"><Search size={16} /></button>
+          <button className="icon" title={copy.newTask} type="button" onClick={() => setCreating(true)}><Plus size={16} /></button>
         </div>
         <button className={active === "xiaowang" ? "steward on" : "steward"} type="button" onClick={() => void window.xiaowang.setActive("xiaowang")}>
           <Avatar slug="xiaowang" seed={steward?.avatarSeed} ink={steward?.avatarInk} size={72} mood={busyBySlug.xiaowang ? "think" : "idle"} />
           <strong>{steward?.name ?? "小王同学"}</strong>
         </button>
         <div className="search-line">
-          <input value={query} placeholder="找任务" onChange={(event) => setQuery(event.target.value)} />
+          <input value={query} placeholder={copy.findTask} onChange={(event) => setQuery(event.target.value)} />
         </div>
         {creating ? (
           <form className="new-bot" onSubmit={(event) => { event.preventDefault(); void createBot(); }}>
-            <input autoFocus value={botName} placeholder="任务名称" onChange={(event) => setBotName(event.target.value)} />
+            <input autoFocus value={botName} placeholder={copy.taskName} onChange={(event) => setBotName(event.target.value)} />
           </form>
         ) : null}
         <nav>
@@ -285,7 +287,7 @@ export function App() {
         <footer>
           <button className="settings" type="button" onClick={() => setSettingsOpen(true)}>
             <Settings size={16} />
-            设置
+            {copy.settings}
           </button>
         </footer>
       </aside>
@@ -299,25 +301,25 @@ export function App() {
             {current?.name ?? "小王同学"}
             <ChevronRight size={14} />
           </button>
-          <button className="icon stage-toggle" type="button" title={stageOpen ? "收起右栏" : "展开右栏"} onClick={toggleStage}>
+          <button className="icon stage-toggle" type="button" title={stageOpen ? copy.collapseStage : copy.expandStage} onClick={toggleStage}>
             <PanelRight size={16} />
           </button>
         </header>
         {call ? (
           <section className="call-stage">
             <Avatar slug={active || "xiaowang"} seed={current?.avatarSeed} ink={current?.avatarInk} size={88} mood={callMood(call)} />
-            <p>{callStatus(call)}</p>
+            <p>{callStatus(call, copy)}</p>
             <CallLines lines={call.captions} ink={ink} />
             <div className="call-controls">
-              <button type="button" title={call.muted ? "打开麦克风" : "静音"} onClick={toggleMute}>
+              <button type="button" title={call.muted ? copy.unmute : copy.mute} onClick={toggleMute}>
                 {call.muted ? <MicOff size={16} /> : <Mic size={16} />}
               </button>
-              <button className="end" type="button" title="挂断" onClick={() => void endCall()}><PhoneOff size={16} /></button>
+              <button className="end" type="button" title={copy.hangup} onClick={() => void endCall()}><PhoneOff size={16} /></button>
             </div>
           </section>
         ) : null}
         <div className="messages" ref={threadRef}>
-          {items.filter(isConversation).map((item) => <Message key={item.id} item={item} ink={ink} name={current?.name || "小王同学"} />)}
+          {items.filter(isConversation).map((item) => <Message key={item.id} item={item} ink={ink} name={current?.name || "小王同学"} copy={copy} />)}
           {busy ? (
             <div className="thinking">
               <Avatar slug={active || "xiaowang"} seed={current?.avatarSeed} ink={current?.avatarInk} size={28} mood="think" />
@@ -326,11 +328,11 @@ export function App() {
           ) : null}
         </div>
         <form className="composer" onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
-          <button className="icon" type="button" title="放入资料库" onClick={() => void window.xiaowang.addFiles().then(() => active && window.xiaowang.library(active).then(setLibrary))}><Plus size={18} /></button>
+          <button className="icon" type="button" title={copy.addToLibrary} onClick={() => void window.xiaowang.addFiles().then(() => active && window.xiaowang.library(active).then(setLibrary))}><Plus size={18} /></button>
           <textarea
             rows={1}
             value={draft}
-            placeholder={current ? `给 ${current.name} 发消息` : "发消息"}
+            placeholder={copy.message(current?.name ?? "")}
             onChange={(event) => {
               const slug = activeRef.current;
               const value = event.target.value;
@@ -343,9 +345,9 @@ export function App() {
               }
             }}
           />
-          <button className="icon" type="button" title="听写还没接上"><Mic size={18} /></button>
-          {busy ? <button className="call stop" type="button" title="停下" onClick={() => void window.xiaowang.stop(active)}><Square size={14} /></button> : null}
-          <button className={call ? "call stop" : "call"} style={call ? undefined : { background: ink }} type="button" title={call ? "挂断" : "通话"} onClick={() => void toggleCall()}>
+          <button className="icon" type="button" title={copy.dictateLater}><Mic size={18} /></button>
+          {busy ? <button className="call stop" type="button" title={copy.stop} onClick={() => void window.xiaowang.stop(active)}><Square size={14} /></button> : null}
+          <button className={call ? "call stop" : "call"} style={call ? undefined : { background: ink }} type="button" title={call ? copy.hangup : copy.call} onClick={() => void toggleCall()}>
             {call ? <PhoneOff size={16} /> : <><span /><span /><span /><span /></>}
           </button>
         </form>
@@ -356,14 +358,15 @@ export function App() {
       {stageOpen ? (
       <aside className="stage" style={{ width: rightWidth }}>
         <div className="stage-tabs">
-          <button className={mode === "file" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "file" })}><FileText size={15} /> 文件</button>
-          <button className={mode === "browser" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "browser" })}><Globe size={15} /> 浏览器</button>
-          <button className={mode === "slides" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "slides" })}><Presentation size={15} /> 幻灯片</button>
+          <button className={mode === "file" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "file" })}><FileText size={15} /> {copy.files}</button>
+          <button className={mode === "browser" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "browser" })}><Globe size={15} /> {copy.browser}</button>
+          <button className={mode === "canvas" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "canvas" })}><Frame size={15} /> {copy.canvas}</button>
         </div>
         {mode === "profile" && current ? (
           <ProfileStage
             bot={current}
             personName={steward?.name ?? "小王同学"}
+            copy={copy}
             library={library}
             onRefresh={async () => setLibrary(await window.xiaowang.library(current.slug))}
             onForgot={(id) => {
@@ -372,9 +375,9 @@ export function App() {
           />
         ) : null}
         {mode === "file" ? (
-          <FileStage slug={active} library={library} file={file} onPick={(entry) => patchStage(active, { file: { ...entry, page: 1 } })} />
+          <FileStage slug={active} library={library} file={file} copy={copy} onPick={(entry) => patchStage(active, { file: { ...entry, page: 1 } })} />
         ) : null}
-        {mode === "slides" ? <SlideStage slides={slides} onIndex={(index) => patchStage(active, { slides: slides ? { ...slides, index } : slides })} /> : null}
+        {mode === "canvas" ? <CanvasStage canvas={canvas} copy={copy} /> : null}
         {mode === "browser" ? (
           <div className="browser-stage">
             <form className="url" onSubmit={(event) => { event.preventDefault(); void window.xiaowang.browserGo(address.startsWith("http") ? address : `https://${address}`); }}>
@@ -386,13 +389,13 @@ export function App() {
             <div className="capsule">
               {browser.holder === "bot" ? (
                 <>
-                  <span><Eye size={15} /> 仅观看</span>
-                  <button type="button" onClick={() => void window.xiaowang.browserHolder("user")}>取得控制权</button>
+                  <span><Eye size={15} /> {copy.watching}</span>
+                  <button type="button" onClick={() => void window.xiaowang.browserHolder("user")}>{copy.takeControl}</button>
                 </>
               ) : (
                 <>
-                  <span><MousePointer2 size={15} /> 你正在控制</span>
-                  <button className="quiet" type="button" onClick={() => void window.xiaowang.browserHolder("bot")}>停止</button>
+                  <span><MousePointer2 size={15} /> {copy.youControl}</span>
+                  <button className="quiet" type="button" onClick={() => void window.xiaowang.browserHolder("bot")}>{copy.release}</button>
                 </>
               )}
             </div>
@@ -429,8 +432,8 @@ function plainError(error: unknown): string {
   return message.length > 160 ? `${message.slice(0, 160)}…` : message;
 }
 
-function Message({ item, ink, name }: { item: ChatItem; ink: string; name: string }) {
-  if (item.kind === "call") return <CallCard item={item} name={name} ink={ink} />;
+function Message({ item, ink, name, copy }: { item: ChatItem; ink: string; name: string; copy: Copy }) {
+  if (item.kind === "call") return <CallCard item={item} name={name} ink={ink} copy={copy} />;
   if (item.kind === "user") return <div className="bubble user" style={{ background: ink }}>{item.text}</div>;
   return (
     <div className="bubble assistant">
@@ -439,13 +442,13 @@ function Message({ item, ink, name }: { item: ChatItem; ink: string; name: strin
   );
 }
 
-function CallCard({ item, name, ink }: { item: ChatItem; name: string; ink: string }) {
+function CallCard({ item, name, ink, copy }: { item: ChatItem; name: string; ink: string; copy: Copy }) {
   const [open, setOpen] = useState(false);
   const seconds = item.seconds ?? 0;
   const clock = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
   return (
     <article className="call-card">
-      <button type="button" title={open ? "收起通话记录" : "展开通话记录"} onClick={() => setOpen((value) => !value)}>
+      <button type="button" title={open ? copy.collapseCall : copy.expandCall} onClick={() => setOpen((value) => !value)}>
         <Phone size={14} />
         <span>{name}</span>
         <span>{clock}</span>
@@ -491,12 +494,12 @@ function foldCaption(captions: LiveCaption[], who: "user" | "assistant", text: s
   return next.slice(-4);
 }
 
-function callStatus(call: LiveCallView): string {
-  if (call.phase === "connecting") return "正在接通";
+function callStatus(call: LiveCallView, copy: Copy): string {
+  if (call.phase === "connecting") return copy.connecting;
   const last = call.captions[call.captions.length - 1];
-  if (last?.live && last.who === "user") return "正在听";
-  if (last?.live && last.who === "assistant") return "正在说";
-  return "通话中";
+  if (last?.live && last.who === "user") return copy.listening;
+  if (last?.live && last.who === "assistant") return copy.speaking;
+  return copy.inCall;
 }
 
 function callMood(call: LiveCallView): "idle" | "think" {
@@ -508,22 +511,24 @@ function FileStage({
   slug,
   library,
   file,
+  copy,
   onPick,
 }: {
   slug: string;
   library: LibraryItem[];
   file: { id: string; filename: string; page: number } | null;
+  copy: Copy;
   onPick: (file: LibraryItem) => void;
 }) {
   return (
     <div className="file-stage">
       <div className="file-list">
-        {library.length === 0 ? <p>把 PDF 或笔记放进这个任务。</p> : null}
+        {library.length === 0 ? <p>{copy.emptyLibrary}</p> : null}
         {library.map((entry) => (
           <button className={file?.id === entry.id ? "on" : ""} key={entry.id} type="button" onClick={() => onPick(entry)}>{entry.filename}</button>
         ))}
       </div>
-      {file && slug ? <Reader slug={slug} file={file} /> : <p className="empty">选择一份资料。</p>}
+      {file && slug ? <Reader slug={slug} file={file} /> : <p className="empty">{copy.pickFile}</p>}
     </div>
   );
 }
@@ -553,19 +558,11 @@ function Reader({ slug, file }: { slug: string; file: { id: string; filename: st
   return <pre className="plain">{text}</pre>;
 }
 
-function SlideStage({ slides, onIndex }: { slides: { title: string; pages: string[]; index: number } | null; onIndex: (index: number) => void }) {
-  if (!slides) return <p className="empty">幻灯片做好后会出现在这里。</p>;
-  const page = slides.pages[slides.index] ?? "";
+function CanvasStage({ canvas, copy }: { canvas: { title: string; html: string } | null; copy: Copy }) {
+  if (!canvas) return <p className="empty">{copy.emptyCanvas}</p>;
   return (
-    <div className="slides">
-      <div className="pager">
-        <button type="button" onClick={() => onIndex(Math.max(0, slides.index - 1))}><ChevronLeft size={16} /></button>
-        <span>{slides.title} · {slides.index + 1} / {slides.pages.length}</span>
-        <button type="button" onClick={() => onIndex(Math.min(slides.pages.length - 1, slides.index + 1))}><ChevronRight size={16} /></button>
-      </div>
-      <article>
-        <Markdown remarkPlugins={[remarkGfm]}>{page}</Markdown>
-      </article>
+    <div className="canvas-stage">
+      <iframe className="canvas-frame" title={canvas.title} sandbox="allow-scripts" srcDoc={canvas.html} />
     </div>
   );
 }
@@ -637,7 +634,9 @@ function SettingsPanel({
   const [region, setRegion] = useState<RealtimeRegion>(saved.region);
   const [workspace, setWorkspace] = useState(saved.workspace);
   const [realtimeKey, setRealtimeKey] = useState("");
+  const [locale, setLocale] = useState<Locale>(localeOf(settings?.locale));
   const [notice, setNotice] = useState("");
+  const copy = copyFor(locale);
   const [busy, setBusy] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const previewAudio = useRef(createCallAudio(() => {}));
@@ -652,6 +651,7 @@ function SettingsPanel({
     realtimeRegion: region,
     realtimeWorkspace: workspace,
     realtimeKey,
+    locale,
   };
   const voiceChoices = voicesFor(service, realtimeModel);
   const modelChoices = modelsFor(service);
@@ -733,69 +733,73 @@ function SettingsPanel({
     <div className="modal">
       <form onSubmit={(event) => { event.preventDefault(); void onSave(patch); }}>
         <header>
-          <strong>{forced ? "先接上模型" : "设置"}</strong>
-          {forced ? null : <button type="button" aria-label="关闭" onClick={onClose}><X size={16} strokeWidth={1.75} /></button>}
+          <strong>{forced ? copy.connectModel : copy.settings}</strong>
+          <div className="lang" role="group" aria-label={copy.language}>
+            <button type="button" className={locale === "zh" ? "on" : ""} onClick={() => setLocale("zh")}>中文</button>
+            <button type="button" className={locale === "en" ? "on" : ""} onClick={() => setLocale("en")}>English</button>
+          </div>
+          {forced ? null : <button type="button" aria-label={copy.close} onClick={onClose}><X size={16} strokeWidth={1.75} /></button>}
         </header>
         <div className="columns">
         <section>
-          <h2><MessageSquareText size={16} strokeWidth={1.75} />文字</h2>
-          <label>接口风格
-            <FieldSelect label="接口风格" value={apiStyle || "auto"} onChange={(value) => setApiStyle(value === "auto" ? "" : value)} options={[
-              { value: "auto", label: "自动" },
-              { value: "openai", label: "OpenAI 兼容" },
-              { value: "anthropic", label: "Anthropic" },
+          <h2><MessageSquareText size={16} strokeWidth={1.75} />{copy.text}</h2>
+          <label>{copy.style}
+            <FieldSelect label={copy.style} value={apiStyle || "auto"} onChange={(value) => setApiStyle(value === "auto" ? "" : value)} options={[
+              { value: "auto", label: copy.auto },
+              { value: "openai", label: copy.openai },
+              { value: "anthropic", label: copy.anthropic },
             ]} />
           </label>
-          <label>接口地址<input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.deepseek.com/v1" /></label>
-          <label>模型密钥<input value={apiKey} type="password" onChange={(event) => setApiKey(event.target.value)} placeholder={settings?.keyHint || "只显示末四位"} /></label>
+          <label>{copy.baseUrl}<input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.deepseek.com/v1" /></label>
+          <label>{copy.modelKey}<input value={apiKey} type="password" onChange={(event) => setApiKey(event.target.value)} placeholder={settings?.keyHint || "····"} /></label>
           <div className="row">
-            <button type="button" disabled={busy} onClick={() => void loadModels()}><RefreshCw size={15} strokeWidth={1.75} />获取模型</button>
-            <button type="button" disabled={busy} onClick={() => void check()}><Check size={15} strokeWidth={1.75} />检查</button>
+            <button type="button" disabled={busy} onClick={() => void loadModels()}><RefreshCw size={15} strokeWidth={1.75} />{copy.fetchModels}</button>
+            <button type="button" disabled={busy} onClick={() => void check()}><Check size={15} strokeWidth={1.75} />{copy.check}</button>
           </div>
-          <label>模型
+          <label>{copy.model}
             {models.length > 0 ? (
-              <FieldSelect label="模型" value={model} onChange={setModel} options={models.map((id) => ({ value: id, label: id }))} />
+              <FieldSelect label={copy.model} value={model} onChange={setModel} options={models.map((id) => ({ value: id, label: id }))} />
             ) : (
               <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="deepseek-chat" />
             )}
           </label>
         </section>
         <section>
-          <h2><AudioLines size={16} strokeWidth={1.75} />通话</h2>
+          <h2><AudioLines size={16} strokeWidth={1.75} />{copy.callSection}</h2>
           <div className="field-block">
-            <span>服务</span>
+            <span>{copy.service}</span>
             <div className="with-action">
-              <FieldSelect label="服务" value={service} onChange={(value) => chooseService(value as RealtimeServiceId)} options={REALTIME_SERVICES.map((item) => ({ value: item.id, label: item.name }))} />
-              <button type="button" onClick={() => void window.xiaowang.openKeyPage(service, region)}><ExternalLink size={15} strokeWidth={1.75} />获取密钥</button>
+              <FieldSelect label={copy.service} value={service} onChange={(value) => chooseService(value as RealtimeServiceId)} options={REALTIME_SERVICES.map((item) => ({ value: item.id, label: item.name }))} />
+              <button type="button" onClick={() => void window.xiaowang.openKeyPage(service, region)}><ExternalLink size={15} strokeWidth={1.75} />{copy.getKey}</button>
             </div>
           </div>
           {service === "qwen" ? (
-            <label>地域
-              <FieldSelect label="地域" value={region} onChange={(value) => setRegion(value as RealtimeRegion)} options={[
-                { value: "beijing", label: "北京" },
-                { value: "singapore", label: "新加坡" },
+            <label>{copy.region}
+              <FieldSelect label={copy.region} value={region} onChange={(value) => setRegion(value as RealtimeRegion)} options={[
+                { value: "beijing", label: copy.beijing },
+                { value: "singapore", label: copy.singapore },
               ]} />
             </label>
           ) : null}
           {needsWorkspace ? (
-            <label>工作空间<input value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder="工作空间 ID，或完整 wss 地址" /></label>
+            <label>{copy.workspace}<input value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder={copy.workspacePlaceholder} /></label>
           ) : null}
-          <label>密钥<input value={realtimeKey} type="password" onChange={(event) => setRealtimeKey(event.target.value)} placeholder={settings?.realtimeKeyHint || "这一家的密钥"} /></label>
-          <label>模型
-            <FieldSelect label="模型" value={realtimeModel} onChange={chooseRealtimeModel} options={modelChoices.map((item) => ({ value: item.id, label: `${item.name} · ${item.id}` }))} />
+          <label>{copy.key}<input value={realtimeKey} type="password" onChange={(event) => setRealtimeKey(event.target.value)} placeholder={settings?.realtimeKeyHint || "····"} /></label>
+          <label>{copy.model}
+            <FieldSelect label={copy.model} value={realtimeModel} onChange={chooseRealtimeModel} options={modelChoices.map((item) => ({ value: item.id, label: `${item.name} · ${item.id}` }))} />
           </label>
           <div className="field-block">
-            <span>音色</span>
+            <span>{copy.voice}</span>
             <div className="with-action">
-              <FieldSelect label="音色" value={voice} onChange={setVoice} options={voiceChoices.map((item) => ({ value: item.id, label: `${item.name} · ${item.id}` }))} />
-              <button type="button" onClick={() => void preview()}>{previewing ? <Square size={14} strokeWidth={1.75} /> : <Play size={15} strokeWidth={1.75} />}{previewing ? "停止" : "试听"}</button>
+              <FieldSelect label={copy.voice} value={voice} onChange={setVoice} options={voiceChoices.map((item) => ({ value: item.id, label: `${item.name} · ${item.id}` }))} />
+              <button type="button" onClick={() => void preview()}>{previewing ? <Square size={14} strokeWidth={1.75} /> : <Play size={15} strokeWidth={1.75} />}{previewing ? copy.stopPreview : copy.preview}</button>
             </div>
           </div>
         </section>
         </div>
         <footer>
           {notice ? <p>{notice}</p> : null}
-          <button className="primary" type="submit">保存并进入</button>
+          <button className="primary" type="submit">{copy.save}</button>
         </footer>
       </form>
     </div>
@@ -806,12 +810,14 @@ function ProfileStage({
   bot,
   personName,
   library,
+  copy,
   onRefresh,
   onForgot,
 }: {
   bot: BotRow;
   personName: string;
   library: LibraryItem[];
+  copy: Copy;
   onRefresh: () => Promise<void>;
   onForgot: (id: string) => void;
 }) {
@@ -830,7 +836,7 @@ function ProfileStage({
     >
       <div className="hero">
         <Avatar slug={bot.slug} seed={bot.avatarSeed} ink={bot.avatarInk} size={96} />
-        <button type="button" onClick={() => void window.xiaowang.setAvatar(bot.slug, { seed: nextAvatarSeed(bot.slug) })}>换一张</button>
+        <button type="button" onClick={() => void window.xiaowang.setAvatar(bot.slug, { seed: nextAvatarSeed(bot.slug) })}>{copy.anotherFace}</button>
       </div>
       <div className="inks">
         {INK_CHOICES.map((color) => (
@@ -844,21 +850,21 @@ function ProfileStage({
           />
         ))}
       </div>
-      <label>名字
+      <label>{copy.name}
         <input value={name} onChange={(event) => setName(event.target.value)} />
       </label>
-      <button className="primary" type="submit">保存名字</button>
-      {notice ? <p>{notice}</p> : <p>{entrance ? `下一轮起，总入口和每个任务都用「${name.trim() || personName}」认识自己。` : "改的是这个任务的显示名。"}</p>}
+      <button className="primary" type="submit">{copy.saveName}</button>
+      {notice ? <p>{notice}</p> : <p>{entrance ? copy.nextRound(name.trim() || personName) : copy.taskDisplayName}</p>}
       <div className="library-edit">
-        <strong>资料</strong>
+        <strong>{copy.materials}</strong>
         {library.map((entry) => (
           <div key={entry.id}>
             <span>{entry.filename}</span>
-            <button type="button" onClick={() => void window.xiaowang.forgetFile(bot.slug, entry.id).then(() => { onForgot(entry.id); return onRefresh(); })}>移出</button>
+            <button type="button" onClick={() => void window.xiaowang.forgetFile(bot.slug, entry.id).then(() => { onForgot(entry.id); return onRefresh(); })}>{copy.remove}</button>
           </div>
         ))}
-        {library.length === 0 ? <p>这个任务还没有资料。</p> : null}
-        <button type="button" onClick={() => void window.xiaowang.addFiles().then(onRefresh)}>添加资料</button>
+        {library.length === 0 ? <p>{copy.noMaterials}</p> : null}
+        <button type="button" onClick={() => void window.xiaowang.addFiles().then(onRefresh)}>{copy.addMaterials}</button>
       </div>
     </form>
   );

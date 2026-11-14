@@ -84,6 +84,7 @@ export interface SettingsView {
   realtimeVoice: string;
   realtimeRegion: string;
   realtimeWorkspace: string;
+  locale: string;
   ready: boolean;
 }
 
@@ -102,6 +103,7 @@ export interface SettingsPatch {
   realtimeVoice?: string;
   realtimeRegion?: string;
   realtimeWorkspace?: string;
+  locale?: string;
 }
 
 export interface CallNote {
@@ -137,7 +139,7 @@ export interface StepNote {
 export type StageNote = { slug: string } & (
   | { mode: "file"; id: string; filename: string; page: number }
   | { mode: "browser"; url: string }
-  | { mode: "slides"; title: string; pages: string[] }
+  | { mode: "canvas"; title: string; html: string }
 );
 
 export interface BrowserNote {

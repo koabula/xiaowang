@@ -8,7 +8,7 @@ import { runTurn } from "../src/harness.ts";
 import { projectLlmContext } from "../src/project.ts";
 import { toOpenAIMessages } from "../src/provider.ts";
 import { Runtime } from "../src/runtime.ts";
-import { isSensitiveBrowserTarget, splitSlides, type BrowserDriver, type StageView } from "../src/stage.ts";
+import { isSensitiveBrowserTarget, type BrowserDriver, type StageView } from "../src/stage.ts";
 import { executeTool } from "../src/tools.ts";
 import type { CompletionResult, LlmProvider } from "../src/types.ts";
 
@@ -86,7 +86,7 @@ test("browser tools stay quiet without a window and refuse sensitive clicks", as
   }
 });
 
-test("show_stage opens a referenced file and splits slides", async () => {
+test("show_stage opens a referenced file and a canvas page", async () => {
   const { runtime, close } = openRuntime();
   try {
     const bot = runtime.activeBot();
@@ -103,10 +103,16 @@ test("show_stage opens a referenced file and splits slides", async () => {
     assert.equal(shown[0]?.mode, "file");
     if (shown[0]?.mode === "file") assert.equal(shown[0].page, 2);
 
-    writeFileSync(path.join(bot.workspaceDir, "deck.md"), "第一页\n---\n第二页\n");
-    const slides = await executeTool("show_stage", { mode: "slides", path: "deck.md" }, host);
-    assert.match(slides.output, /2 页/);
-    assert.deepEqual(splitSlides("第一页\n---\n第二页\n"), ["第一页", "第二页"]);
+    writeFileSync(path.join(bot.workspaceDir, "deck.html"), "<!doctype html><title>Deck</title><style>section{height:100vh}</style>");
+    const canvas = await executeTool("show_stage", { mode: "canvas", path: "deck.html" }, host);
+    assert.match(canvas.output, /deck\.html/);
+    assert.equal(shown[1]?.mode, "canvas");
+    if (shown[1]?.mode === "canvas") assert.match(shown[1].html, /Deck/);
+    const markdown = await executeTool("show_stage", { mode: "slides", path: "deck.html" }, host);
+    assert.match(markdown.output, /mode=canvas/);
+    const system = projectLlmContext(bot, [], { personName: "Wang", locale: "en" }).system;
+    assert.match(system, /Reply in English/);
+    assert.match(system, /mode=canvas/);
   } finally {
     close();
   }

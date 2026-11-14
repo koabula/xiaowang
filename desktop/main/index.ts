@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, protocol, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, session, shell } from "electron";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +6,7 @@ import { LiveCall } from "./call.ts";
 import { runTurn } from "../../src/harness.ts";
 import { formatVoiceBrief, projectVoiceBrief } from "../../src/project.ts";
 import { checkModel, configFromEnv, createProvider, listModels } from "../../src/provider.ts";
+import { localeOf } from "../../src/locale.ts";
 import { keyForService, realtimeKeyPage, resolveRealtime } from "../../src/realtime-catalog.ts";
 import { PREVIEW_LINE, doubaoSession, realtimeEndpoint, realtimeInstructions, sessionUpdate, socketUrl, voiceTools } from "../../src/realtime.ts";
 import { Runtime } from "../../src/runtime.ts";
@@ -177,6 +178,7 @@ async function ask(slug: string, text: string, signal: AbortSignal): Promise<voi
     input: text,
     provider,
     env: envFromSecrets(),
+    locale: localeOf(secrets.locale),
     signal,
     browser: browserFor(slug),
     stage: {
@@ -385,12 +387,19 @@ function attachDownloads(): void {
   });
 }
 
+function appIcon() {
+  return nativeImage.createFromPath(path.join(here, "../icon.png"));
+}
+
 async function createWindow(): Promise<void> {
+  const icon = appIcon();
+  if (process.platform === "darwin" && !icon.isEmpty()) app.dock?.setIcon(icon);
   window = new BrowserWindow({
     width: 1280,
     height: 840,
     minWidth: 980,
     minHeight: 680,
+    icon,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 16 },
     backgroundColor: "#F6F6F7",
@@ -454,9 +463,10 @@ function startCall(slug: string): void {
   const bot = runtime.store.requireBot(slug);
   const person = runtime.ensureSteward().name;
   const library = runtime.store.listLibrary(bot.id).map((ref) => ({ id: ref.id, filename: ref.filename }));
-  const brief = formatVoiceBrief(projectVoiceBrief(bot, runtime.store.getEvents(bot.id), { library }), person);
-  const instructions = realtimeInstructions(person, brief);
-  const tools = voiceTools(toolSchemas());
+  const locale = localeOf(secrets.locale);
+  const brief = formatVoiceBrief(projectVoiceBrief(bot, runtime.store.getEvents(bot.id), { library }), person, locale);
+  const instructions = realtimeInstructions(person, brief, locale);
+  const tools = voiceTools(toolSchemas(), locale);
   const session = endpoint.family === "doubao"
     ? doubaoSession({ instructions, tools, voice: choice.voice })
     : sessionUpdate({

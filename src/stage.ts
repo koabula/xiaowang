@@ -3,7 +3,7 @@
 export type StageView =
   | { mode: "file"; id: string; filename: string; page: number }
   | { mode: "browser"; url: string }
-  | { mode: "slides"; title: string; pages: string[] };
+  | { mode: "canvas"; title: string; html: string };
 
 export interface StageDriver {
   show(view: StageView): void;
@@ -38,13 +38,7 @@ export function assertHttpUrl(value: string): string | { error: string } {
   return url.toString();
 }
 
-export function splitSlides(markdown: string): string[] {
-  const pages = markdown
-    .split(/\n---\n/)
-    .map((page) => page.trim())
-    .filter(Boolean);
-  return pages.length > 0 ? pages : ["（这一份还没有内容）"];
-}
+export const CANVAS_HTML_CAP = 1_500_000;
 
 export const BROWSER_ABSENT = "应用内浏览器还没接上。请在桌面端打开右栏的浏览器。";
 export const BROWSER_BUSY = "另一个任务正在使用浏览器。等它用完再打开。";

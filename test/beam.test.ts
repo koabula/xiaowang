@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { beamHash, beamPalette } from "../src/beam.ts";
+import { APP_ICON_INK, APP_ICON_NAME, beamHash, beamPalette, beamSvg } from "../src/beam.ts";
 
 const libraryHash = Function(
   `"use strict"; return (${readFileSync(new URL("../node_modules/boring-avatars/dist/index.js", import.meta.url), "utf8").match(/const m = \(l\) => \{[\s\S]*?return Math\.abs\(r\);\n\}/)?.[0].replace(/^const m = /, "")});`,
@@ -31,4 +31,11 @@ test("a new face keeps the slab color, and a new color keeps the same slots for 
       assert.notEqual(beamHash(face) % 5, (beamHash(face) + 13) % 5);
     }
   }
+});
+
+test("the app icon is the pinned steward beam", () => {
+  const svg = beamSvg(APP_ICON_NAME, beamPalette(APP_ICON_NAME, APP_ICON_INK));
+  assert.equal(svg, beamSvg(APP_ICON_NAME, beamPalette(APP_ICON_NAME, APP_ICON_INK)));
+  assert.match(svg, new RegExp(APP_ICON_INK));
+  assert.match(svg, /#FFFFFF|#000000/);
 });

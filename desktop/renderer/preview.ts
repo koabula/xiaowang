@@ -21,6 +21,7 @@ export function installPreviewBridge(): void {
       realtimeVoice: "",
       realtimeRegion: "",
       realtimeWorkspace: "",
+      locale: "zh",
       ready: true,
     },
     bots: [
@@ -130,7 +131,7 @@ export function installPreviewBridge(): void {
       return () => listeners.call.delete(callback);
     },
     async saveSettings(patch: SettingsPatch) {
-      const settings: SettingsView = { ...state.settings, model: patch.model || state.settings.model, baseUrl: patch.baseUrl ?? state.settings.baseUrl, apiStyle: patch.apiStyle ?? state.settings.apiStyle, realtimeService: patch.realtimeService ?? state.settings.realtimeService, realtimeModel: patch.realtimeModel ?? state.settings.realtimeModel, realtimeVoice: patch.realtimeVoice ?? state.settings.realtimeVoice, realtimeRegion: patch.realtimeRegion ?? state.settings.realtimeRegion, realtimeWorkspace: patch.realtimeWorkspace ?? state.settings.realtimeWorkspace, ready: true };
+      const settings: SettingsView = { ...state.settings, model: patch.model || state.settings.model, baseUrl: patch.baseUrl ?? state.settings.baseUrl, apiStyle: patch.apiStyle ?? state.settings.apiStyle, realtimeService: patch.realtimeService ?? state.settings.realtimeService, realtimeModel: patch.realtimeModel ?? state.settings.realtimeModel, realtimeVoice: patch.realtimeVoice ?? state.settings.realtimeVoice, realtimeRegion: patch.realtimeRegion ?? state.settings.realtimeRegion, realtimeWorkspace: patch.realtimeWorkspace ?? state.settings.realtimeWorkspace, locale: patch.locale === "en" ? "en" : "zh", ready: true };
       state = { ...state, settings };
       publish();
       return settings;
