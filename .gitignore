@@ -1,0 +1,12 @@
+node_modules/
+dist/
+out/
+release/
+*.tsbuildinfo
+.xiaowang/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.env
+.env.*
+.DS_Store

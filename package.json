@@ -1,0 +1,25 @@
+{
+  "name": "xiaowang",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "小王同学无头 Agent 内核：多 Bot 会话、工具循环、文献检索",
+  "bin": {
+    "xiaowang": "./src/cli.ts"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "xiaowang": "node src/cli.ts",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "unpdf": "^2.1.0"
+  }
+}

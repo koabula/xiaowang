@@ -1,0 +1,275 @@
+import type { CompletionRequest, CompletionResult, LlmProvider, ModelMessage, ToolSchema } from "./types.ts";
+
+export type ApiStyle = "openai" | "anthropic";
+
+export interface ProviderConfig {
+  apiStyle: ApiStyle;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
+export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ProviderConfig {
+  const model = env.XIAOWANG_MODEL?.trim() ?? "";
+  const baseUrl = env.XIAOWANG_BASE_URL?.trim() ?? "";
+  const requested = env.XIAOWANG_API_STYLE?.trim().toLowerCase();
+  const apiStyle = inferStyle(requested, baseUrl, model);
+  const apiKey = env.XIAOWANG_API_KEY?.trim() ?? "";
+  const resolvedBase =
+    baseUrl || (apiStyle === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1");
+  if (!model) {
+    throw new Error(
+      "请设置 XIAOWANG_MODEL。例如 deepseek-chat、qwen-plus、gpt-4.1、gemini-2.5-pro、claude-sonnet-4-5。",
+    );
+  }
+  if (!apiKey && !isLocalBase(resolvedBase)) {
+    throw new Error("请设置 XIAOWANG_API_KEY。密钥只留在环境变量里，不会写入会话或工作区。");
+  }
+  return {
+    apiStyle,
+    baseUrl: resolvedBase,
+    apiKey: apiKey || "ollama",
+    model,
+  };
+}
+
+export function createProvider(config: ProviderConfig): LlmProvider {
+  return {
+    model: config.model,
+    complete(request) {
+      return config.apiStyle === "anthropic"
+        ? completeAnthropic(config, request)
+        : completeOpenAI(config, request);
+    },
+  };
+}
+
+export function openaiChatUrl(baseUrl: string): string {
+  const base = trimSlash(baseUrl);
+  if (base.endsWith("/chat/completions")) return base;
+  return `${base}/chat/completions`;
+}
+
+export function anthropicMessagesUrl(baseUrl: string): string {
+  const base = trimSlash(baseUrl);
+  if (base.endsWith("/messages")) return base;
+  if (base.endsWith("/v1")) return `${base}/messages`;
+  return `${base}/v1/messages`;
+}
+
+export function toOpenAIMessages(system: string, messages: ModelMessage[]): unknown[] {
+  const out: unknown[] = [{ role: "system", content: system }];
+  for (const message of mergeUserText(messages)) {
+    if (message.role === "tool") {
+      out.push({
+        role: "tool",
+        tool_call_id: message.toolCallId,
+        content: message.content,
+      });
+      continue;
+    }
+    if (message.role === "assistant") {
+      const body: Record<string, unknown> = {
+        role: "assistant",
+        content: message.content.trim() ? message.content : null,
+      };
+      if (message.toolCalls && message.toolCalls.length > 0) {
+        body.tool_calls = message.toolCalls.map((call) => ({
+          id: call.id,
+          type: "function",
+          function: { name: call.name, arguments: call.arguments },
+        }));
+      }
+      out.push(body);
+      continue;
+    }
+    out.push({ role: "user", content: message.content });
+  }
+  return out;
+}
+
+export function toOpenAITools(tools: ToolSchema[]): unknown[] {
+  return tools.map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    },
+  }));
+}
+
+export function toAnthropicMessages(messages: ModelMessage[]): unknown[] {
+  const out: Array<{ role: "user" | "assistant"; content: unknown }> = [];
+  for (const message of mergeUserText(messages)) {
+    if (message.role === "tool") {
+      const block = {
+        type: "tool_result",
+        tool_use_id: message.toolCallId,
+        content: message.content,
+        is_error: false,
+      };
+      const prev = out.at(-1);
+      if (prev?.role === "user" && Array.isArray(prev.content)) {
+        prev.content.push(block);
+      } else {
+        out.push({ role: "user", content: [block] });
+      }
+      continue;
+    }
+    if (message.role === "assistant") {
+      const content: unknown[] = [];
+      if (message.content.trim()) content.push({ type: "text", text: message.content });
+      for (const call of message.toolCalls ?? []) {
+        content.push({
+          type: "tool_use",
+          id: call.id,
+          name: call.name,
+          input: parseObject(call.arguments),
+        });
+      }
+      if (content.length === 0) content.push({ type: "text", text: "…" });
+      out.push({ role: "assistant", content });
+      continue;
+    }
+    out.push({ role: "user", content: message.content });
+  }
+  return out;
+}
+
+export function toAnthropicTools(tools: ToolSchema[]): unknown[] {
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    input_schema: tool.parameters,
+  }));
+}
+
+async function completeOpenAI(config: ProviderConfig, request: CompletionRequest): Promise<CompletionResult> {
+  const response = await fetch(openaiChatUrl(config.baseUrl), {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${config.apiKey}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: config.model,
+      messages: toOpenAIMessages(request.system, request.messages),
+      tools: toOpenAITools(request.tools),
+      tool_choice: "auto",
+      max_tokens: 4096,
+    }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(formatHttpError(response.status, raw, config.apiKey));
+  const json = JSON.parse(raw) as {
+    choices?: Array<{
+      message?: {
+        content?: string | null;
+        tool_calls?: Array<{
+          id?: string;
+          function?: { name?: string; arguments?: unknown };
+        }>;
+      };
+    }>;
+  };
+  const message = json.choices?.[0]?.message;
+  return {
+    text: typeof message?.content === "string" ? message.content : "",
+    toolCalls: (message?.tool_calls ?? []).map((call, index) => ({
+      id: call.id || `call_${index}`,
+      name: call.function?.name || "",
+      arguments: argumentString(call.function?.arguments),
+    })),
+  };
+}
+
+async function completeAnthropic(config: ProviderConfig, request: CompletionRequest): Promise<CompletionResult> {
+  const response = await fetch(anthropicMessagesUrl(config.baseUrl), {
+    method: "POST",
+    headers: {
+      "x-api-key": config.apiKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: config.model,
+      system: request.system,
+      messages: toAnthropicMessages(request.messages),
+      tools: toAnthropicTools(request.tools),
+      max_tokens: 4096,
+    }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(formatHttpError(response.status, raw, config.apiKey));
+  const json = JSON.parse(raw) as {
+    content?: Array<{ type?: string; text?: string; id?: string; name?: string; input?: unknown }>;
+  };
+  let text = "";
+  const toolCalls: CompletionResult["toolCalls"] = [];
+  for (const block of json.content ?? []) {
+    if (block.type === "text" && block.text) text += block.text;
+    if (block.type === "tool_use") {
+      toolCalls.push({
+        id: block.id || `tool_${toolCalls.length}`,
+        name: block.name || "",
+        arguments: argumentString(block.input),
+      });
+    }
+  }
+  return { text, toolCalls };
+}
+
+function mergeUserText(messages: ModelMessage[]): ModelMessage[] {
+  const merged: ModelMessage[] = [];
+  for (const message of messages) {
+    const prev = merged.at(-1);
+    if (message.role === "user" && prev?.role === "user" && !prev.toolCallId) {
+      prev.content = `${prev.content}\n\n${message.content}`;
+      continue;
+    }
+    merged.push({ ...message, toolCalls: message.toolCalls ? [...message.toolCalls] : undefined });
+  }
+  return merged;
+}
+
+function parseObject(raw: string): unknown {
+  try {
+    return raw.trim() ? (JSON.parse(raw) as unknown) : {};
+  } catch {
+    return { _raw: raw };
+  }
+}
+
+function argumentString(value: unknown): string {
+  if (typeof value === "string") return value;
+  return JSON.stringify(value ?? {});
+}
+
+function formatHttpError(status: number, body: string, apiKey: string): string {
+  let snippet = body.replace(/\s+/g, " ").slice(0, 500);
+  if (apiKey) snippet = snippet.replaceAll(apiKey, "[redacted]");
+  if (status === 401 || status === 403) {
+    return `模型服务拒绝了密钥（HTTP ${status}）。请检查 XIAOWANG_API_KEY。响应：${snippet}`;
+  }
+  return `模型服务返回 HTTP ${status}。响应：${snippet}`;
+}
+
+function inferStyle(requested: string | undefined, baseUrl: string, model: string): ApiStyle {
+  if (requested === "openai" || requested === "anthropic") return requested;
+  if (requested) {
+    throw new Error("XIAOWANG_API_STYLE 只能是 openai 或 anthropic。");
+  }
+  if (baseUrl.includes("anthropic.com") || model.startsWith("claude")) return "anthropic";
+  return "openai";
+}
+
+function isLocalBase(baseUrl: string): boolean {
+  return /:\/\/(127\.0\.0\.1|localhost)([:/]|$)/.test(baseUrl);
+}
+
+function trimSlash(url: string): string {
+  return url.replace(/\/+$/, "");
+}
