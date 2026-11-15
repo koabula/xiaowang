@@ -24,7 +24,7 @@ test('desktop updates: version, icon-only offer, verified download, retry and de
     if (request.url.includes('latest')) {
       if (release === 'absent') { response.writeHead(404); response.end('no release'); return; }
       const version = release === 'same' ? currentVersion : nextVersion;
-      response.writeHead(200, { 'content-type': 'text/yaml' }); response.end(JSON.stringify({ version, files: [{ url: filename, sha512, size: bytes.length }], path: filename, sha512 })); return;
+      response.writeHead(200, { 'content-type': 'text/yaml' }); response.end(JSON.stringify({ version, ...(release === 'unsupported' ? { minimumSystemVersion: '999.0.0' } : {}), files: [{ url: filename, sha512, size: bytes.length }], path: filename, sha512 })); return;
     }
     if (request.url.split('?')[0].endsWith(filename)) {
       attempts++; response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': bytes.length });
@@ -48,6 +48,8 @@ test('desktop updates: version, icon-only offer, verified download, retry and de
   assert.equal(await page.locator('.update-button').count(), 0, 'A repository with no releases has no update button');
   release = 'same'; await page.evaluate(() => window.xiaowang.checkUpdate());
   assert.equal((await state()).update.phase, 'idle'); assert.equal(await page.locator('.update-button').count(), 0);
+  release = 'unsupported'; await page.evaluate(() => window.xiaowang.checkUpdate());
+  assert.equal((await state()).update.phase, 'idle'); assert.equal(await page.locator('.update-button').count(), 0, 'An incompatible release is not offered');
   release = 'new'; await page.evaluate(() => window.xiaowang.checkUpdate());
   const button = page.locator('.rail footer .update-button'); await button.waitFor();
   assert.equal(await button.textContent(), '', 'The circular update control has no visible text');

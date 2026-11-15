@@ -64,7 +64,7 @@ export function createUpdateEngine(idle: () => boolean): UpdateEngine {
     async check() {
       if (!app.isPackaged && !override) return null;
       const result = await updater.checkForUpdates();
-      latest = result?.updateInfo;
+      latest = result?.isUpdateAvailable ? result.updateInfo : undefined;
       return latest?.version ?? null;
     },
     async download(progress) {
