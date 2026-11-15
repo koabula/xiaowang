@@ -6,13 +6,15 @@
 <p align="center">A desktop companion for conversations, papers, research, and everyday work.</p>
 <p align="center"><a href="https://github.com/koabula/xiaowang/releases/latest">Download</a> · <a href="README.md">简体中文</a> · <a href="https://github.com/koabula/xiaowang/issues">Report an issue</a></p>
 
+## Product film
+
+https://github.com/user-attachments/assets/9b08bac7-c1a6-4cfb-aa03-033debd49c1f
+
 Speak naturally or give instructions in text. XiaoWang brings realtime voice and a background agent together: longer research runs while your conversation continues, and XiaoWang can tell you when the results are ready. PDFs, web pages, Canvas presentations, and generated notes share one window.
 
-## Demo video
+## Full demo
 
-[![Watch: fetch a paper, create a sub bot, ask questions, and interrupt speech](assets/readme/attention-demo.png)](assets/readme/attention-demo.mp4)
-
-[▶ View the HD demo (1:43, 2940 × 1846 · 30 fps)](assets/readme/attention-demo.mp4)
+https://github.com/user-attachments/assets/7b27eaa3-ece9-470b-a0b3-87df8baa8588
 
 Starting with a fresh workspace, ask XiaoWang to fetch *Attention Is All You Need* and create a sub bot for a quick analysis, then call to discuss the paper, self-attention, and an example. The demo includes immediate follow-ups to short answers, a voice interruption, and a spoken request to hang up. It uses real model services: Doubao's Xiaohe 2.0 for XiaoWang and Bill TTS for the questions, with actual waiting and conversation preserved. The conversation is in Chinese.
 

@@ -6,13 +6,15 @@
 <p align="center">能聊天，也能一起读论文、查资料、做研究的桌面助手。</p>
 <p align="center"><a href="https://github.com/koabula/xiaowang/releases/latest">下载最新版</a> · <a href="README.en.md">English</a> · <a href="https://github.com/koabula/xiaowang/issues">反馈问题</a></p>
 
+## 宣传片
+
+https://github.com/user-attachments/assets/9b08bac7-c1a6-4cfb-aa03-033debd49c1f
+
 直接开口交流，也可以用文字布置工作。小王把实时语音和后台 Agent 放在一起：复杂的调研交给后台处理，通话可以继续；完成后，再把结果告诉你。PDF、网页、讲解用的 Canvas 和生成的笔记都在同一个窗口中。
 
-## 演示视频
+## 完整演示
 
-[![点击观看：获取论文、创建子 bot、语音问答与打断](assets/readme/attention-demo.png)](assets/readme/attention-demo.mp4)
-
-[▶ 查看高清演示（1 分 43 秒，2940 × 1846 · 30 fps）](assets/readme/attention-demo.mp4)
+https://github.com/user-attachments/assets/7b27eaa3-ece9-470b-a0b3-87df8baa8588
 
 从刚初始化的小王开始，用文字获取 *Attention Is All You Need*，让小王创建子 bot 快速分析，再打电话聊论文、自注意力和例子，演示短回答接话、语音打断与口语挂断。视频使用真实模型服务：小王为豆包小何 2.0，提问语音由 Bill TTS 合成；保留实际等待和对话过程。
 
