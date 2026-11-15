@@ -148,3 +148,40 @@ test("Doubao completion notices synthesize a short status rather than speaking i
   assert.equal(greeting?.text.includes("内部任务说明"),false);assert.equal(f.sent.some(event=>event.items?.[0]?.role==="user"),false);
   f.start("notice");f.packet();f.end("notice");f.call.noteSpeakerIdle(1);await delay(400);assert.equal(f.states.at(-1)?.phase,"listening");
 });
+
+test('Doubao terminal hangup acknowledges FC, contains no operational narration and waits for playback', async t => {
+  const f = fixture(t); f.asr('q1', '今天就到这，你把电话挂了');
+  f.start('goodbye'); f.packet();
+  f.emit({ type: 'response.function_call_arguments.done', question_id: 'q1', items: [{ call_id: 'hangup', name: 'end_call', arguments: '{}' }] });
+  await delay(400);
+  const receipt = f.sent.find(event => event.items?.[0]?.call_id === 'hangup')?.items[0];
+  assert.ok(receipt); assert.deepEqual(JSON.parse(receipt.content[0].text), {});
+  assert.equal(f.call.isClosed(), false);
+  f.end('goodbye'); await delay();
+  assert.equal(f.call.isClosed(), false, 'Generated audio is not the same as completed playback');
+  f.call.noteSpeakerIdle(1); await delay();
+  assert.equal(f.call.isClosed(), true);
+  assert.equal(f.sent.some(event => event.type === 'response.create'), false);
+});
+
+
+test('Doubao early hangup acknowledgement contains no playback instructions and still permits a goodbye', async t => {
+  const f = fixture(t); f.asr('q1', '结束通话');
+  f.emit({ type: 'response.function_call_arguments.done', question_id: 'q1', items: [{ call_id: 'early-hangup', name: 'end_call', arguments: '{}' }] });
+  await delay(400);
+  const receipt = f.sent.find(event => event.items?.[0]?.call_id === 'early-hangup')?.items[0];
+  assert.ok(receipt); assert.deepEqual(JSON.parse(receipt.content[0].text), {});
+  assert.equal(f.call.isClosed(), false);
+  f.start('goodbye'); f.packet(); f.end('goodbye');
+  assert.equal(f.call.isClosed(), false);
+  f.call.noteSpeakerIdle(1); assert.equal(f.call.isClosed(), true);
+});
+
+
+test('ordinary Doubao explanations and user text retain parenthesized scientific content', t => {
+  const f = fixture(t); f.asr('q1', '解释注意力（Q、K、V）');
+  f.emit({ type: 'response.output_text.done', response_id: 'science', question_id: 'q1', text: '缩放项是 sqrt(d_k)（键向量维数的平方根）。' });
+  assert.equal(f.call.transcript().at(-1)?.text, '缩放项是 sqrt(d_k)（键向量维数的平方根）。');
+  assert.ok(f.call.transcript().some(line => line.text === '解释注意力（Q、K、V）'));
+  assert.equal(f.sent.some(event => event.extension?.tts), false);
+});

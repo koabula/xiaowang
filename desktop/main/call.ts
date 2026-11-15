@@ -400,7 +400,8 @@ export class LiveCall {
     if (name === "end_call") {
       this.ending = true; this.presentation.pause(); this.explicitContinue = false; this.clearLoop();
       this.goodbyeReady = !this.generating;
-      this.queueOutput(callId, "先完成道别，音频播放结束后挂断。", epoch, !this.hadAudio);
+      // The native result resumes generation, which now supplies the goodbye.
+      this.queueOutput(callId, JSON.stringify({}), epoch, !this.hadAudio);
       this.schedule(); return;
     }
     const controller = new AbortController(); this.tools.set(callId, controller); this.state("working");

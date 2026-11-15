@@ -770,7 +770,7 @@ function startCall(slug: string): void {
   const library = runtime.store.listLibrary(bot.id).map((ref) => ({ id: ref.id, filename: ref.filename }));
   const locale = localeOf(secrets.locale);
   const brief = formatVoiceBrief(projectVoiceBrief(bot, runtime.store.getEvents(bot.id), { library }), person, locale);
-  const instructions = realtimeInstructions(person, brief, locale, endpoint.family === "gemini");
+  const instructions = realtimeInstructions(person, brief, locale, endpoint.family === "gemini", endpoint.family === "doubao");
   const voiceTasks = new VoiceTasks(jobs, bot.id, randomUUID(), task => {
     const focus = focusedFiles.get(slug);
     let reference = null;
