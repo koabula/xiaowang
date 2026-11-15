@@ -5,9 +5,9 @@ import { Presentation, type PresentationState } from "../../src/presentation.ts"
 import { DoubaoRealtime } from "../../src/doubao-realtime.ts";
 
 const BREATH_MS = 350;
-export interface PlaybackPosition { serial: number; callId?: string; itemId?: string; contentIndex?: number; playedMs: number }
-export interface AudioIdentity { callId?: string; itemId?: string; responseId?: string; contentIndex?: number; playbackEpoch?: number }
-export interface PlaybackInterruption { callId: string; playbackEpoch: number; throughSerial: number; responseId?: string; itemId?: string }
+export interface PlaybackPosition { serial: number; callId?: string; itemId?: string; chunkId?: string; responseId?: string; contentIndex?: number; playedMs: number }
+export interface AudioIdentity { callId?: string; itemId?: string; chunkId?: string; responseId?: string; contentIndex?: number; playbackEpoch?: number }
+export interface PlaybackInterruption { callId: string; playbackEpoch: number; throughSerial: number; responseId?: string; itemId?: string; scope?: "reply" }
 export interface InterruptionReceipt { callId: string; playbackEpoch: number; position: PlaybackPosition | null }
 export interface VoiceState {
   phase: "connecting" | "reconnecting" | "listening" | "thinking" | "speaking" | "working" | "paused" | "error" | "ended";
@@ -20,7 +20,7 @@ export interface CallHandlers {
   onAudio: (pcm: Buffer, serial: number, identity?: AudioIdentity) => void;
   onInterrupt: (interruption: PlaybackInterruption) => void;
   onLine: (who: "user" | "assistant", text: string, partial: boolean, itemId?: string, order?: number) => void;
-  onTranscript: (who: "user" | "assistant", text: string) => void;
+  onTranscript: (who: "user" | "assistant", text: string, itemId?: string) => void;
   runTool: (name: string, args: string, callId?: string, signal?: AbortSignal) => Promise<string>;
   onToolOutput?: (callId: string) => void;
 }

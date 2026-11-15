@@ -60,5 +60,27 @@ test('real renderer: Canvas adapters and interrupted audio never reopen old play
   await page.waitForFunction(()=>window.levels.at(-1)?.output>.1);
   await page.evaluate(()=>window.audio.stop());
   assert.deepEqual(errors,[]);
-  console.log(`Verified Canvas native/custom navigation and real audio silence after ${Math.round(silence)} ms.`);
+  await page.evaluate(async () => {
+    window.audio.stop(); window.chunks = []; window.levels = [];
+    window.audio = AudioModule.createCallAudio(() => {}, undefined, undefined, chunk => window.chunks.push(chunk));
+    window.audio.subscribeLevels(level => window.levels.push({ time: performance.now(), ...level }));
+    await window.audio.startPlayback(24000);
+  });
+  await page.evaluate(pcm => {
+    window.audio.play(pcm, 1, { callId: 'moss', responseId: 'old', itemId: 'old-turn', chunkId: '1' });
+    window.audio.play(pcm, 2, { callId: 'moss', responseId: 'next', itemId: 'new-turn', chunkId: '1' });
+  }, pcm);
+  await page.waitForFunction(() => window.levels.at(-1)?.output > .1);
+  const resumed = await page.evaluate(() => {
+    window.audio.interrupt({ callId: 'moss', scope: 'reply', playbackEpoch: 1, throughSerial: 2, responseId: 'old', itemId: 'old-turn' });
+    window.levels = []; return performance.now();
+  });
+  await page.waitForFunction(() => window.levels.at(-1)?.output > .1, undefined, { timeout: 1000 });
+  assert.ok(await page.evaluate(at => performance.now() - at < 500, resumed), 'The next reply must not wait through the stopped reply’s remaining duration');
+  assert.equal(await page.evaluate(() => window.chunks.some(chunk => chunk.responseId === 'old')), false);
+  await page.waitForFunction(() => window.chunks.some(chunk => chunk.responseId === 'next'));
+  assert.equal(await page.evaluate(() => window.chunks.filter(chunk => chunk.responseId === 'next').length), 1);
+  await page.evaluate(() => window.audio.stop());
+  console.log(`Verified Canvas navigation, real audio silence after ${Math.round(silence)} ms and reply-scoped MOSS interruption with a queued next reply.`);
+  assert.deepEqual(errors, []);
 });

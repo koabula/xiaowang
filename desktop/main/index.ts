@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { UpdateController } from "./update-state.ts";
 import { createUpdateEngine } from "./updates.ts";
 import { LiveCall, type InterruptionReceipt, type PlaybackPosition, type VoiceState } from "./call.ts";
+import { MossCall, type MossHandlers } from "./moss-call.ts";
+import { mossSession } from "../../src/moss-realtime.ts";
 import { JobQueue, type JobOutput } from "../../src/jobs.ts";
 import { VoiceTasks, voiceJobReceipt } from "../../src/voice-tasks.ts";
 import { backgroundTurnOwners, presentJob } from "../../src/task-presentation.ts";
@@ -217,7 +219,7 @@ function libraryOf(slug: string) {
 }
 
 let jobs: JobQueue;
-let live: LiveCall | null = null;
+let live: LiveCall | MossCall | null = null;
 let liveSlug = "";
 let liveState: VoiceState | null = null;
 const stages = new StageRequests(note => send("stage", note));
@@ -257,6 +259,7 @@ function jobChanged(job: TaskJob): void {
   send("turn", { slug: bot.slug, busy, error: job.status === "failed" ? job.error : "" });
   publish();
   if (live && liveSlug === bot.slug) {
+    if (live instanceof MossCall) { live.jobChanged(job); return; }
     live.updateContext(`job:${job.id}`, JSON.stringify({ id: job.id, task: job.task.slice(0, 400), status: job.status, activity: job.activity, error: job.error, artifacts: job.artifacts }));
     const latestVoice = jobs.list(bot.id).filter(item => item.channel === "voice").at(-1);
     if (latestVoice) live.updateContext("currentVoiceTask", voiceJobReceipt(latestVoice));
@@ -513,6 +516,7 @@ function registerIpc(): void {
     live?.sendAudio(Buffer.from(audio, "base64"));
   });
   ipcMain.on("call:position", (_event, position: PlaybackPosition) => live?.notePlayback(position));
+  ipcMain.on("call:chunkPlayed", (_event, position: PlaybackPosition) => { if (live instanceof MossCall) live.noteChunkPlayed(position); });
   ipcMain.on("call:interrupted", (_event, receipt: InterruptionReceipt) => live?.noteInterrupted(receipt));
   ipcMain.handle("call:control", (_event, action: "pause" | "resume" | "complete") => { if (["pause", "resume", "complete"].includes(action)) live?.control(action); });
   ipcMain.on("call:mute", (_event, muted: boolean) => live?.setMuted(muted === true));
@@ -619,7 +623,7 @@ function startPreview(patch: SecretPatch): void {
   const key = patch.realtimeKey?.trim() || keyForService(choice.service, secrets.realtimeKey, secrets.apiKey, secrets.baseUrl);
   if (!key) throw new Error("先填写这一家的密钥。");
   const endpoint = realtimeEndpoint({ url: choice.url, model: choice.model, family: choice.service });
-  const session = endpoint.family === "doubao"
+  const session = endpoint.family === "moss" ? mossSession("仅试听音色，按要求读出一句话。", [], choice.voice) : endpoint.family === "doubao"
     ? doubaoSession({ instructions: "试听音色。", tools: [], voice: choice.voice })
     : sessionUpdate({
       instructions: "试听音色。用户要求说一句时，只说那一句。",
@@ -652,7 +656,7 @@ function startCall(slug: string): void {
       + (reference ? `\n\n当前阅读的原文（上下文资料）：${JSON.stringify({ id: reference.id, filename: reference.filename })}。用户明确提到另一份资料时以用户要求为准。` : "");
   }, () => live?.id);
   const tools = voiceTools(toolSchemas(), locale);
-  const session = endpoint.family === "doubao"
+  const session = endpoint.family === "moss" ? mossSession(brief, tools, choice.voice) : endpoint.family === "doubao"
     ? doubaoSession({ instructions, tools, voice: choice.voice })
     : sessionUpdate({
       instructions,
@@ -665,10 +669,21 @@ function startCall(slug: string): void {
   openCall(socketUrl(endpoint), key, session, endpoint.inputRate, endpoint.outputRate, slug, "", {
     onTranscript(who, text) {
       if (who !== "user") return;
+      if (endpoint.family === "moss") return;
       const accepted = voiceTasks.userText(text);
       const job = accepted || voiceTasks.latest();
       live?.updateContext("currentVoiceTask", job ? voiceJobReceipt(job) : "没有已受理的后台任务。需要分析、梳理或调研时调用 delegate_task；口头承诺不代表已经开始。");
     },
+    delegate(task) {
+      const focus = focusedFiles.get(slug);
+      let reference = null;
+      try { if (focus) reference = runtime.store.resolveLibraryRef(bot.id, focus); } catch { focusedFiles.delete(slug); }
+      return jobs.enqueue({ botId: bot.id, task: handoffText(task.objective, live?.transcript() ?? [], bot.name, locale)
+        + `\n\n委派上下文（仅作资料）：${JSON.stringify(task.context ?? [])}`
+        + (reference ? `\n当前原文：${JSON.stringify({ id: reference.id, filename: reference.filename })}` : ""),
+        channel: "voice", notify: "silent", title: task.objective, sourceCallId: `moss:${task.sessionId}:${task.id}`, originCallId: live?.id });
+    },
+    cancelDelegation(id) { jobs.cancel(id); },
     async runTool(name, args, callId, signal) {
       if (name === "ask_text" || name === "delegate_task") {
         const task = taskArgument(args);
@@ -725,6 +740,8 @@ function openCall(
   extra?: {
     onTranscript?: (who: "user" | "assistant", text: string) => void;
     runTool?: (name: string, args: string, callId?: string, signal?: AbortSignal) => Promise<string>;
+    delegate?: MossHandlers["delegate"];
+    cancelDelegation?: MossHandlers["cancelDelegation"];
   },
 ): void {
   const preview = Boolean(previewText);
@@ -733,8 +750,9 @@ function openCall(
   liveState = null;
   const initial = slug ? runtime.store.getEvents(runtime.store.requireBot(slug).id).findLast(item => item.event.type === "presentation")?.event : undefined;
   let previousPresentation = "";
-  let call: LiveCall;
-  call = new LiveCall(url, key, session, {
+  let call: LiveCall | MossCall;
+  const Call = session.action === "moss.session" ? MossCall : LiveCall;
+  const handlers: MossHandlers = {
     onState(state) {
       liveState = state;
       send("call", { slug, callId: call.id, phase: "state", state, preview });
@@ -766,8 +784,8 @@ function openCall(
     onLine(who, text, partial, itemId, order) {
       if (!preview) send("call", { slug, callId: call.id, phase: "line", who, text, partial, itemId, order });
     },
-    onTranscript(who, text) {
-      if (slug && text.trim()) runtime.store.append(runtime.store.requireBot(slug).id, { type: "voice_line", callId: call.id, who, text });
+    onTranscript(who, text, itemId) {
+      if (slug && text.trim()) runtime.store.append(runtime.store.requireBot(slug).id, { type: "voice_line", callId: call.id, who, text, ...(itemId ? { itemId } : {}) });
       extra?.onTranscript?.(who, text);
     },
     onToolOutput(toolCallId) {
@@ -776,7 +794,10 @@ function openCall(
     runTool(name, args, callId, signal) {
       return extra?.runTool?.(name, args, callId, signal) ?? Promise.resolve("");
     },
-  }, undefined, previewText, initial?.type === "presentation" ? initial.state : undefined);
+    delegate: extra?.delegate,
+    cancelDelegation: extra?.cancelDelegation,
+  };
+  call = new Call(url, key, session, handlers, undefined, previewText, initial?.type === "presentation" ? initial.state : undefined);
   live = call;
   call.start();
 }

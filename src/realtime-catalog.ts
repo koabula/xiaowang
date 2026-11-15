@@ -1,6 +1,6 @@
 import { DOUBAO_REALTIME_MODEL, DOUBAO_REALTIME_URL, DOUBAO_VOICE } from "./realtime.ts";
 
-export type RealtimeServiceId = "qwen" | "openai" | "doubao";
+export type RealtimeServiceId = "qwen" | "openai" | "doubao" | "moss";
 export type RealtimeRegion = "beijing" | "singapore";
 
 export interface RealtimeModelChoice {
@@ -37,6 +37,7 @@ const QWEN_SINGAPORE = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime";
 const OPENAI_URL = "wss://api.openai.com/v1/realtime";
 
 export const REALTIME_SERVICES: { id: RealtimeServiceId; name: string; models: RealtimeModelChoice[] }[] = [
+  { id: "moss", name: "MOSS Live", models: [{ id: "moss-live-1.0", name: "Live 1.0" }] },
   {
     id: "qwen",
     name: "通义千问",
@@ -148,6 +149,7 @@ const DOUBAO_VOICES: RealtimeVoiceChoice[] = [
 ];
 
 export function realtimeKeyPage(service: string, region: string): string {
+  if (service === "moss") return "https://platform.moss.cn/app/api-keys/";
   if (service === "openai") return "https://platform.openai.com/api-keys";
   if (service === "doubao") return "https://console.volcengine.com/speech/new/setting/apikeys?projectName=default";
   if (region === "singapore") return "https://modelstudio.console.alibabacloud.com/ap-southeast-1/settings/api-key";
@@ -159,6 +161,10 @@ export function modelsFor(service: RealtimeServiceId): RealtimeModelChoice[] {
 }
 
 export function voicesFor(service: RealtimeServiceId, model: string): RealtimeVoiceChoice[] {
+  if (service === "moss") return [
+    { id: "6c3152b1-1d4f-4e49-ade3-09f447712fec", name: "暖暖" },
+    { id: "6cc93520-3207-4f7a-bca9-2d560b9c306b", name: "沐沐" },
+  ];
   if (service === "openai") return OPENAI_VOICES;
   if (service === "doubao") return DOUBAO_VOICES;
   const generation = modelsFor("qwen").find((item) => item.id === model)?.generation ?? "3.5";
@@ -193,6 +199,7 @@ export function keyForService(service: RealtimeServiceId, realtimeKey: string, t
 }
 
 function serviceOf(draft: RealtimeDraft): RealtimeServiceId {
+  if (draft.service === "moss" || /api\.mosi\.cn/i.test(draft.url ?? "")) return "moss";
   if (draft.service === "qwen" || draft.service === "openai" || draft.service === "doubao") return draft.service;
   const url = draft.url ?? "";
   if (/\/api\/v3\/duplex\/realtime\/dialogue/i.test(url)) return "doubao";
@@ -213,6 +220,7 @@ function workspaceOf(url: string): string {
 }
 
 function urlFor(service: RealtimeServiceId, model: string, region: RealtimeRegion, workspace: string): string {
+  if (service === "moss") return "wss://api.mosi.cn/v1/realtime";
   if (service === "openai") return OPENAI_URL;
   if (service === "doubao") return DOUBAO_REALTIME_URL;
   if (workspace || model.startsWith("qwen3.8")) return workspaceUrl(workspace, region);

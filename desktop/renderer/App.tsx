@@ -67,6 +67,7 @@ export function App() {
     (audio) => window.xiaowang.callAudio(audio),
     (serial, callId) => window.xiaowang.callIdle(serial, callId),
     position => window.xiaowang.callPosition(position),
+    position => window.xiaowang.callChunkPlayed(position),
   ));
   const [toast, setToast] = useState("");
   const [rightWidth, setRightWidth] = useState(420);
@@ -904,7 +905,7 @@ function SettingsPanel({
   const copy = copyFor(locale);
   const [busy, setBusy] = useState(false);
   const [previewing, setPreviewing] = useState(false);
-  const previewAudio = useRef(createCallAudio(() => {}, (serial, callId) => window.xiaowang.callIdle(serial, callId), position => window.xiaowang.callPosition(position)));
+  const previewAudio = useRef(createCallAudio(() => {}, (serial, callId) => window.xiaowang.callIdle(serial, callId), position => window.xiaowang.callPosition(position), position => window.xiaowang.callChunkPlayed(position)));
   const patch: SettingsPatch = {
     model,
     baseUrl,

@@ -26,7 +26,7 @@ export const MIC_WORKLET_CODE = `class XiaoWangMic extends AudioWorkletProcessor
 }
 registerProcessor("xiaowang-mic", XiaoWangMic);`;
 
-export function createCallAudio(send: (audio: string) => void, onIdle?: (serial: number, callId?: string) => void, onPosition?: (position: PlaybackPosition) => void): CallAudio {
+export function createCallAudio(send: (audio: string) => void, onIdle?: (serial: number, callId?: string) => void, onPosition?: (position: PlaybackPosition) => void, onChunkPlayed?: (position: PlaybackPosition) => void): CallAudio {
   let mic: MediaStream | null = null;
   let capture: AudioContext | null = null;
   let processor: AudioNode | null = null;
@@ -38,6 +38,7 @@ export function createCallAudio(send: (audio: string) => void, onIdle?: (serial:
   let throughSerial = 0;
   const rejectedResponses = new Set<string>();
   const rejectedItems = new Set<string>();
+  const rejectedReplies = new Set<string>();
   let outputRate = 24_000;
   let nextAt = 0;
   let muted = false;
@@ -51,16 +52,18 @@ export function createCallAudio(send: (audio: string) => void, onIdle?: (serial:
   const completed = new Map<string, number>();
   let pending: Array<{ audio: string; serial: number; identity?: AudioIdentity }> = [];
   const samples = new Float32Array(256);
-  const itemKey = (identity: AudioIdentity) => `${identity.itemId || ""}:${identity.contentIndex ?? 0}`;
+  const replyKey = (identity: AudioIdentity) => JSON.stringify([identity.responseId || "", identity.itemId || ""]);
+  const itemKey = (identity: AudioIdentity) => identity.chunkId ? JSON.stringify([identity.responseId, identity.itemId, identity.chunkId]) : `${identity.itemId || ""}:${identity.contentIndex ?? 0}`;
   function energy(meter: AnalyserNode | null): number {
     if (!meter) return 0;
     meter.getFloatTimeDomainData(samples);
     let sum = 0; for (const value of samples) sum += value * value;
     return Math.min(1, Math.sqrt(sum / samples.length) * 5);
   }
-  function position(): PlaybackPosition | null {
+  function position(filter: (item: { identity: AudioIdentity }) => boolean = () => true): PlaybackPosition | null {
     const now = playback?.currentTime ?? 0;
-    const current = playing.find(item => item.start <= now && item.start + item.duration >= now) ?? playing[0];
+    const candidates = playing.filter(filter);
+    const current = candidates.find(item => item.start <= now && item.start + item.duration >= now) ?? candidates[0];
     if (!current) return null;
     const key = itemKey(current.identity);
     let seconds = completed.get(key) ?? 0;
@@ -84,6 +87,20 @@ export function createCallAudio(send: (audio: string) => void, onIdle?: (serial:
     if (!frame) frame = requestAnimationFrame(tick);
   }
   function settled(): void { if (heard > 0 && !playing.length && !pending.length) onIdle?.(heard, heardCallId); }
+  function scheduleBuffer(buffer: AudioBuffer, serial: number, identity: AudioIdentity): void {
+    if (!playback || !outputMeter) return;
+    const node = playback.createBufferSource(); node.buffer = buffer; node.connect(outputMeter);
+    outputGate?.gain.setValueAtTime(1, playback.currentTime);
+    const start = Math.max(playback.currentTime + 0.012, nextAt); nextAt = start + buffer.duration;
+    const item = { node, start, duration: buffer.duration, serial, identity }; playing.push(item);
+    node.onended = () => {
+      const index = playing.indexOf(item); if (index < 0) return;
+      position(); if (!identity.chunkId) completed.set(itemKey(identity), (completed.get(itemKey(identity)) ?? 0) + buffer.duration);
+      playing.splice(index, 1); node.disconnect(); settled();
+      if (identity.chunkId) onChunkPlayed?.({ ...identity, serial, playedMs: buffer.duration * 1000 });
+    };
+    node.start(start);
+  }
   const api: CallAudio = {
     async start(inputRate, playbackRate) {
       this.stop(); const epoch = generation; outputRate = playbackRate; muted = false;
@@ -125,7 +142,7 @@ export function createCallAudio(send: (audio: string) => void, onIdle?: (serial:
     stop() {
       generation += 1; pending = []; heard = 0; heardCallId = undefined;
       this.interrupt(); processor?.disconnect(); processor = null;
-      playbackEpoch = 0; throughSerial = 0; rejectedResponses.clear(); rejectedItems.clear();
+      playbackEpoch = 0; throughSerial = 0; rejectedResponses.clear(); rejectedItems.clear(); rejectedReplies.clear();
       mic?.getTracks().forEach(track => track.stop()); mic = null;
       const shared = playback === capture;
       void capture?.close().catch(() => {}); if (!shared) void playback?.close().catch(() => {});
@@ -136,7 +153,7 @@ export function createCallAudio(send: (audio: string) => void, onIdle?: (serial:
     setMuted(value) { muted = value; mic?.getAudioTracks().forEach(track => { track.enabled = !value; }); if (value) listeners.forEach(listener => listener({ input: 0, output: energy(outputMeter) })); },
     subscribeLevels(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     play(audio, serial = 0, identity = {}) {
-      if ((identity.playbackEpoch ?? 0) < playbackEpoch || (serial > 0 && serial <= throughSerial) || (identity.responseId && rejectedResponses.has(identity.responseId)) || (identity.itemId && rejectedItems.has(identity.itemId))) return;
+      if ((identity.playbackEpoch ?? 0) < playbackEpoch || (serial > 0 && serial <= throughSerial) || rejectedReplies.has(replyKey(identity)) || (identity.responseId && rejectedResponses.has(identity.responseId)) || (identity.itemId && rejectedItems.has(identity.itemId))) return;
       heard = Math.max(heard, serial);
       heardCallId = identity.callId;
       if (!playback || !outputMeter) { pending.push({ audio, serial, identity }); return; }
@@ -147,18 +164,30 @@ export function createCallAudio(send: (audio: string) => void, onIdle?: (serial:
       if (!values.length) return;
       // Let Web Audio resample from the source sample rate; avoid nearest-neighbor stretching.
       const buffer = playback.createBuffer(1, values.length, outputRate); buffer.copyToChannel(values, 0);
-      const node = playback.createBufferSource(); node.buffer = buffer; node.connect(outputMeter);
-      outputGate?.gain.setValueAtTime(1, playback.currentTime);
-      const start = Math.max(playback.currentTime + 0.012, nextAt); nextAt = start + buffer.duration;
-      const item = { node, start, duration: buffer.duration, serial, identity }; playing.push(item);
-      node.onended = () => {
-        const index = playing.indexOf(item); if (index < 0) return;
-        position(); completed.set(itemKey(identity), (completed.get(itemKey(identity)) ?? 0) + buffer.duration);
-        playing.splice(index, 1); node.disconnect(); settled();
-      };
-      node.start(start);
+      scheduleBuffer(buffer, serial, identity);
     },
     interrupt(interruption) {
+      if (interruption?.scope === "reply") {
+        const key = replyKey(interruption);
+        const matches = (item: { identity: AudioIdentity }) => replyKey(item.identity) === key;
+        const stoppedAt = position(matches);
+        rejectedReplies.add(key);
+        const now = playback?.currentTime ?? 0;
+        for (const item of playing) if (matches(item) && item.start + item.duration <= now && item.identity.chunkId) onChunkPlayed?.({ ...item.identity, serial: item.serial, playedMs: item.duration * 1000 });
+        for (let index = playing.length - 1; index >= 0; index--) {
+          const item = playing[index];
+          if (item && matches(item)) {
+            playing.splice(index, 1); item.node.onended = null; item.node.stop(); item.node.disconnect();
+          }
+        }
+        pending = pending.filter(item => !matches({ identity: item.identity ?? {} }));
+        // Close the gap left by a stopped reply without cancelling another reply.
+        const future = playing.filter(item => item.start > now);
+        for (const item of future) { playing.splice(playing.indexOf(item), 1); item.node.onended = null; item.node.stop(); item.node.disconnect(); }
+        nextAt = playing.length ? Math.max(...playing.map(item => item.start + item.duration)) : playback?.currentTime ?? 0;
+        for (const item of future) if (item.node.buffer) scheduleBuffer(item.node.buffer, item.serial, item.identity);
+        return stoppedAt;
+      }
       const stoppedAt = position();
       if (outputGate && playback) outputGate.gain.setValueAtTime(0, playback.currentTime);
       if (interruption) {

@@ -5,6 +5,19 @@ import type { Bot, ModelMessage, StoredEvent, Term } from "./types.ts";
 const TOOL_OUTPUT_CAP = 8_000;
 const DEFAULT_BUDGET = 60_000;
 
+/** Revisions append evidence to the log but replace the same transcript item in model context. */
+function currentVoiceLines(events: StoredEvent[]): StoredEvent[] {
+  const result: StoredEvent[] = [], positions = new Map<string, number>();
+  for (const stored of events) {
+    const event = stored.event;
+    if (event.type !== "voice_line" || !event.itemId) { result.push(stored); continue; }
+    const key = JSON.stringify([event.callId, event.itemId]), at = positions.get(key);
+    if (at === undefined) { positions.set(key, result.length); result.push(stored); }
+    else result[at] = { ...result[at]!, event };
+  }
+  return result;
+}
+
 export interface LlmProjection {
   system: string;
   messages: ModelMessage[];
@@ -66,6 +79,7 @@ export function projectVoiceBrief(
   options?: { library?: CatalogItem[] },
 ): VoiceBrief {
   const turns: VoiceBrief["recentTurns"] = [];
+  events = currentVoiceLines(events);
   const liveCallIds = new Set(events.filter(stored => stored.event.type === "voice_line").map(stored => stored.event.type === "voice_line" ? stored.event.callId : ""));
   for (const stored of events) {
     const event = stored.event;
@@ -198,6 +212,7 @@ function baselinesOf(events: StoredEvent[]): string[] {
 
 function groupUnits(events: StoredEvent[]): Unit[] {
   const units: Unit[] = [];
+  events = currentVoiceLines(events);
   const liveCallIds = new Set(events.filter(stored => stored.event.type === "voice_line").map(stored => stored.event.type === "voice_line" ? stored.event.callId : ""));
   for (let i = 0; i < events.length; i += 1) {
     const event = events[i]?.event;

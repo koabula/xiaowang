@@ -115,6 +115,7 @@ export function installPreviewBridge(): void {
     async finishSettingsClose() {},
     onSettingsClose() { return () => {}; },
     callPosition() {},
+    callChunkPlayed() {},
     callInterrupted() {},
     callMute() {},
     async callControl() {},

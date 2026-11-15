@@ -53,6 +53,7 @@ declare global {
       callMute: (muted: boolean) => void;
       callIdle: (serial: number, callId?: string) => void;
       callPosition: (position: PlaybackPosition) => void;
+      callChunkPlayed: (position: PlaybackPosition) => void;
       callInterrupted: (receipt: InterruptionReceipt) => void;
       callControl: (action: "pause" | "resume" | "complete") => Promise<void>;
       onDelta: (callback: (note: { slug: string; jobId: string; text: string }) => void) => () => void;

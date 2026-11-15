@@ -10,7 +10,7 @@ export const PREVIEW_LINE = "你好，我是小王同学。";
 
 export const TOOL_ACCEPTED = "已接过，正在做。先用一句口语接住用户，不要复述这句话，也不要说工具或后台。";
 
-export type RealtimeFamily = "openai" | "qwen" | "doubao";
+export type RealtimeFamily = "openai" | "qwen" | "doubao" | "moss";
 
 export interface RealtimeEndpoint {
   url: string;
@@ -45,6 +45,7 @@ export function realtimeEndpoint(input?: { url?: string; model?: string; family?
   const url = (input?.url?.trim() || QWEN_REALTIME_URL).replace(/\/$/, "");
   const family = input?.family ?? realtimeFamily(url);
   const openai = family === "openai";
+  if (family === "moss") return { url, family, model: input?.model?.trim() || "moss-live-1.0", inputRate: 16_000, outputRate: 24_000, audioFormat: "pcm16", transcriptionModel: "" };
   if (family === "doubao") {
     return {
       url,
@@ -68,6 +69,7 @@ export function realtimeEndpoint(input?: { url?: string; model?: string; family?
 }
 
 export function realtimeFamily(url: string): RealtimeFamily {
+  if (/api\.mosi\.cn/i.test(url)) return "moss";
   if (/\/api\/v3\/duplex\/realtime\/dialogue/i.test(url)) return "doubao";
   return /aliyuncs\.com|qwencloud/i.test(url) ? "qwen" : "openai";
 }
