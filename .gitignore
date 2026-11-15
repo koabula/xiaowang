@@ -3,6 +3,7 @@ node_modules/
 dist/
 out/
 release/
+/demo/
 desktop/dist/
 *.tsbuildinfo
 .xiaowang/
