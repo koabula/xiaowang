@@ -645,6 +645,11 @@ async function createWindow(): Promise<void> {
     },
   });
   browser.attach(window);
+  // Native edit-menu accelerators can consume Ctrl+V before Chromium dispatches
+  // a key/paste event for an image. The renderer checks composer focus first.
+  window.webContents.on("before-input-event", (_event, input) => {
+    if (input.type === "keyDown" && input.key.toLowerCase() === "v" && (input.control || input.meta) && !input.shift) send("clipboard:pasteShortcut", { at: Date.now() });
+  });
   window.on("close", event => {
     if (settingsDirty) { event.preventDefault(); send("settings:closeRequested", "window"); }
   });

@@ -14,6 +14,7 @@ export function MessageComposer({ slug, draft, placeholder, busy, inCall, ink, e
   const pending = useRef<Record<string, Pending[]>>({}), sequence = useRef(0), sending = useRef(new Set<string>());
   const [dragging, setDragging] = useState(false);
   const pasteTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const lastPasteAt = useRef(0);
   useEffect(() => () => clearTimeout(pasteTimer.current), []);
   const files = byBot[slug] ?? [];
   const uploading = files.some(file => !file.attachment && !file.error);
@@ -53,6 +54,11 @@ export function MessageComposer({ slug, draft, placeholder, busy, inCall, ink, e
       });
     }).catch(error => change(owner, value => value.map(f => f.id === id ? { ...f, error: String(error) } : f)));
   }
+  useEffect(() => window.xiaowang.onPasteShortcut(({ at }) => {
+    if (document.activeElement !== textarea.current || lastPasteAt.current >= at) return;
+    clearTimeout(pasteTimer.current);
+    const owner = slug; pasteTimer.current = setTimeout(() => pasteNative(owner), 200);
+  }), [slug, en]);
   async function send() {
     const owner = slug;
     if (uploading || files.some(f => f.error) || (!draft.trim() && !ready.length) || sending.current.has(owner)) return;
@@ -70,7 +76,7 @@ export function MessageComposer({ slug, draft, placeholder, busy, inCall, ink, e
     onDragOver={event => { if (event.dataTransfer.types.includes("Files")) { event.preventDefault(); setDragging(true); } }}
     onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false); }}
     onDrop={event => { if (event.dataTransfer.files.length) { event.preventDefault(); setDragging(false); add(Array.from(event.dataTransfer.files)); } }}
-    onPaste={event => { clearTimeout(pasteTimer.current); const images = Array.from(event.clipboardData.files); const text = event.clipboardData.getData("text/plain"); if (!images.length) { if (!text) { event.preventDefault(); pasteNative(slug); } return; } event.preventDefault(); add(images); if (text) { const node = textarea.current; onDraft(draft.slice(0, node?.selectionStart ?? draft.length) + text + draft.slice(node?.selectionEnd ?? draft.length)); } }}>
+    onPaste={event => { lastPasteAt.current = Date.now(); clearTimeout(pasteTimer.current); const images = Array.from(event.clipboardData.files); const text = event.clipboardData.getData("text/plain"); if (!images.length) { if (!text) { event.preventDefault(); pasteNative(slug); } return; } event.preventDefault(); add(images); if (text) { const node = textarea.current; onDraft(draft.slice(0, node?.selectionStart ?? draft.length) + text + draft.slice(node?.selectionEnd ?? draft.length)); } }}>
     {files.length ? <div className="pending-attachments" aria-label={en ? "Pending attachments" : "待发送附件"}>{files.map(file => file.attachment ? <AttachmentChip key={file.id} slug={slug} attachment={file.attachment} onRemove={() => change(slug, value => value.filter(f => f.id !== file.id))} /> : <div className={`attachment-chip${file.error ? " failed" : ""}`} key={file.id}>{file.error ? <span role="alert">{file.name}<small>{file.error}</small></span> : <><LoaderCircle className="spin" size={16} /><span>{file.name}<small>{en ? "Importing…" : "正在添加…"}</small></span></>}<button className="icon" type="button" aria-label={`移除 ${file.name}`} onClick={() => change(slug, value => value.filter(f => f.id !== file.id))}>×</button></div>)}</div> : null}
     <div className="composer-row">
       <input ref={picker} className="attachment-picker" type="file" multiple accept={ATTACHMENT_ACCEPT} aria-label={en ? "Choose attachments" : "选择附件"} onChange={event => { add(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
