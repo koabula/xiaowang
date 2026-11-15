@@ -134,6 +134,26 @@ try { acceptance: {
   });
   await page.evaluate(baseUrl => window.xiaowang.saveSettings({ baseUrl, model: 'fixture', apiKey: 'local', realtimeService: 'gemini', realtimeKey: 'relay-local-key', realtimeModel: 'gemini-3.8-live', realtimeVoice: 'Kore' }), `http://127.0.0.1:${model.address().port}/v1`);
   assert.equal((await page.evaluate(() => window.xiaowang.getState())).settings.realtimeService, 'gemini');
+  if (process.env.GEMINI_CHECK_HANGUP_ONLY === '1') {
+    for (const [index, sentence] of ['现在要把它挂了。', '没有，你可以挂了。'].entries()) {
+      const before = (await page.evaluate(() => window.geminiCallNotes)).length;
+      await page.evaluate(() => window.xiaowang.callStart('xiaowang'));
+      await until(async () => (await page.evaluate(() => window.geminiCallNotes)).slice(before).some(note => note.phase === 'live'), 'Live setup failed');
+      report.stage = `natural hangup ${index + 1}`;
+      await feed(await voice(sentence, `hangup-${index}`));
+      await until(async () => (await page.evaluate(() => window.geminiCallNotes)).slice(before).some(note => note.phase === 'closed'), 'Natural hangup did not close the actual call', 30000);
+      await until(async () => await page.evaluate(() => window.geminiCheck.sources === 0), 'Goodbye audio kept playing');
+      assert.equal((await page.evaluate(() => window.xiaowang.getState())).call, null);
+      const liveCount = (await page.evaluate(() => window.geminiCallNotes)).slice(before).filter(note => note.phase === 'live').length;
+      assert.equal(liveCount, 1); await sleep(1200);
+      assert.equal((await page.evaluate(() => window.xiaowang.getState())).call, null, 'Ended call reconnected');
+      checked(`Real spoken request '${sentence}' closed the call and stopped playback without reconnecting`);
+    }
+    const records = (await page.evaluate(() => window.xiaowang.events('xiaowang'))).filter(item => item.kind === 'call');
+    assert.equal(records.length, 2); assert.ok(toolNames.filter(name => name === 'end_call').length >= 2);
+    report.status = 'passed'; report.stage = 'natural hangup complete'; report.connections = connections; report.audioBytes = bytes;
+    break acceptance;
+  }
   if (process.env.GEMINI_CHECK_PREVIEW_ONLY === '1') {
     await page.locator('button.settings').click();
     const form = page.getByRole('form', { name: '设置', exact: true });

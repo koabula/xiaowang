@@ -12,9 +12,11 @@ import { JobQueue, type JobOutput } from "../../src/jobs.ts";
 import { VoiceTasks, voiceJobReceipt } from "../../src/voice-tasks.ts";
 import { backgroundTurnOwners, presentJob } from "../../src/task-presentation.ts";
 import { StageRequests } from "./stage.ts";
-import type { TaskJob } from "../../src/types.ts";
+import type { Attachment, TaskJob } from "../../src/types.ts";
 import type { PresentationState } from "../../src/presentation.ts";
 import { runTurn } from "../../src/harness.ts";
+import { attachmentMime, resolveAttachments, ATTACHMENT_BYTES } from "../../src/attachments.ts";
+import { messagePreview } from "../../src/message-preview.ts";
 import { formatVoiceBrief, projectVoiceBrief } from "../../src/project.ts";
 import { checkModel, configFromEnv, createProvider, listModels } from "../../src/provider.ts";
 import { localeOf } from "../../src/locale.ts";
@@ -99,6 +101,7 @@ let secrets: SecretRecord = {
 };
 
 interface ChatItem {
+  attachments?: Attachment[];
   jobId?: string;
   callId?: string;
   id: number;
@@ -128,8 +131,8 @@ function previewOf(botId: string): string {
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i]?.event;
     if (!event) continue;
-    if ((event.type === "user_text" || event.type === "assistant_turn") && event.text.trim()) {
-      return event.text.replace(/\s+/g, " ").trim().slice(0, 42);
+    if ((event.type === "user_text" || event.type === "assistant_turn") && (event.text.trim() || event.type === "user_text" && event.attachments?.length)) {
+      return messagePreview(event.text) || (event.type === "user_text" && event.attachments?.length ? event.attachments.map(a => a.filename).join("、") : "还没有对话");
     }
   }
   return "还没有对话";
@@ -160,7 +163,7 @@ function chatItems(slug: string): ChatItem[] {
 
 function present(id: number, event: SessionEvent): ChatItem | null {
   if (event.type === "user_text" && event.channel === "text") {
-    return { id, kind: "user", text: event.text, jobId: event.jobId };
+    return { id, kind: "user", text: event.text, jobId: event.jobId, attachments: event.attachments };
   }
   if (event.type === "assistant_turn" && event.text.trim()) {
     return { id, kind: "assistant", text: event.text, jobId: event.jobId };
@@ -249,7 +252,7 @@ async function ask(job: TaskJob, signal: AbortSignal, activity: (text: string) =
   const provider = createProvider(configFromEnv(envFromSecrets()));
   let resultEventId: number | undefined;
   const result = await runTurn(runtime, {
-    botId: bot.id, input: job.task, channel: job.channel, provider,
+    botId: bot.id, input: job.task, messageText: job.messageText, attachments: job.attachments, channel: job.channel, provider,
     jobId: job.id,
     onInput: id => jobs.linkInput(job.id, id),
     env: envFromSecrets(), locale: localeOf(secrets.locale), signal,
@@ -474,9 +477,24 @@ function registerIpc(): void {
     }
     publish();
   });
-  ipcMain.handle("chat:ask", async (_event, slug: string, text: string) => {
+  ipcMain.handle("chat:attach", (_event, slug: string, filename: string, data: Uint8Array) => {
     const bot = runtime.store.requireBot(slug);
-    const job = jobs.enqueue({ botId: bot.id, task: text, channel: "text" });
+    if (!(data instanceof Uint8Array) || data.length > ATTACHMENT_BYTES || typeof filename !== "string" || filename.length > 255) throw new Error("附件无效或超过 20 MB。");
+    const bytes = Buffer.from(data), name = path.basename(filename.replaceAll("\\", "/"));
+    const mimeType = attachmentMime(name, bytes);
+    if (mimeType.startsWith("image/") && nativeImage.createFromBuffer(bytes).isEmpty()) throw new Error("无法读取这张图片，请更换为有效的图片文件。");
+    const suffix: Record<string, string> = { "image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp" };
+    const savedName = mimeType.startsWith("image/") && !/\.(png|jpe?g|gif|webp)$/i.test(name) ? name + suffix[mimeType] : name;
+    const { ref } = runtime.store.addLibraryBytes(bot.id, savedName, bytes);
+    publish();
+    return { refId: ref.id, filename: ref.filename, byteSize: ref.byteSize, mimeType };
+  });
+  ipcMain.handle("chat:ask", async (_event, slug: string, text: string, ids: string[] = []) => {
+    const bot = runtime.store.requireBot(slug);
+    if (typeof text !== "string") throw new Error("消息格式无效。");
+    const attachments = resolveAttachments(runtime.store, bot.id, ids);
+    const task = text.trim() || (attachments.length ? "请查看这些附件。" : "");
+    const job = jobs.enqueue({ botId: bot.id, task, messageText: text.trim(), attachments, channel: "text" });
     const result = await jobs.wait(job.id);
     if (result.status === "failed") throw new Error(result.error);
     return chatItems(slug);

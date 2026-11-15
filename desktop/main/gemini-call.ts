@@ -1,6 +1,7 @@
 import { GeminiLive, type GeminiSocket, type GeminiTool, type GeminiToolCall, type GeminiToolResult } from "../../src/gemini-live.ts";
 import { Presentation, type PresentationState } from "../../src/presentation.ts";
 import type { TaskJob } from "../../src/types.ts";
+import { canEndCall, refusesHangup } from "../../src/hangup-intent.ts";
 import type { CallHandlers, InterruptionReceipt, PlaybackPosition, VoiceState } from "./call.ts";
 
 interface Line { who: "user" | "assistant"; text: string; id: string; order: number; sealed: boolean }
@@ -47,6 +48,7 @@ export class GeminiCall {
   private begunAt = "";
   private loop: ReturnType<typeof setTimeout> | undefined;
   private watchdog: ReturnType<typeof setTimeout> | undefined;
+  private endingTimer: ReturnType<typeof setTimeout> | undefined;
   private lastState = "";
   private lastDiagnostic = "";
 
@@ -55,14 +57,16 @@ export class GeminiCall {
     this.handlers = handlers; this.preview = preview; this.presentation = new Presentation(initial);
     this.transport = new GeminiLive(key, { url, model: String(session.model || "gemini-3.8-live"), voice: String(session.voice || "Kore"), instructions: String(session.instructions || ""), tools: session.tools as GeminiTool[] }, {
       onReady: resumed => {
+        if (this.ending) { this.hangup(); return; }
         this.ready = true; this.userPending = this.waitingForUser = false;
         if (resumed) { this.userSpeaking = false; this.acceptingInput = false; }
         if (resumed && this.presentation.snapshot().status === "active") this.narration = true;
         if (!this.everLive) { this.everLive = true; handlers.onPhase("live"); if (preview) { this.generating = true; this.transport.sendText(`只读出这一句话，不添加其他内容：${preview}`); } }
         this.state(undefined, resumed ? "已恢复连接，请重述断线期间的话。" : ""); this.schedule();
       },
-      onReconnecting: () => { this.ready = false; this.generating = false; this.seal(this.userLine); this.seal(this.assistantLine); this.userLine = this.assistantLine = null; clearTimeout(this.loop); this.state("reconnecting", "正在恢复原通话，后台任务继续运行。"); },
+      onReconnecting: () => { if (this.ending) { this.hangup(); return; } this.ready = false; this.generating = false; this.seal(this.userLine); this.seal(this.assistantLine); this.userLine = this.assistantLine = null; clearTimeout(this.loop); this.state("reconnecting", "正在恢复原通话，后台任务继续运行。"); },
       onActivity: active => {
+        if (this.ending) return;
         this.activitySeen = true; this.userSpeaking = active;
         if (active) { clearTimeout(this.loop); this.userPending = this.waitingForUser = true; this.acceptingInput = true; this.seal(this.userLine); this.userLine = null; this.narration = this.advanceDue = false; }
         else if (!this.waitingForUser && !this.generating) { this.userPending = false; this.schedule(); }
@@ -77,6 +81,7 @@ export class GeminiCall {
         clearTimeout(this.loop); handlers.onInterrupt(value);
       },
       onText: (who, fragment) => this.text(who, fragment),
+      onGenerationComplete: () => { if (this.ending) { this.generating = false; this.schedule(); } },
       onTurnComplete: interrupted => {
         if (interrupted) { this.state(); return; }
         this.waitingForUser = false;
@@ -103,7 +108,7 @@ export class GeminiCall {
   startedAt(): string { return this.begunAt; }
   isClosed(): boolean { return this.closed; }
   transcript(): Array<{ who: "user" | "assistant"; text: string }> { return this.lines.filter(line => line.text.trim()).map(({ who, text }) => ({ who, text })); }
-  sendAudio(pcm: Buffer): void { if (!this.closed && this.ready && !this.muted) this.transport.sendAudio(pcm); }
+  sendAudio(pcm: Buffer): void { if (!this.closed && !this.ending && this.ready && !this.muted) this.transport.sendAudio(pcm); }
   setMuted(muted: boolean): void { this.muted = muted; if (muted && this.ready) this.transport.endAudio(); }
   notePlayback(_position: PlaybackPosition): void {}
   noteInterrupted(_receipt: InterruptionReceipt): void {}
@@ -142,7 +147,7 @@ export class GeminiCall {
   hangup(reason = ""): void { this.transport.close(reason); }
   private finish(reason: string): void {
     if (this.closed) return;
-    this.closed = true; this.ready = false; clearTimeout(this.loop); clearTimeout(this.watchdog);
+    this.closed = true; this.ready = false; clearTimeout(this.loop); clearTimeout(this.watchdog); clearTimeout(this.endingTimer);
     for (const tool of this.tools.values()) tool.abort(); this.tools.clear();
     for (const entry of this.delegations.values()) entry.resolve({ result: "通话已结束，后台任务继续。", scheduling: "SILENT" }); this.delegations.clear();
     this.seal(this.userLine); this.seal(this.assistantLine); this.state("ended", reason); this.handlers.onPhase("closed", reason);
@@ -182,7 +187,7 @@ export class GeminiCall {
     }
   }
   private state(phase?: VoiceState["phase"], detail = ""): void {
-    const next: VoiceState = { phase: phase || (this.closed ? "ended" : !this.ready ? "reconnecting" : this.speakerBusy ? "speaking" : this.generating || this.userPending ? "thinking" : this.tools.size ? "working" : this.presentation.snapshot().status === "paused" ? "paused" : "listening"), detail, presentation: this.presentation.snapshot() };
+    const next: VoiceState = { phase: this.ending && !this.closed ? "ending" : phase || (this.closed ? "ended" : !this.ready ? "reconnecting" : this.speakerBusy ? "speaking" : this.generating || this.userPending ? "thinking" : this.tools.size ? "working" : this.presentation.snapshot().status === "paused" ? "paused" : "listening"), detail, presentation: this.presentation.snapshot() };
     const serialized = JSON.stringify(next); if (this.lastState !== serialized) { this.lastState = serialized; this.handlers.onState?.(next); }
     this.diagnostic(next.phase);
   }
@@ -194,6 +199,10 @@ export class GeminiCall {
   private schedule(): void {
     clearTimeout(this.loop);
     this.diagnostic("schedule");
+    if (this.ending) {
+      if (!this.closed && !this.speakerBusy && !this.generating) this.loop = setTimeout(() => this.hangup(), 350);
+      return;
+    }
     if (this.closed || !this.ready || this.speakerBusy || this.generating || this.userPending || this.tools.size) return;
     this.loop = setTimeout(() => {
       if (this.ending || this.preview) { this.hangup(); return; }
@@ -226,6 +235,7 @@ export class GeminiCall {
     } finally { this.navigation.delete(controller); this.tools.delete(id); this.state(); }
   }
   private async runTool(call: GeminiToolCall): Promise<GeminiToolResult> {
+    if (this.ending) return { result: "通话正在结束，不再执行新的通话指令。", scheduling: "SILENT" };
     this.seal(this.userLine);
     if (call.name === "manage_presentation") {
       if (call.args.action === "complete") await this.foreground;
@@ -242,11 +252,18 @@ export class GeminiCall {
       this.state(); return { result: this.presentation.snapshot(), scheduling: call.args.action === "complete" || call.args.action === "pause" ? "SILENT" : "WHEN_IDLE" };
     }
     if (call.name === "end_call") {
-      const request = this.lines.findLast(line => line.who === "user")?.text || "";
-      const refused = /(?:不要|别|不用|不必|don't|do not)\s*(?:挂断|结束(?:这次|本次)?通话|hang up|end (?:the )?call)/i.test(request);
-      const requested = /挂断|结束(?:这次|本次)?通话|再见|拜拜|goodbye|\bbye\b|hang up|end (?:the )?call/i.test(request);
-      if (refused || !requested) return { result: { status: "call_remains_open", message: "用户没有要求挂断，保持通话并等待下一次输入。" }, scheduling: "SILENT" };
-      this.ending = true; this.schedule(); return { result: "道别播完后结束通话。", scheduling: "SILENT" };
+      // Native tool calls may precede their corresponding input transcription.
+      const quote = String(call.args.user_request || "");
+      const currentRequest = () => this.userLine?.text || (this.activitySeen && this.acceptingInput ? "" : this.lastUserLine?.text || "");
+      for (let n = 0; n < 14 && !canEndCall(currentRequest(), quote) && !refusesHangup(currentRequest()) && (this.activitySeen || quote); n++) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        if (this.closed) return { result: "通话已结束。", scheduling: "SILENT" };
+      }
+      if (!canEndCall(currentRequest(), quote)) return { result: { status: "call_remains_open", message: "没有确认本轮用户的结束请求，保持通话；不要声称已经挂断。" }, scheduling: "SILENT" };
+      this.ending = true; this.notices.clear(); this.presentation.pause();
+      for (const pending of this.navigation) pending.abort();
+      this.endingTimer = setTimeout(() => this.hangup(), 8000);
+      this.state(); this.schedule(); return { result: "道别播完后结束通话。", scheduling: "SILENT" };
     }
     const controller = new AbortController(); this.tools.set(call.id, controller); this.state();
     try {
@@ -262,6 +279,7 @@ export class GeminiCall {
       const operation = background ? execute() : this.foreground.then(execute);
       if (!background) this.foreground = operation.catch(() => {});
       const output = await operation;
+      if (this.ending || this.closed) return { result: "通话正在结束，后台结果仍保留在记录中。", scheduling: "SILENT" };
       if (["delegate_task", "ask_text"].includes(call.name)) {
         let receipt: Record<string, unknown> = {}; try { receipt = JSON.parse(output); } catch {}
         if (typeof receipt.id === "string") {

@@ -40,6 +40,8 @@ See the [development notes](DEVELOPMENT.md#moss-live) for the retained MOSS impl
 
 ## Work with XiaoWang
 
+Paste a screenshot, drag files into the message input, or click **＋** to attach files. Preview and remove attachments before sending, or send them without text. Supported formats: PNG, JPEG, WebP, GIF, PDF, TXT, Markdown, CSV and JSON. Each message accepts up to 8 files, 20 MB per file and 40 MB total. Attachments stay in the current bot’s library and remain linked to their message. Images require a **text model with vision support**; configuring a voice model alone does not give the background model vision.
+
 **Read a paper**
 
 > Explain this paper's research question, methods, and main findings. Include source page numbers and save a note.

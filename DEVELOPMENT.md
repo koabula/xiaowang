@@ -151,3 +151,17 @@ Optional Actions secrets:
 | Windows signing | `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` |
 
 Without signing secrets, CI produces unsigned installers. macOS microphone descriptions and audio-input entitlements are included.
+
+## Message attachments
+
+The composer imports pasted images, dropped files and file-picker selections into the explicitly selected bot's library. IPC validates file content and enforces 8 files per message, 20 MB per file and 40 MB total. Message/job events retain local reference IDs, not base64. Attachment-only messages retain empty user text; a queue task label does not become invented chat text. Retries preserve the attachment references.
+
+Before each model request, the harness loads referenced images into native OpenAI-compatible `image_url` or Anthropic `image` blocks. Documents retain explicit per-message reference IDs and use `read_document`. Missing image references are identified as unavailable rather than silently pretending the model saw them. Models without vision return an actionable error; failed drafts and attachments remain available to retry. Sub bot kickoffs do not inherit the parent's attachments.
+
+`e2e/attachments.test.mjs` exercises the real OS clipboard, compares decoded pixels (clipboard PNG re-encoding is allowed), checks document/PDF tool output, both provider payloads, workspace isolation, error recovery, flat presentation and restart. For real Gemini voice hangup verification, use a private, ignored environment file:
+
+```sh
+GEMINI_CHECK_HANGUP_ONLY=1 GEMINI_TEST_REPORT=/tmp/xiaowang-gemini-hangup.json node --env-file=.env.gemini.local scripts/verify-gemini-production.mjs
+```
+
+This uses synthetic Chinese speech through the production audio IPC and Google API, waits for closure and stopped playback, and checks that ended calls do not reconnect. The key stays in the upstream relay and is not logged.

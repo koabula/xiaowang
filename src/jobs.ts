@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Store } from "./store.ts";
-import type { Channel, TaskJob } from "./types.ts";
+import type { Attachment, Channel, TaskJob } from "./types.ts";
 import { taskTitle } from "./task-presentation.ts";
 
 export interface JobOutput { text: string; artifacts?: string[]; resultEventId?: number }
@@ -35,7 +35,7 @@ export class JobQueue {
 
   start(): void { if (this.enabled) return; this.enabled = true; this.pump(); }
 
-  enqueue(input: { botId: string; task: string; channel?: Channel; notify?: TaskJob["notify"]; sourceCallId?: string; display?: TaskJob["display"]; title?: string; originCallId?: string }): TaskJob {
+  enqueue(input: { botId: string; task: string; messageText?: string; attachments?: Attachment[]; channel?: Channel; notify?: TaskJob["notify"]; sourceCallId?: string; display?: TaskJob["display"]; title?: string; originCallId?: string }): TaskJob {
     if (this.stopped) throw new Error("任务队列正在关闭。");
     if (this.removing.has(input.botId)) throw new Error("这个 Bot 正在删除。");
     this.store.requireBot(input.botId);
@@ -48,6 +48,8 @@ export class JobQueue {
     const now = new Date().toISOString();
     const job: TaskJob = { id: randomUUID(), botId: input.botId, task, channel: input.channel ?? "text", notify: input.notify ?? "silent", sourceCallId: input.sourceCallId, display: input.display ?? (input.channel && input.channel !== "text" ? "background" : "conversation"), title: taskTitle(input.title || task), originCallId: input.originCallId, status: "queued", createdAt: now, updatedAt: now, activity: "", result: "", error: "", attempts: 0, artifacts: [] };
     job.queuedAt = now;
+    if (input.attachments?.length) job.attachments = input.attachments.map(a => ({ ...a }));
+    if (input.messageText !== undefined) job.messageText = input.messageText;
     this.change(job, {});
     // Dispatch in a microtask so the caller can retain the durable job ID first.
     queueMicrotask(() => this.pump());

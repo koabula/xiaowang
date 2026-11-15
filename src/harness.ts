@@ -1,5 +1,6 @@
 import type { Locale } from "./locale.ts";
 import { projectLlmContext } from "./project.ts";
+import { hydrateImages } from "./attachments.ts";
 import type { Runtime } from "./runtime.ts";
 import type { BrowserDriver, StageDriver } from "./stage.ts";
 import { executeTool, toolSchemas } from "./tools.ts";
@@ -28,6 +29,8 @@ export interface TurnResult {
 }
 
 export interface RunTurnOptions {
+  messageText?: string;
+  attachments?: import("./types.ts").Attachment[];
   botId: string;
   input: string;
   provider: LlmProvider;
@@ -64,6 +67,8 @@ export async function runTurn(runtime: Runtime, options: RunTurnOptions): Promis
         ...options,
         botId: job.botId,
         input: job.task,
+        attachments: undefined,
+        messageText: undefined,
         channel: "system",
       }),
     );
@@ -84,8 +89,9 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
   context.push(runtime.store.append(bot.id, {
     type: "user_text",
     channel: options.channel ?? "text",
-    text: options.input,
+    text: options.messageText ?? options.input,
     jobId: options.jobId,
+    ...(options.attachments?.length ? { attachments: options.attachments } : {}),
   }));
   options.onInput?.(context.at(-1)!.id);
 
@@ -100,7 +106,7 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
     const projected = projectLlmContext(current, context, { library, personName, locale: options.locale });
     const result = await options.provider.complete({
       system: projected.system,
-      messages: projected.messages,
+      messages: hydrateImages(runtime.store, bot.id, projected.messages),
       tools: toolSchemas(),
       signal: options.signal,
       onTextDelta: options.onTextDelta ? (text) => options.onTextDelta?.(current, text) : undefined,

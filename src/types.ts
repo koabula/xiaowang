@@ -1,7 +1,13 @@
 export type Channel = "text" | "voice" | "system";
 
+/** References only: image bytes live in the local library, never in event logs. */
+export interface Attachment { refId: string; filename: string; mimeType: string; byteSize: number }
+export interface ModelImage { mimeType: string; data: string }
+
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
 export interface TaskJob {
+  messageText?: string;
+  attachments?: Attachment[];
   id: string;
   botId: string;
   task: string;
@@ -54,7 +60,7 @@ export interface ToolCall {
  * 模型看到的 messages 只是这些事件的投影，不是记忆本身。
  */
 export type SessionEvent =
-  | { type: "user_text"; channel: Channel; text: string; jobId?: string }
+  | { type: "user_text"; channel: Channel; text: string; jobId?: string; attachments?: Attachment[] }
   | { type: "assistant_turn"; channel: Channel; text: string; toolCalls: ToolCall[]; jobId?: string }
   | { type: "call"; callId?: string; startedAt: string; endedAt: string; lines: Array<{ who: "user" | "assistant"; text: string }> }
   | { type: "tool_result"; callId: string; name: string; output: string; isError: boolean }
@@ -79,6 +85,8 @@ export interface ModelToolCall {
 }
 
 export interface ModelMessage {
+  attachments?: Attachment[];
+  images?: ModelImage[];
   role: "user" | "assistant" | "tool";
   content: string;
   toolCalls?: ModelToolCall[];

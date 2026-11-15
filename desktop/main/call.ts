@@ -10,7 +10,7 @@ export interface AudioIdentity { callId?: string; itemId?: string; chunkId?: str
 export interface PlaybackInterruption { callId: string; playbackEpoch: number; throughSerial: number; responseId?: string; itemId?: string; scope?: "reply" }
 export interface InterruptionReceipt { callId: string; playbackEpoch: number; position: PlaybackPosition | null }
 export interface VoiceState {
-  phase: "connecting" | "reconnecting" | "listening" | "thinking" | "speaking" | "working" | "paused" | "error" | "ended";
+  phase: "connecting" | "reconnecting" | "listening" | "thinking" | "speaking" | "working" | "paused" | "ending" | "error" | "ended";
   presentation: PresentationState;
   detail: string;
 }

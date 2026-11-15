@@ -158,3 +158,45 @@ test("late ASR and late generated audio cannot restart a completed walkthrough",
   assert.equal(played, 2, "A real new question reopens speech without reopening the old goal");
   assert.equal(call.presentation.snapshot().status, "completed");
 });
+
+test("Gemini ends colloquial Chinese requests after goodbye playback and ignores notices/new tools", async t => {
+  for (const input of ["现在要把它挂了。", "没有，你可以挂了。", "把电话挂掉吧。", "不用继续讲了，你可以挂断了。", "今天就到这儿了。"]) {
+    const { call, socket, phases, states } = fixture(); t.after(() => call.hangup());
+    speech(socket, input, "好的，再见。");
+    tool(socket, "bye", "end_call", { user_request: input }); await sleep();
+    assert.equal(states.at(-1)?.phase, "ending");
+    call.notify("late-result", "Do not speak this result"); tool(socket, "new-tool", "read_file", { path: "x" });
+    socket.message({ serverContent: { turnComplete: true } }); await sleep(400);
+    assert.equal(phases.includes("closed"), false, "Goodbye is still playing");
+    call.noteSpeakerIdle(1, call.id); await sleep(400);
+    assert.equal(phases.at(-1), "closed"); assert.equal(socket.sent.some(p => p.clientContent), false);
+  }
+});
+test("Gemini waits for late and fragmented ASR, blocks negated/quoted requests, and closes instead of reconnecting while ending", async t => {
+  const { call, socket, phases, sockets } = fixture(); t.after(() => call.hangup());
+  speech(socket, "不要挂断", "好的"); socket.message({ serverContent: { turnComplete: true } }); call.noteSpeakerIdle(1, call.id);
+  socket.message({ voiceActivity: { type: "ACTIVITY_START" } }); socket.message({ voiceActivity: { type: "ACTIVITY_END" } });
+  tool(socket, "late", "end_call", { user_request: "没有，你可以挂了。" });
+  await sleep(50); socket.message({ serverContent: { inputTranscription: { text: "没有，" } } }); await sleep(80);
+  assert.equal(socket.result("late"), undefined);
+  socket.message({ serverContent: { inputTranscription: { text: "你可以挂了。" }, outputTranscription: { text: "再见" } } });
+  await sleep(100); assert.match(socket.result("late")?.response.result, /结束通话/);
+  socket.message({ sessionResumptionUpdate: { resumable: true, newHandle: "private-resume" } });
+  socket.emit("close", { code: 1006 }); await sleep(500);
+  assert.equal(phases.at(-1), "closed"); assert.equal(sockets.length, 1, "Do not resurrect an ending call");
+});
+test("Gemini cannot treat a negation as consent even with a model quote", async t => {
+  for (const input of ["别急着挂电话", "现在还不要挂了", "先不要结束这次通话", "Don't hang up yet."]) {
+    const { call, socket, phases } = fixture(); t.after(() => call.hangup());
+    speech(socket, input, "好的"); tool(socket, "end", "end_call", { user_request: input }); await sleep();
+    assert.equal(socket.result("end")?.response.result.status, "call_remains_open"); assert.equal(phases.includes("closed"), false);
+  }
+});
+test("ending call has a bounded fallback when playback receipts or turn completion are lost", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { call, socket, phases } = fixture(); t.after(() => call.hangup());
+  speech(socket, "现在挂了吧", "好的"); tool(socket, "end", "end_call", { user_request: "现在挂了吧" });
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(phases.includes("closed"), false); t.mock.timers.tick(8001);
+  assert.equal(phases.at(-1), "closed");
+});

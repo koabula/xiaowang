@@ -1,6 +1,6 @@
 import type { UpdateState } from "../main/update-state.ts";
 export type { UpdateState };
-import type { TaskJob } from "../../src/types.ts";
+import type { Attachment, TaskJob } from "../../src/types.ts";
 import type { AudioIdentity, InterruptionReceipt, PlaybackInterruption, PlaybackPosition, VoiceState } from "../main/call.ts";
 import type { StageReceipt } from "../../src/stage.ts";
 import type { BrowseOptions, BrowseResult } from "../../src/file-browser.ts";
@@ -31,7 +31,8 @@ declare global {
       openReference: (slug: string, id: string, page: number) => Promise<void>;
       openLink: (url: string) => Promise<void>;
       addFiles: () => Promise<void>;
-      ask: (slug: string, text: string) => Promise<ChatItem[]>;
+      attach: (slug: string, filename: string, bytes: Uint8Array) => Promise<Attachment>;
+      ask: (slug: string, text: string, attachments?: string[]) => Promise<ChatItem[]>;
       stop: (slug: string) => Promise<void>;
       cancelJob: (id: string) => Promise<void>;
       retryJob: (id: string) => Promise<TaskJob>;
@@ -95,6 +96,7 @@ export interface BotRow {
 }
 
 export interface ChatItem {
+  attachments?: Attachment[];
   jobId?: string;
   callId?: string;
   id: number;

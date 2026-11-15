@@ -10,7 +10,22 @@ import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 GlobalWorkerOptions.workerSrc = workerUrl;
 export interface ReaderFile { id: string; filename: string; page: number; requestId?: string; restore?: boolean }
 export function DocumentReader({ slug, file, locale = "zh" }: { slug: string; file: ReaderFile; locale?: "zh" | "en" }) {
-  return /\.pdf$/i.test(file.filename) ? <PdfReader key={`${slug}:${file.id}`} slug={slug} file={file} locale={locale} /> : <TextReader key={`${slug}:${file.id}`} slug={slug} file={file} />;
+  return /\.(png|jpe?g|webp|gif)$/i.test(file.filename) ? <ImageReader key={`${slug}:${file.id}`} slug={slug} file={file} /> : /\.pdf$/i.test(file.filename) ? <PdfReader key={`${slug}:${file.id}`} slug={slug} file={file} locale={locale} /> : <TextReader key={`${slug}:${file.id}`} slug={slug} file={file} />;
+}
+
+function ImageReader({ slug, file }: { slug: string; file: ReaderFile }) {
+  const [url, setUrl] = useState(""), [error, setError] = useState(""), [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let disposed = false, objectUrl = "";
+    void window.xiaowang.readFile(slug, file.id).then(bytes => { if (disposed) return; objectUrl = URL.createObjectURL(new Blob([new Uint8Array(bytes)])); setUrl(objectUrl); }).catch(error => { if (!disposed) setError(String(error)); });
+    return () => { disposed = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [slug, file.id]);
+  useEffect(() => {
+    if (!loaded && !error) return;
+    if (file.requestId) void window.xiaowang.stageAck(slug, file.requestId, { page: 1, totalPages: 1, error: error || undefined });
+    if (!error) void window.xiaowang.stagePosition(slug, { path: file.id, page: 1, totalPages: 1, mode: "file" });
+  }, [slug, file.id, file.requestId, loaded, error]);
+  return <div className="document-reader image-reader"><div className="reader-toolbar"><FileText size={14} /><span>{file.filename}</span></div>{error ? <p className="reader-error" role="alert">{error}</p> : url ? <div className="image-scroll"><img src={url} alt={file.filename} onLoad={() => setLoaded(true)} onError={() => setError("图片无法显示。")} /></div> : <Loading />}</div>;
 }
 
 function TextReader({ slug, file }: { slug: string; file: ReaderFile }) {

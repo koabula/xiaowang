@@ -81,7 +81,12 @@ test('Gemini production call: native tools, playback continuation, reconnect, du
   await page.evaluate(() => window.xiaowang.callMute(true)); await until(() => endAudio > 0);
   const packets = mic; await sleep(150); assert.equal(mic, packets); await page.evaluate(() => window.xiaowang.callMute(false)); await until(() => mic > packets);
   const live = (await page.evaluate(() => window.geminiNotes)).filter(item => item.phase === 'live'); assert.equal(live.length, 1);
-  await page.evaluate(() => window.xiaowang.callStop());
+  emit({ serverContent: { inputTranscription: { text: '没有，你可以挂了。' } } });
+  speak('好的，再见。', 700);
+  tool('natural-end', 'end_call', { user_request: '没有，你可以挂了。' });
+  await result('natural-end');
+  await page.locator('.voice-panel').waitFor({ state: 'detached' });
+  assert.equal((await page.evaluate(() => window.xiaowang.getState())).call, null);
   await page.reload(); await page.waitForSelector('.composer');
   const events = await page.evaluate(() => window.xiaowang.events('xiaowang')), call = events.find(item => item.kind === 'call');
   assert.equal(events.filter(item => item.kind === 'call').length, 1); assert.equal(call.callId, live[0].callId);

@@ -12,7 +12,7 @@ export interface LiveCallView { callId?: string; slug: string; phase: "connectin
 export function VoicePanel({ call, audio, jobs, onError, name, seed, ink, locale, onMute, onEnd }: { call: LiveCallView; audio: CallAudio; jobs: TaskJob[]; onError: (error: string) => void; name: string; seed?: string; ink: string; locale: Locale; onMute: () => void; onEnd: () => void }) {
   const en = locale === "en";
   const phase = !call.audioReady && call.state?.phase !== "error" ? "connecting" : call.state?.phase ?? (call.phase === "connecting" ? "connecting" : "listening");
-  const labels = en ? { connecting: "Preparing microphone", reconnecting: "Reconnecting", listening: "Listening to you", thinking: "Preparing a response", speaking: "Speaking", working: "Checking information", paused: "Presentation paused", error: "Needs attention", ended: "Call ended" } : { connecting: "正在准备麦克风", reconnecting: "正在重新连接", listening: "正在听你说", thinking: "正在组织回答", speaking: "正在讲解", working: "正在查阅资料", paused: "讲解已暂停", error: "需要处理", ended: "通话已结束" };
+  const labels = en ? { connecting: "Preparing microphone", reconnecting: "Reconnecting", listening: "Listening to you", thinking: "Preparing a response", speaking: "Speaking", working: "Checking information", paused: "Presentation paused", error: "Needs attention", ending: "Ending call", ended: "Call ended" } : { connecting: "正在准备麦克风", reconnecting: "正在重新连接", listening: "正在听你说", thinking: "正在组织回答", speaking: "正在讲解", working: "正在查阅资料", paused: "讲解已暂停", error: "需要处理", ending: "正在结束通话", ended: "通话已结束" };
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const phaseRef = useRef(phase); phaseRef.current = phase;
   const [expanded, setExpanded] = useState(false);

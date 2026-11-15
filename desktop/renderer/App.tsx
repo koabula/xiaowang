@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, AudioLines, Check, ChevronDown, ChevronRight, ChevronUp, Download, LoaderCircle, ExternalLink, Eye, FileText, Frame, Globe, Maximize2, MessageSquareText, Mic, MicOff, Minimize2, MousePointer2, PanelRight, Phone, PhoneOff, Play, Plus, RefreshCw, Search, Settings, Square, X } from "lucide-react";
 import * as Select from "@radix-ui/react-select";
 import Markdown from "react-markdown";
@@ -13,6 +13,9 @@ import { RichText } from "./rich-text.tsx";
 import { FileBrowser, rememberOpenedFile } from "./file-browser.tsx";
 import { ModalDialog } from "./modal-dialog.tsx";
 import { BotMenu, type BotMenuTarget } from "./bot-menu.tsx";
+import { MessageComposer } from "./message-composer.tsx";
+import { AttachmentChip } from "./message-attachments.tsx";
+import type { Attachment } from "../../src/types.ts";
 import { hasUnsavedSettings } from "./settings-draft.ts";
 const DocumentReader = lazy(() => import("./document-reader.tsx").then(module => ({ default: module.DocumentReader })));
 import { withCanvasPager } from "./canvas-pager.ts";
@@ -65,7 +68,6 @@ export function App() {
   const [creating, setCreating] = useState(false);
   const [botName, setBotName] = useState("");
   const [botMenu, setBotMenu] = useState<BotMenuTarget | null>(null);
-  const composerRef = useRef<HTMLTextAreaElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [fileBrowser, setFileBrowser] = useState<{ slug: string; mode: "file" | "canvas" } | null>(null);
   const [call, setCall] = useState<LiveCallView | null>(null);
@@ -111,13 +113,6 @@ export function App() {
   const ink = current?.avatarInk || inkFor(active || "xiaowang");
   const covered = Boolean(fileBrowser) || Boolean(botMenu) || settingsOpen || (state !== null && !state.settings.ready);
 
-  useLayoutEffect(() => {
-    const node = composerRef.current; if (!node) return;
-    const resize = () => { node.style.height = "0px"; node.style.height = `${Math.min(144, node.scrollHeight)}px`; };
-    resize();
-    const observer = new ResizeObserver(resize); observer.observe(node.parentElement!);
-    return () => observer.disconnect();
-  }, [draft, active]);
 
   function openBotMenu(event: React.MouseEvent<HTMLButtonElement>, bot: BotRow) {
     event.preventDefault();
@@ -278,25 +273,27 @@ export function App() {
     }
   }
 
-  async function sendMessage() {
+  async function sendMessage(attachments: Attachment[] = []): Promise<boolean> {
     const slug = activeRef.current;
     const text = (draftBySlug[slug] ?? "").trim();
-    if (!text || !slug) return;
+    if ((!text && !attachments.length) || !slug) return false;
     followThread.current = true;
     setDraftBySlug((prev) => ({ ...prev, [slug]: "" }));
     setBusyBySlug((prev) => ({ ...prev, [slug]: true }));
     setActivityBySlug((prev) => ({ ...prev, [slug]: "" }));
-    setItems((currentItems) => [...(itemsSlug === slug ? currentItems : []), { id: -Date.now(), kind: "user", text }]);
+    setItems((currentItems) => [...(itemsSlug === slug ? currentItems : []), { id: -Date.now(), kind: "user", text, attachments }]);
     setItemsSlug(slug);
     try {
-      const next = await window.xiaowang.ask(slug, text);
+      const next = await window.xiaowang.ask(slug, text, attachments.map(a => a.refId));
       if (activeRef.current === slug) {
         receiveItems(slug, next);
-        const refs = await window.xiaowang.library(slug);
-        if (activeRef.current === slug) setLibrary(refs);
+        void window.xiaowang.library(slug).then(refs => { if (activeRef.current === slug) setLibrary(refs); }).catch(error => workspaceError(slug, error));
       }
+      return true;
     } catch (error) {
       workspaceError(slug, error);
+      setDraftBySlug(previous => ({ ...previous, [slug]: previous[slug] ? `${text}\n${previous[slug]}` : text }));
+      return false;
     } finally {
       setBusyBySlug(prev => ({ ...prev, [slug]: false }));
     }
@@ -461,9 +458,9 @@ export function App() {
 
       <main className="thread">
         <header>
-          <button className={mode === "profile" && stageOpen ? "pill on" : "pill"} type="button" onClick={openProfile}>
+          <button className={mode === "profile" && stageOpen ? "pill bot-title on" : "pill bot-title"} aria-expanded={mode === "profile" && stageOpen} title={current?.name ?? "小王同学"} type="button" onClick={openProfile}>
             <Avatar slug={active || "xiaowang"} seed={current?.avatarSeed} ink={current?.avatarInk} size={22} mood={busy ? "think" : "idle"} />
-            {current?.name ?? "小王同学"}
+            <span className="bot-title-name">{current?.name ?? "小王同学"}</span>
             <ChevronRight size={14} />
           </button>
           <button className="icon stage-toggle" type="button" title={stageOpen ? copy.collapseStage : copy.expandStage} onClick={toggleStage}>
@@ -485,28 +482,9 @@ export function App() {
           ) : null}
         </div>
         {call && call.slug === active ? <VoicePanel call={call} audio={audioRef.current} jobs={taskView.byCall.get(call.callId ?? "") ?? []} onError={setToast} name={current?.name || "小王"} seed={current?.avatarSeed} ink={ink} locale={localeOf(state?.settings.locale)} onMute={toggleMute} onEnd={() => void endCall()} /> : call ? <button className="call-away" type="button" onClick={() => void window.xiaowang.setActive(call.slug)}><Phone size={14} />{localeOf(state?.settings.locale) === "en" ? "Return to your call" : "返回正在进行的通话"}</button> : null}
-        <form className="composer" onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
-          <button className="icon" type="button" title={copy.addToLibrary} onClick={() => void window.xiaowang.addFiles().then(async () => { if (active) setLibrary(await window.xiaowang.library(active)); })}><Plus size={18} /></button>
-          <textarea
-            ref={composerRef}
-            rows={1}
-            value={draft}
-            placeholder={copy.message(current?.name ?? "")}
-            onChange={(event) => {
-              const slug = activeRef.current;
-              const value = event.target.value;
-              setDraftBySlug((prev) => ({ ...prev, [slug]: value }));
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                void sendMessage();
-              }
-            }}
-          />
-          {busy ? <button className="call stop" type="button" title={copy.stop} onClick={() => void window.xiaowang.stop(active)}><Square size={14} /></button> : null}
-          {!call ? <button className="call" style={{ background: ink }} type="button" title={copy.call} aria-label={copy.call} onClick={() => void toggleCall()}><span /><span /><span /><span /></button> : null}
-        </form>
+        <MessageComposer slug={active} draft={draft} placeholder={copy.message(current?.name ?? "")} busy={busy} inCall={Boolean(call)} ink={ink} en={localeOf(state?.settings.locale) === "en"}
+          onDraft={value => { const slug = activeRef.current; setDraftBySlug(previous => ({ ...previous, [slug]: value })); }}
+          onSend={sendMessage} onStop={() => void window.xiaowang.stop(active)} onCall={() => void toggleCall()} onError={setToast} />
       </main>
 
       {stageOpen ? <div className="split" onPointerDown={(event) => dragSize(event, rightWidth, setRightWidth, -1)} /> : null}
@@ -660,7 +638,7 @@ function UpdateButton({ update, locale, onError }: { update: import("./types.ts"
 }
 
 function isConversation(item: ChatItem): boolean {
-  return item.kind === "call" || ((item.kind === "user" || item.kind === "assistant") && item.text.trim().length > 0);
+  return item.kind === "call" || (item.kind === "user" && Boolean(item.attachments?.length)) || ((item.kind === "user" || item.kind === "assistant") && item.text.trim().length > 0);
 }
 
 function plainError(error: unknown): string {
@@ -674,7 +652,10 @@ type MessageProps = { item: ChatItem; ink: string; name: string; copy: Copy; slu
 
 function Message({ item, ink, name, copy, slug, jobs, locale, onError }: MessageProps) {
   if (item.kind === "call") return <CallCard item={item} name={name} ink={ink} copy={copy} slug={slug} jobs={jobs} locale={locale} onError={onError} />;
-  if (item.kind === "user") return <div className="bubble user" style={{ background: ink }}>{item.text}</div>;
+  if (item.kind === "user") return item.attachments?.length ? <div className="user-message">
+    <div className="message-attachments">{item.attachments.map(attachment => <AttachmentChip key={attachment.refId} slug={slug} attachment={attachment} onOpen={() => void window.xiaowang.openReference(slug, attachment.refId, 1).catch(error => onError(String(error)))} />)}</div>
+    {item.text ? <div className="bubble user" style={{ background: ink }}>{item.text}</div> : null}
+  </div> : <div className="bubble user" style={{ background: ink }}>{item.text}</div>;
   return (
     <div className="bubble assistant">
       <RichText slug={slug} text={item.text} />

@@ -37,10 +37,17 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ProviderCon
 export function createProvider(config: ProviderConfig): LlmProvider {
   return {
     model: config.model,
-    complete(request) {
-      return config.apiStyle === "anthropic"
-        ? completeAnthropic(config, request)
-        : completeOpenAI(config, request);
+    async complete(request) {
+      try {
+        return await (config.apiStyle === "anthropic"
+          ? completeAnthropic(config, request)
+          : completeOpenAI(config, request));
+      } catch (error) {
+        if (request.messages.some(message => message.images?.length) && error instanceof Error && /(?:image|vision|multimodal).*(?:support|invalid)|(?:support|invalid).*(?:image|vision|multimodal)/i.test(error.message)) {
+          throw new Error(`当前文字模型不接受图片，请在设置中选择支持视觉输入的模型。图片未被忽略。${error.message}`, { cause: error });
+        }
+        throw error;
+      }
     },
   };
 }
@@ -87,7 +94,7 @@ export function toOpenAIMessages(system: string, messages: ModelMessage[]): unkn
       out.push(body);
       continue;
     }
-    out.push({ role: "user", content: message.content });
+    out.push({ role: "user", content: message.images?.length ? [{ type: "text", text: message.content }, ...message.images.map(image => ({ type: "image_url", image_url: { url: `data:${image.mimeType};base64,${image.data}` } }))] : message.content });
   }
   return out;
 }
@@ -136,7 +143,7 @@ export function toAnthropicMessages(messages: ModelMessage[]): unknown[] {
       out.push({ role: "assistant", content });
       continue;
     }
-    out.push({ role: "user", content: message.content });
+    out.push({ role: "user", content: message.images?.length ? [...message.images.map(image => ({ type: "image", source: { type: "base64", media_type: image.mimeType, data: image.data } })), { type: "text", text: message.content }] : message.content });
   }
   return out;
 }
@@ -283,6 +290,7 @@ function mergeUserText(messages: ModelMessage[]): ModelMessage[] {
     const prev = merged.at(-1);
     if (message.role === "user" && prev?.role === "user" && !prev.toolCallId) {
       prev.content = `${prev.content}\n\n${message.content}`;
+      if (message.images?.length) prev.images = [...(prev.images ?? []), ...message.images];
       continue;
     }
     merged.push({ ...message, toolCalls: message.toolCalls ? [...message.toolCalls] : undefined });

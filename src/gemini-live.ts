@@ -133,6 +133,7 @@ export class GeminiLive {
     this.interrupt(); this.socket?.close(); this.socket = null;
     if ((this.everReady && !this.handle) || this.reconnects++ >= 3) { this.close(`${reason} 无法恢复原会话，请重新通话。后台任务和已有记录已保留。`); return; }
     this.handlers.onReconnecting?.();
+    if (this.closed) return;
     this.retry = setTimeout(() => this.open(), Math.min(2000, this.reconnects * 300));
   }
   private requireReady(): void { if (!this.ready || this.closed) throw new Error("Gemini Live 尚未就绪。"); }
