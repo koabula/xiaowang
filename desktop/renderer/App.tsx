@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, AudioLines, Check, ChevronDown, ChevronRight, ChevronUp, ExternalLink, Eye, FileText, Frame, Globe, Maximize2, MessageSquareText, Mic, MicOff, Minimize2, MousePointer2, PanelRight, Phone, PhoneOff, Play, Plus, RefreshCw, Search, Settings, Square, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, AudioLines, Check, ChevronDown, ChevronRight, ChevronUp, Download, LoaderCircle, ExternalLink, Eye, FileText, Frame, Globe, Maximize2, MessageSquareText, Mic, MicOff, Minimize2, MousePointer2, PanelRight, Phone, PhoneOff, Play, Plus, RefreshCw, Search, Settings, Square, X } from "lucide-react";
 import * as Select from "@radix-ui/react-select";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -114,7 +114,7 @@ export function App() {
   }
 
   useEffect(() => {
-    void window.xiaowang.getState().then(initial => { setState(initial); if (initial.browser) { setBrowser(initial.browser); setAddress(initial.browser.url); } });
+    void window.xiaowang.getState().then(initial => { setState(initial); if (initial.updateNotice) setToast(initial.updateNotice); if (initial.browser) { setBrowser(initial.browser); setAddress(initial.browser.url); } });
     const stops = [
       window.xiaowang.onJob(job => {
         setState(prev => prev ? { ...prev, jobs: [...(prev.jobs ?? []).filter(item => item.id !== job.id), job] } : prev);
@@ -123,6 +123,7 @@ export function App() {
         }
       }),
       window.xiaowang.onState(setState),
+      window.xiaowang.onUpdate(update => setState(prev => prev ? { ...prev, update } : prev)),
       window.xiaowang.onBrowser((next) => {
         setBrowser(next);
         setAddress(next.url);
@@ -413,6 +414,7 @@ export function App() {
             <Settings size={16} />
             {copy.settings}
           </button>
+          {state?.update?.version ? <UpdateButton update={state.update} locale={localeOf(state.settings.locale)} onError={setToast} /> : null}
         </footer>
       </aside>
 
@@ -581,6 +583,7 @@ export function App() {
       {settingsOpen || (state !== null && !state.settings.ready) ? (
         <SettingsPanel
           settings={state?.settings}
+          version={state?.version || ""}
           forced={state !== null && !state.settings.ready}
           onClose={() => setSettingsOpen(false)}
           onSave={async (patch) => {
@@ -593,6 +596,23 @@ export function App() {
       {toast ? <button className="toast" type="button" onClick={() => setToast("")}>{toast}</button> : null}
     </div>
   );
+}
+
+function UpdateButton({ update, locale, onError }: { update: import("./types.ts").UpdateState; locale: Locale; onError: (error: string) => void }) {
+  const en = locale === "en";
+  const active = update.phase === "downloading" || update.phase === "installing";
+  const label = update.phase === "downloading" ? `${en ? "Downloading update" : "正在下载更新"} ${Math.round(update.percent || 0)}%`
+    : update.phase === "installing" ? en ? "Installing update" : "正在安装更新"
+    : update.phase === "ready" ? en ? "Downloaded; installs when idle and settings are saved" : "下载完成，通话、后台工作和未保存设置处理完毕后自动安装"
+    : update.phase === "error" ? `${en ? "Retry update" : "重试更新"}：${update.error || ""}`
+    : `${en ? "Download and install" : "下载并安装"} v${update.version}`;
+  async function install() {
+    try { const next = await window.xiaowang.updateApp(); if (next.phase === "error") onError(next.error || (en ? "Update failed" : "更新失败")); }
+    catch (error) { onError(plainError(error)); }
+  }
+  return <button className="update-button" type="button" aria-label={label} title={label} disabled={active || update.phase === "ready"} onClick={() => void install()}>
+    {active ? <LoaderCircle className="spin" size={17} /> : update.phase === "ready" ? <Check size={17} /> : <Download size={17} />}
+  </button>;
 }
 
 function isConversation(item: ChatItem): boolean {
@@ -849,11 +869,13 @@ function FieldSelect({
 
 function SettingsPanel({
   settings,
+  version,
   forced,
   onClose,
   onSave,
 }: {
   settings: AppState["settings"] | undefined;
+  version: string;
   forced: boolean;
   onClose: () => void;
   onSave: (patch: SettingsPatch) => Promise<void>;
@@ -1019,6 +1041,7 @@ function SettingsPanel({
       <form aria-label={copy.settings} onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <header>
           <strong>{forced ? copy.connectModel : copy.settings}</strong>
+          <span className="app-version">{locale === "en" ? "Version" : "版本"} {version}</span>
           <div className="lang" role="group" aria-label={copy.language}>
             <button type="button" className={locale === "zh" ? "on" : ""} onClick={() => setLocale("zh")}>中文</button>
             <button type="button" className={locale === "en" ? "on" : ""} onClick={() => setLocale("en")}>English</button>

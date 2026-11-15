@@ -8,6 +8,9 @@ const listeners = (channel, callback) => {
 
 contextBridge.exposeInMainWorld("xiaowang", {
   getState: () => ipcRenderer.invoke("state:get"),
+  checkUpdate: () => ipcRenderer.invoke("update:check"),
+  updateApp: () => ipcRenderer.invoke("update:download"),
+  onUpdate: (callback) => listeners("update", callback),
   setActive: (slug) => ipcRenderer.invoke("bot:active", slug),
   createBot: (name, baseline) => ipcRenderer.invoke("bot:create", name, baseline),
   renameBot: (slug, name) => ipcRenderer.invoke("bot:rename", slug, name),

@@ -7,7 +7,7 @@ import os from 'node:os';
 import { _electron as electron } from 'playwright';
 import { WebSocketServer } from 'ws';
 import { Runtime } from '../src/runtime.ts';
-import { launchPackaged } from './launch.mjs';
+import { launchPackaged, closeTestApp } from './launch.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
@@ -92,7 +92,7 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
   const env = { ...process.env, XIAOWANG_HOME: home, XIAOWANG_USER_DATA: profile, XIAOWANG_REALTIME_URL: `ws://127.0.0.1:${server.address().port}/realtime` }; delete env.ELECTRON_RUN_AS_NODE;
   const args = ['--no-sandbox', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required'];
   const app = process.env.XIAOWANG_E2E_EXECUTABLE ? await launchPackaged(process.env.XIAOWANG_E2E_EXECUTABLE, args, env) : await electron.launch({ args: [...args, 'desktop/dist/main.js'], env });
-  t.after(async () => { gates.voice.resolve(); gates.text.resolve(); await app.close().catch(() => {}); for (const client of server.clients) client.terminate(); await new Promise(resolve => server.close(resolve)); model.closeAllConnections(); await new Promise(resolve => model.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  t.after(async () => { gates.voice.resolve(); gates.text.resolve(); await closeTestApp(app); for (const client of server.clients) client.terminate(); await new Promise(resolve => server.close(resolve)); model.closeAllConnections(); await new Promise(resolve => model.close(resolve)); await rm(root, { recursive: true, force: true }); });
   const page = await app.firstWindow(); const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => { window.meters = []; const create = AudioContext.prototype.createAnalyser; AudioContext.prototype.createAnalyser = function(...args) { const meter = create.apply(this, args); window.meters.push(meter); return meter; }; });
   await page.reload(); await page.waitForSelector('.composer');

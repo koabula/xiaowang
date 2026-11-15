@@ -1,3 +1,4 @@
+import { closeTestApp } from "./launch.mjs";
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
@@ -16,7 +17,7 @@ test('real renderer: Canvas adapters and interrupted audio never reopen old play
   await writeFile(main, `const {app,BrowserWindow}=require('electron');app.setPath('userData',${JSON.stringify(root)});app.whenReady().then(()=>{const w=new BrowserWindow({width:900,height:700,webPreferences:{contextIsolation:true,nodeIntegration:false}});w.loadURL('data:text/html,<html><body></body></html>');});`);
   const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
   const app=await electron.launch({args:['--no-sandbox','--autoplay-policy=no-user-gesture-required',main],env});
-  t.after(async()=>{await app.close();await rm(root,{recursive:true,force:true});});
+  t.after(async()=>{await closeTestApp(app);await rm(root,{recursive:true,force:true});});
   const page=await app.firstWindow();const errors=[];page.on('pageerror',error=>errors.push(error.message));
   const legacy='<!doctype html><style>body{margin:0;overflow:hidden}.s{position:absolute;inset:0;display:none;flex-direction:column;justify-content:center}.s.on{display:flex}</style><div class="s on">First</div><div class="s">Second</div><script>const S=[...document.querySelectorAll(".s")];let i=0;function go(d){i=Math.max(0,Math.min(S.length-1,i+d));S.forEach((s,k)=>s.classList.toggle("on",k===i))}onclick=()=>go(1)</script>';
   const decks=[

@@ -6,7 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { build } from 'esbuild';
 import { _electron as electron } from 'playwright';
-import { launchPackaged } from './launch.mjs';
+import { launchPackaged, closeTestApp } from './launch.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, timeout = 10000) {
@@ -36,12 +36,12 @@ test('native browser: ownership gates mouse, wheel, keyboard, IME, modals, frame
   await build({ stdin: { contents: `import {app,BrowserWindow} from 'electron';import {BrowserPane} from './desktop/main/browser.ts';app.setPath('userData',${JSON.stringify(path.join(root, 'profile'))});app.whenReady().then(async()=>{const win=new BrowserWindow({width:900,height:740,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}});globalThis.pane=new BrowserPane(()=>"fixture",()=>{},()=>({id:"unused",filename:"unused.pdf"}));globalThis.pane.attach(win);globalThis.pane.setBounds({x:0,y:0,width:800,height:600});await win.loadURL('data:text/html,<input id="host" placeholder="chat">');});`, resolveDir: process.cwd() }, bundle: true, format: 'esm', platform: 'node', external: ['electron'], outfile: main, logLevel: 'silent' });
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await electron.launch({ args: ['--no-sandbox', main], env });
-  t.after(async () => { releaseSlow(); await app.close().catch(() => {}); await closeServer(server); await closeServer(frames); await rm(root, { recursive: true, force: true }); });
+  t.after(async () => { releaseSlow(); await closeTestApp(app); await closeServer(server); await closeServer(frames); await rm(root, { recursive: true, force: true }); });
   const host = await app.firstWindow();
   const run = script => app.evaluate(async (_, script) => globalThis.pane.view.webContents.executeJavaScript(script), script);
   const action = (name, ...args) => app.evaluate(async (_, { name, args }) => globalThis.pane[name](...args), { name, args });
   const bot = (name, ...args) => app.evaluate(async (_, { name, args }) => globalThis.pane.driver[name](...args), { name, args });
-  const input = async (...events) => { await app.evaluate((_, events) => { const wc = globalThis.pane.view.webContents; wc.focus(); for (const event of events) wc.sendInputEvent(event); }, events); await sleep(80); };
+  const input = async (...events) => { await app.evaluate(({ BrowserWindow }, events) => { BrowserWindow.getAllWindows()[0]?.focus(); const wc = globalThis.pane.view.webContents; wc.focus(); for (const event of events) wc.sendInputEvent(event); }, events); await sleep(80); };
   const click = (x, y, button = 'left') => input({ type: 'mouseMove', x, y }, { type: 'mouseDown', x, y, button, clickCount: 1 }, { type: 'mouseUp', x, y, button, clickCount: 1 });
   const key = () => input({ type: 'keyDown', keyCode: 'A' }, { type: 'char', keyCode: 'a' }, { type: 'keyUp', keyCode: 'A' });
   const wheel = () => input({ type: 'mouseWheel', x: 250, y: 250, deltaY: -300, deltaX: 0 });
@@ -114,7 +114,7 @@ test('desktop browser: IPC ownership, takeover UI, reload hydration and navigati
   await writeFile(path.join(profile, 'secrets.bin'), JSON.stringify({ model: 'fixture', baseUrl: `${modelUrl}/v1`, apiKey: 'local', locale: 'zh' }));
   const env = { ...process.env, XIAOWANG_HOME: path.join(root, 'home'), XIAOWANG_USER_DATA: profile }; delete env.ELECTRON_RUN_AS_NODE;
   const app = process.env.XIAOWANG_E2E_EXECUTABLE ? await launchPackaged(process.env.XIAOWANG_E2E_EXECUTABLE, ['--no-sandbox'], env) : await electron.launch({ args: ['--no-sandbox', 'desktop/dist/main.js'], env });
-  t.after(async () => { await app.close().catch(() => {}); await closeServer(web); await closeServer(model); await rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await closeTestApp(app); await closeServer(web); await closeServer(model); await rm(root, { recursive: true, force: true }); });
   const page = await app.firstWindow(); await page.waitForSelector('.composer');
   await page.evaluate(() => window.xiaowang.ask('xiaowang', '打开测试网页'));
   await page.getByRole('button', { name: '取得控制权', exact: true }).waitFor();

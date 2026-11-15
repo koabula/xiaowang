@@ -6,6 +6,7 @@ async function until(predicate, timeout=15000) {const end=Date.now()+timeout;whi
 export async function launchPackaged(executablePath, args, env) {
   // Packaged executables do not install Playwright's development-only Electron hook.
   // Attach to their real renderer over CDP and exercise the same public IPC surface.
+  env = { ...env, XIAOWANG_DISABLE_UPDATES: env.XIAOWANG_UPDATE_TEST_FEED ? "0" : "1" };
   const child = spawn(executablePath, ["--remote-debugging-port=0", "--use-mock-keychain", ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
   let log = "";
   const endpoint = await new Promise((resolve, reject) => {
@@ -27,4 +28,16 @@ export async function launchPackaged(executablePath, args, env) {
       await Promise.race([exited, sleep(3000).then(() => child.kill("SIGKILL"))]);
     },
   };
+}
+
+
+/** Fixtures must exit even if a failed assertion left an unsaved-settings dialog. */
+export async function closeTestApp(app) {
+  let timer;
+  try {
+    await Promise.race([
+      app.close().catch(() => {}),
+      new Promise(resolve => { timer = setTimeout(() => { app.process().kill('SIGKILL'); resolve(); }, 3000); }),
+    ]);
+  } finally { clearTimeout(timer); }
 }

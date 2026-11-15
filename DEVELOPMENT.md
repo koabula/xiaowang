@@ -70,9 +70,13 @@ npm run dist:linux         # AppImage and .deb, x64
 node desktop/scripts/checksums.mjs
 ```
 
-Output goes to `release/`; `npm run pack` produces an unpacked app. Local Linux `.deb` builds need a `homepage`/`repository` in `package.json`, or `GITHUB_REPOSITORY=owner/repo`.
+Output goes to `release/`; `npm run pack` produces an unpacked app. The canonical upstream and update feed are `koabula/xiaowang`.
 
-GitHub Actions runs checks on pull requests and builds installers after successful checks on pushes to `main`/`master`, `v*` tags, or manual runs. Installers and `SHA256SUMS.txt` are retained as artifacts for 14 days; releases are not published automatically. The build reads repository metadata from GitHub without hardcoded repository URLs.
+GitHub Actions runs checks on pull requests and builds installers after successful checks on pushes to `main`/`master`, `v*` tags, or manual runs. Installers, `latest*.yml` update manifests and `SHA256SUMS.txt` are retained as artifacts for 14 days. Pushing a `v*` tag matching `package.json` publishes a GitHub Release only after every platform succeeds; assets are uploaded to a draft before it becomes public. To publish a new version, bump the package and lockfile, commit, then push the matching tag (for example `v0.1.6`). Prereleases and downgrades are not offered to stable installs.
+
+The app checks on packaged startup and every six hours. The circular download button beside Settings starts a verified download and restarts to install when calls, jobs and dirty settings are clear. `electron-updater` handles feed resolution and SHA-512 integrity. On macOS a helper prepares a same-volume replacement, validates bundle ID/version and retains the signing Team ID for signed installations; it waits for exit, replaces and relaunches the app, restoring the prior app if replacement or launch fails. Unsigned builds are supported without changing OS security settings. A read-only/translocated app must be moved to a writable Applications folder first. Normal installs retain their data; explicit `XIAOWANG_HOME` / `XIAOWANG_USER_DATA` overrides survive relaunch.
+
+Isolated update fixtures use a loopback-only `XIAOWANG_UPDATE_TEST_FEED`. `XIAOWANG_DISABLE_UPDATES=1` disables automatic checks for offline testing. Neither option is exposed to renderer content or model tools.
 
 Optional Actions secrets:
 

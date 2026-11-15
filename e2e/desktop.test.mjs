@@ -7,7 +7,7 @@ import path from "node:path";
 import { _electron as electron } from "playwright";
 import { WebSocketServer } from "ws";
 import { Runtime } from "../src/runtime.ts";
-import { launchPackaged } from "./launch.mjs";
+import { launchPackaged, closeTestApp } from "./launch.mjs";
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(predicate, timeout = 12000) {
@@ -100,9 +100,10 @@ test("desktop: voice interruption, PDF Viewer, bot files, settings and saved sta
   function reached(value) { stage = value; if (process.env.XIAOWANG_E2E_DEBUG) console.log(`Desktop check: ${value}`); }
   t.after(async () => {
     if (stage !== "complete") console.log(`Last desktop step: ${stage}\n${processErrors.join("").slice(-6000)}`);
-    if (app) await Promise.race([app.close().catch(() => {}), sleep(3000).then(() => { if (app.process().exitCode === null) app.process().kill("SIGKILL"); })]);
+    if (app) await closeTestApp(app);
     for (const socket of server.clients) socket.terminate();
     await new Promise(resolve => server.close(resolve));
+    model.closeAllConnections();
     await new Promise(resolve => model.close(resolve));
     await rm(root, { recursive: true, force: true });
   });

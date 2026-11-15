@@ -26,13 +26,24 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - name: Validate release version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node -e 'if (process.env.GITHUB_REF_NAME !== "v" + require("./package.json").version) throw new Error("Tag must match package.json version")'
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
       - name: Install desktop test system libraries
         run: npx --no-install playwright install-deps chromium
+      - name: Prepare virtual audio for desktop voice tests
+        run: |
+          sudo apt-get install -y pulseaudio
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=xiaowang_ci
+          pactl set-default-sink xiaowang_ci
+          pactl set-default-source xiaowang_ci.monitor
       - name: Exercise the desktop app with local model fixtures
-        run: xvfb-run --auto-servernum npm run test:desktop
+        timeout-minutes: 5
+        run: xvfb-run --auto-servernum node --test --test-concurrency=1 --test-reporter=tap --test-timeout=60000 e2e/*.test.mjs
 
   package:
     name: Package ${{ matrix.name }}
@@ -86,4 +97,30 @@ jobs:
             release/*.AppImage
             release/*.deb
             release/*.blockmap
+            release/latest*.yml
             release/SHA256SUMS.txt
+
+  release:
+    name: Publish complete GitHub Release
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: XiaoWang-*
+          path: release-publish
+          merge-multiple: true
+      - name: Recompute checksums for all platforms
+        run: node desktop/scripts/checksums.mjs release-publish
+      - name: Publish installers and update manifests together
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --draft --verify-tag --generate-notes
+          gh release upload "$RELEASE_TAG" release-publish/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest

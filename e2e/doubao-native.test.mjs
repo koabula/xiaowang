@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {_electron as electron} from 'playwright';
 import {WebSocketServer} from 'ws';
-import {launchPackaged} from './launch.mjs';
+import {launchPackaged, closeTestApp} from './launch.mjs';
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(check,timeout=10000){const end=Date.now()+timeout;while(Date.now()<end){const result=await check();if(result)return result;await sleep(30);}throw new Error('Expected native Doubao condition did not become true');}
 function tone(ms=400){const pcm=Buffer.alloc(ms*48);for(let i=0;i<pcm.length/2;i++)pcm.writeInt16LE(Math.round(Math.sin(2*Math.PI*440*i/24000)*8000),i*2);return pcm.toString('base64');}
@@ -30,7 +30,7 @@ test('desktop: native Doubao anonymous audio, ASR interruption, FC continuation 
  const env={...process.env,XIAOWANG_HOME:path.join(root,'home'),XIAOWANG_USER_DATA:profile,XIAOWANG_REALTIME_URL:`ws://127.0.0.1:${server.address().port}/realtime`};delete env.ELECTRON_RUN_AS_NODE;
  const args=['--no-sandbox','--use-fake-ui-for-media-stream','--use-fake-device-for-media-stream','--autoplay-policy=no-user-gesture-required'];
  const app=process.env.XIAOWANG_E2E_EXECUTABLE?await launchPackaged(process.env.XIAOWANG_E2E_EXECUTABLE,args,env):await electron.launch({args:[...args,'desktop/dist/main.js'],env});
- t.after(async()=>{await app.close().catch(()=>{});for(const c of server.clients)c.terminate();await new Promise(resolve=>server.close(resolve));await rm(root,{recursive:true,force:true});});
+ t.after(async()=>{await closeTestApp(app);for(const c of server.clients)c.terminate();await new Promise(resolve=>server.close(resolve));await rm(root,{recursive:true,force:true});});
  const page=await app.firstWindow();const errors=[];page.on('pageerror',e=>errors.push(e.message));await page.waitForLoadState('load');
  await page.addInitScript(()=>{window.meters=[];const create=AudioContext.prototype.createAnalyser;AudioContext.prototype.createAnalyser=function(...args){const meter=create.apply(this,args);window.meters.push(meter);return meter;};});await page.reload();
  await page.waitForSelector('.composer');await page.evaluate(()=>window.xiaowang.callStart('xiaowang'));await until(()=>micPackets>0);

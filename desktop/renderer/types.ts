@@ -1,3 +1,5 @@
+import type { UpdateState } from "../main/update-state.ts";
+export type { UpdateState };
 import type { TaskJob } from "../../src/types.ts";
 import type { AudioIdentity, InterruptionReceipt, PlaybackInterruption, PlaybackPosition, VoiceState } from "../main/call.ts";
 import type { StageReceipt } from "../../src/stage.ts";
@@ -8,6 +10,9 @@ declare global {
   interface Window {
     xiaowang: {
       getState: () => Promise<AppState>;
+      checkUpdate: () => Promise<UpdateState>;
+      updateApp: () => Promise<UpdateState>;
+      onUpdate: (callback: (update: UpdateState) => void) => () => void;
       setActive: (slug: string) => Promise<void>;
       createBot: (name: string, baseline: string) => Promise<string>;
       renameBot: (slug: string, name: string) => Promise<void>;
@@ -64,6 +69,9 @@ declare global {
 }
 
 export interface AppState {
+  version: string;
+  update?: UpdateState;
+  updateNotice?: string;
   browser?: BrowserNote;
   bots: BotRow[];
   activeSlug: string;

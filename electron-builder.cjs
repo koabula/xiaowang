@@ -1,5 +1,5 @@
 /** v26 configuration. Credentials are optional; ordinary CI creates unsigned installers. */
-const repository = process.env.GITHUB_REPOSITORY;
+const repository = "koabula/xiaowang";
 const homepage = repository ? `${process.env.GITHUB_SERVER_URL || "https://github.com"}/${repository}` : undefined;
 module.exports = {
   appId: "com.xiaowang.assistant",
@@ -22,6 +22,6 @@ module.exports = {
   win: { target: ["nsis"], icon: "desktop/icon.png" },
   nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true, createDesktopShortcut: true, createStartMenuShortcut: true },
   linux: { target: ["AppImage", "deb"], category: "Education", icon: "desktop/icon.png", maintainer: "XiaoWang contributors" },
-  publish: null,
+  publish: { provider: "github", owner: "koabula", repo: "xiaowang", releaseType: "release" },
   ...(homepage ? { extraMetadata: { homepage, repository: { type: "git", url: `${homepage}.git` } } } : {}),
 };

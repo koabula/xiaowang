@@ -31,11 +31,13 @@ Try asking:
 
 Click **＋** under **Files** or **Canvas** to browse the current task's imported originals, workspace files, and recently opened materials. PDFs support continuous scrolling, text selection, search, and zoom. Click a source citation to jump to its page.
 
-Background work appears in task cards, with cancellation and retry controls. Task records remain after restarting. Work that was running when the app exited requires a manual retry after checking existing results. If you leave Settings with unsaved changes, XiaoWang will ask what to do.
+Voice-initiated background work lives inside its source call: expand the call to see results, open files, cancel or retry. Ordinary text chat displays replies directly. Call and work records remain after restarting. Work that was running when the app exited requires a manual retry after checking existing results. If you leave Settings with unsaved changes, XiaoWang will ask what to do.
 
 ## Installers
 
-Once the project is on GitHub, main-branch updates automatically build macOS, Windows, and Linux installers. Download them from **Actions → Desktop installers → a workflow run → Artifacts** in the repository.
+Stable installers are available in [GitHub Releases](https://github.com/koabula/xiaowang/releases). Settings shows the installed version. When a newer stable release is available, a circular download icon appears beside Settings. Click it to download, verify, install and restart; active calls, background work and unsaved settings defer installation. Versions 0.1.4 and earlier need one manual installation of a version that includes the updater.
+
+Main-branch updates also build macOS, Windows, and Linux test installers. Download them from **Actions → Desktop installers → a workflow run → Artifacts** in the repository.
 
 Builds cover Apple Silicon and Intel Macs, Windows x64, and Linux x64. Installers without developer signing may show an operating-system security prompt.
 

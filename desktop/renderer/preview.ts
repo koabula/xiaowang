@@ -5,6 +5,7 @@ import type { AppState, BrowserNote, CallNote, ChatItem, DownloadNote, LibraryIt
 export function installPreviewBridge(): void {
   if (window.xiaowang) return;
   let state: AppState = {
+    version: "preview",
     activeSlug: "xiaowang",
     settings: {
       model: "deepseek-chat",
@@ -52,6 +53,9 @@ export function installPreviewBridge(): void {
     async getState() {
       return state;
     },
+    async checkUpdate() { return { currentVersion: state.version, phase: "idle" }; },
+    async updateApp() { return { currentVersion: state.version, phase: "idle" }; },
+    onUpdate() { return () => {}; },
     async setActive(slug) {
       state = { ...state, activeSlug: slug };
       publish();

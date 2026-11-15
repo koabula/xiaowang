@@ -3,6 +3,8 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { UpdateController } from "./update-state.ts";
+import { createUpdateEngine } from "./updates.ts";
 import { LiveCall, type InterruptionReceipt, type PlaybackPosition, type VoiceState } from "./call.ts";
 import { JobQueue, type JobOutput } from "../../src/jobs.ts";
 import { VoiceTasks, voiceJobReceipt } from "../../src/voice-tasks.ts";
@@ -45,6 +47,21 @@ const devUrl = process.env.XIAOWANG_DESKTOP_URL ?? "";
 let runtime: Runtime;
 let window: BrowserWindow | null = null;
 let settingsDirty = false;
+let updates: UpdateController;
+let updateTimers: Array<ReturnType<typeof setInterval>> = [];
+let updateChecksStarted = false;
+let updateNotice = "";
+
+function canInstallUpdate(): boolean {
+  return !settingsDirty && !live && !(jobs?.list() ?? []).some(job => job.status === "queued" || job.status === "running");
+}
+function startUpdateChecks(): void {
+  if (updateChecksStarted || process.env.XIAOWANG_DISABLE_UPDATES === "1" || (!app.isPackaged && !process.env.XIAOWANG_UPDATE_TEST_FEED)) return;
+  updateChecksStarted = true;
+  void updates.check();
+  updateTimers = [setInterval(() => void updates.check(), 6 * 60 * 60 * 1000), setInterval(() => void updates.installWhenIdle(), 2000)];
+  for (const timer of updateTimers) timer.unref();
+}
 let browser: BrowserPane;
 let secrets: SecretRecord = {
   model: "",
@@ -155,7 +172,7 @@ function present(id: number, event: SessionEvent): ChatItem | null {
 
 function publish(): void {
   const active = runtime.activeBot();
-  send("state", { bots: botRows(), activeSlug: active.slug, settings: publicSettings(secrets), jobs: publicJobs() });
+  send("state", { version: app.getVersion(), update: updates?.snapshot(), bots: botRows(), activeSlug: active.slug, settings: publicSettings(secrets), jobs: publicJobs() });
 }
 
 function publicJobs(): TaskJob[] {
@@ -301,13 +318,23 @@ function registerIpc(): void {
     // Start only after a renderer is mounted, independently of the first
     // navigation promise (a reload can abort that promise).
     jobs.start();
+    startUpdateChecks();
     return {
+    version: app.getVersion(), update: updates.snapshot(), updateNotice,
     bots: botRows(),
     activeSlug: runtime.activeBot().slug,
     settings: publicSettings(secrets), jobs: publicJobs(),
     call: live ? { slug: liveSlug, state: liveState } : null,
     browser: browser.viewState(),
     };
+  });
+  ipcMain.handle("update:check", async event => {
+    if (event.sender !== window?.webContents) throw new Error("只能从应用主窗口检查更新。");
+    await updates.check(); return updates.snapshot();
+  });
+  ipcMain.handle("update:download", async event => {
+    if (event.sender !== window?.webContents) throw new Error("只能从应用主窗口更新应用。");
+    await updates.update(); return updates.snapshot();
   });
   ipcMain.handle("bot:active", (_event, slug: string) => {
     runtime.store.setActiveBot(runtime.store.requireBot(slug).id);
@@ -774,6 +801,7 @@ app.whenReady().then(async () => {
     }
   });
   secrets = loadSecrets();
+  try { const outcome = JSON.parse(readFileSync(path.join(app.getPath("userData"), "update-outcome.json"), "utf8")); if (typeof outcome.error === "string") updateNotice = outcome.error.slice(0, 180); } catch { /* No failed installation to report. */ }
   // Environment configuration stays in memory and never rewrites stored keys.
   const overrides: Array<[keyof SecretRecord, string]> = [
     ["model", "XIAOWANG_MODEL"], ["baseUrl", "XIAOWANG_BASE_URL"], ["apiStyle", "XIAOWANG_API_STYLE"], ["apiKey", "XIAOWANG_API_KEY"],
@@ -794,6 +822,7 @@ app.whenReady().then(async () => {
     },
   );
   jobs = new JobQueue(runtime.store, ask, jobChanged);
+  updates = new UpdateController(app.getVersion(), createUpdateEngine(canInstallUpdate), state => send("update", state), canInstallUpdate);
   registerIpc();
   await createWindow();
   app.on("activate", () => {
@@ -808,6 +837,7 @@ app.on("window-all-closed", () => {
 });
 app.on("before-quit", event => {
   if (settingsDirty && window && !window.isDestroyed()) { event.preventDefault(); send("settings:closeRequested", "quit"); return; }
+  for (const timer of updateTimers) clearInterval(timer);
   live?.hangup();
   jobs?.shutdown();
   stages.dispose();

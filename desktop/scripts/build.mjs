@@ -7,7 +7,7 @@ export async function buildMain() {
   await build({
     entryPoints: { main: "desktop/main/index.ts", "document-worker": "src/document-worker.ts" },
     bundle: true, platform: "node", target: "node24", format: "esm", outdir: "desktop/dist",
-    external: ["electron", "unpdf"], sourcemap: true,
+    external: ["electron", "unpdf", "electron-updater"], sourcemap: true,
     banner: { js: 'import { createRequire as __xwCreateRequire } from "node:module"; const require = __xwCreateRequire(import.meta.url);' },
   });
   cpSync("desktop/main/preload.cjs", "desktop/dist/preload.cjs");

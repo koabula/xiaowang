@@ -6,7 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { _electron as electron } from 'playwright';
 import { Runtime } from '../src/runtime.ts';
-import { launchPackaged } from './launch.mjs';
+import { launchPackaged, closeTestApp } from './launch.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check) { const end = Date.now() + 12000; while (Date.now() < end) { const value = await check(); if (value) return value; await sleep(30); } throw new Error('Task display did not reach the expected state'); }
@@ -39,7 +39,7 @@ test('desktop: chat stays clean; voice work and results live only inside their c
   await writeFile(path.join(profile, 'secrets.bin'), JSON.stringify({ model: 'fixture', baseUrl: `http://127.0.0.1:${model.address().port}/v1`, apiKey: 'local', locale: 'zh' }));
   const env = { ...process.env, XIAOWANG_HOME: home, XIAOWANG_USER_DATA: profile }; delete env.ELECTRON_RUN_AS_NODE;
   const app = process.env.XIAOWANG_E2E_EXECUTABLE ? await launchPackaged(process.env.XIAOWANG_E2E_EXECUTABLE, ['--no-sandbox'], env) : await electron.launch({ args: ['--no-sandbox', 'desktop/dist/main.js'], env });
-  t.after(async () => { await app.close().catch(() => {}); model.closeAllConnections(); await new Promise(resolve => model.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await closeTestApp(app); model.closeAllConnections(); await new Promise(resolve => model.close(resolve)); await rm(root, { recursive: true, force: true }); });
   const page = await app.firstWindow(); const errors = []; page.on('pageerror', error => errors.push(error.message)); await page.waitForSelector('.composer');
   const sourceCall = page.locator(`[data-call-id="old-phone"]`);
   await sourceCall.waitFor();
