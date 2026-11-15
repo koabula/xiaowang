@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, session, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, protocol, session, shell } from "electron";
 import { mkdirSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -124,6 +124,19 @@ interface BotRow {
 
 function send(channel: string, payload: unknown): void {
   window?.webContents.send(channel, payload);
+}
+
+function importAttachment(slug: string, filename: string, data: Uint8Array): Attachment {
+  const bot = runtime.store.requireBot(slug);
+  if (!(data instanceof Uint8Array) || data.length > ATTACHMENT_BYTES || typeof filename !== "string" || filename.length > 255) throw new Error("附件无效或超过 20 MB。");
+  const bytes = Buffer.from(data), name = path.basename(filename.replaceAll("\\", "/"));
+  const mimeType = attachmentMime(name, bytes);
+  if (mimeType.startsWith("image/") && nativeImage.createFromBuffer(bytes).isEmpty()) throw new Error("无法读取这张图片，请更换为有效的图片文件。");
+  const suffix: Record<string, string> = { "image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp" };
+  const savedName = mimeType.startsWith("image/") && !/\.(png|jpe?g|gif|webp)$/i.test(name) ? name + suffix[mimeType] : name;
+  const { ref } = runtime.store.addLibraryBytes(bot.id, savedName, bytes);
+  publish();
+  return { refId: ref.id, filename: ref.filename, byteSize: ref.byteSize, mimeType };
 }
 
 function previewOf(botId: string): string {
@@ -477,17 +490,17 @@ function registerIpc(): void {
     }
     publish();
   });
-  ipcMain.handle("chat:attach", (_event, slug: string, filename: string, data: Uint8Array) => {
-    const bot = runtime.store.requireBot(slug);
-    if (!(data instanceof Uint8Array) || data.length > ATTACHMENT_BYTES || typeof filename !== "string" || filename.length > 255) throw new Error("附件无效或超过 20 MB。");
-    const bytes = Buffer.from(data), name = path.basename(filename.replaceAll("\\", "/"));
-    const mimeType = attachmentMime(name, bytes);
-    if (mimeType.startsWith("image/") && nativeImage.createFromBuffer(bytes).isEmpty()) throw new Error("无法读取这张图片，请更换为有效的图片文件。");
-    const suffix: Record<string, string> = { "image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp" };
-    const savedName = mimeType.startsWith("image/") && !/\.(png|jpe?g|gif|webp)$/i.test(name) ? name + suffix[mimeType] : name;
-    const { ref } = runtime.store.addLibraryBytes(bot.id, savedName, bytes);
-    publish();
-    return { refId: ref.id, filename: ref.filename, byteSize: ref.byteSize, mimeType };
+  ipcMain.handle("chat:attach", (_event, slug: string, filename: string, data: Uint8Array) => importAttachment(slug, filename, data));
+  ipcMain.handle("chat:pasteImage", async (_event, slug: string) => {
+    runtime.store.requireBot(slug);
+    for (const item of await clipboard.read()) {
+      const mimeType = item.types.find(type => ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(type));
+      if (!mimeType) continue;
+      const image = await item.getType(mimeType);
+      if (!("arrayBuffer" in image) || image.size > ATTACHMENT_BYTES) throw new Error("图片无效或超过 20 MB。");
+      return importAttachment(slug, `image.${mimeType === "image/jpeg" ? "jpg" : mimeType.slice(6)}`, new Uint8Array(await image.arrayBuffer()));
+    }
+    return null;
   });
   ipcMain.handle("chat:ask", async (_event, slug: string, text: string, ids: string[] = []) => {
     const bot = runtime.store.requireBot(slug);

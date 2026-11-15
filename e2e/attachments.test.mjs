@@ -55,7 +55,7 @@ test('actual clipboard paste, attachments, vision payloads, bot isolation, error
   const png = await app.evaluate(async ({ nativeImage, clipboard, ClipboardItem }) => { const image = nativeImage.createFromBitmap(Buffer.from([0,0,255,255,0,255,0,255,255,0,0,255,255,255,255,255]), { width: 2, height: 2 }).resize({ width: 256, height: 192 }); await clipboard.write([new ClipboardItem({ 'image/png': new Blob([new Uint8Array(image.toPNG())], { type: 'image/png' }) })]); return image.toPNG().toString('base64'); });
   const textarea = () => page.locator('.composer textarea');
   await textarea().focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
-  await page.locator('.pending-attachments .attachment-chip img').waitFor();
+  try { await page.locator('.pending-attachments .attachment-chip img').waitFor(); } catch (error) { console.log('Clipboard failure diagnostic', { platform: process.platform, clipboard: await app.evaluate(async ({ clipboard }) => (await clipboard.read()).map(item => item.types)), pending: await page.locator('.pending-attachments').allTextContents(), draft: await textarea().inputValue() }); throw error; }
   assert.equal(await page.locator('.pending-attachments .attachment-chip').count(), 1);
   await page.evaluate(() => window.xiaowang.setActive('xiaowang')); await page.locator('.pending-attachments').waitFor({ state: 'detached' });
   await page.evaluate(slug => window.xiaowang.setActive(slug), slug); await page.locator('.pending-attachments img').waitFor();
@@ -95,6 +95,10 @@ test('actual clipboard paste, attachments, vision payloads, bot isolation, error
   await page.locator('.attachment-picker').setInputFiles({ name: 'blocked.exe', mimeType: 'application/octet-stream', buffer: Buffer.from('not supported') });
   await page.locator('.pending-attachments [role="alert"]').waitFor(); assert.equal(await page.getByRole('button', { name: '发送消息', exact: true }).isDisabled().catch(() => true), true);
   await page.getByRole('button', { name: '移除 blocked.exe', exact: true }).click();
+  // Exercise the native fallback even where Chromium normally exposes clipboard files.
+  await textarea().evaluate(node => node.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: new DataTransfer() })));
+  await page.locator('.pending-attachments img').waitFor();
+  await page.locator('.pending-attachments .attachment-remove').click();
   // Verify Anthropic's native image blocks, then verify unsupported-model errors preserve the draft.
   await page.evaluate(() => window.xiaowang.saveSettings({ apiStyle: 'anthropic' }));
   await page.locator('.attachment-picker').setInputFiles({ name: 'again.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') });

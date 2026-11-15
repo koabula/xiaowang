@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld("xiaowang", {
   openLink: (url) => ipcRenderer.invoke("link:open", url),
   addFiles: () => ipcRenderer.invoke("library:add"),
   attach: (slug, filename, bytes) => ipcRenderer.invoke("chat:attach", slug, filename, bytes),
+  pasteImage: slug => ipcRenderer.invoke("chat:pasteImage", slug),
   ask: (slug, text, attachments) => ipcRenderer.invoke("chat:ask", slug, text, attachments),
   stop: (slug) => ipcRenderer.invoke("chat:stop", slug),
   cancelJob: (id) => ipcRenderer.invoke("job:cancel", id),

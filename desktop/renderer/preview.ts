@@ -107,6 +107,7 @@ export function installPreviewBridge(): void {
       listeners.download.forEach((callback) => callback({ filename: "paper.pdf" }));
     },
     async attach(_slug, filename, bytes) { return { refId: `preview-${Date.now()}`, filename, byteSize: bytes.length, mimeType: filename.endsWith(".png") ? "image/png" : "text/plain" }; },
+    async pasteImage() { return null; },
     async ask(slug, text) {
       const next = [...(chats.get(slug) ?? []), { id: Date.now(), kind: "user" as const, text }, { id: Date.now() + 1, kind: "assistant" as const, text: "界面预览里还没有接上模型。桌面端会走现在的会话。" }];
       chats.set(slug, next);

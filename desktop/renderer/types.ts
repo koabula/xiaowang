@@ -32,6 +32,7 @@ declare global {
       openLink: (url: string) => Promise<void>;
       addFiles: () => Promise<void>;
       attach: (slug: string, filename: string, bytes: Uint8Array) => Promise<Attachment>;
+      pasteImage: (slug: string) => Promise<Attachment | null>;
       ask: (slug: string, text: string, attachments?: string[]) => Promise<ChatItem[]>;
       stop: (slug: string) => Promise<void>;
       cancelJob: (id: string) => Promise<void>;
