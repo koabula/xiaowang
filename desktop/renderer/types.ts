@@ -117,6 +117,7 @@ export interface CanvasPage {
 }
 
 export interface SettingsView {
+  experimentalMossEnabled?: boolean;
   realtimeProfiles?: Partial<Record<RealtimeServiceId, VoiceProfileView>>;
   model: string;
   baseUrl: string;

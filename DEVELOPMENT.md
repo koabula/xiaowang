@@ -42,7 +42,7 @@ For a real-service check, use an isolated workspace and fixed test speech. Verif
 
 ### MOSS Live
 
-Select MOSS Live in Settings, enter a dedicated MOSS key and choose a voice. The stable model is `moss-live-1.0`; the endpoint is `wss://api.mosi.cn/v1/realtime` (note `mosi`, not `moss`). Authentication stays in the main-process WebSocket Authorization header. The renderer receives no key. The background text model remains independently configured.
+MOSS Live is suspended in v0.1.8 and hidden from normal Settings. Its adapter, voice catalog, profiles and tests remain in the repository. Startup selects another configured provider without reusing the MOSS key; when no other provider is configured it selects an unconfigured Qwen profile. Existing MOSS credentials remain stored in their own inactive profile. `XIAOWANG_ENABLE_MOSS=1` is an internal opt-in for retained development fixtures, not an advertised supported service. With this opt-in, select MOSS Live in Settings, enter a dedicated MOSS key and choose a voice. The stable model is `moss-live-1.0`; the endpoint is `wss://api.mosi.cn/v1/realtime` (note `mosi`, not `moss`). Authentication stays in the main-process WebSocket Authorization header. The renderer receives no key. The background text model remains independently configured.
 
 The native adapter is `desktop/main/moss-call.ts`; `src/moss-realtime.ts` builds its session configuration. It reuses the existing JobQueue and tool permissions rather than installing another agent runtime. The [official API reference](https://platform.moss.cn/docs/reference/moss-live) defines the contract:
 
@@ -55,7 +55,11 @@ The native adapter is `desktop/main/moss-call.ts`; `src/moss-realtime.ts` builds
 
 MOSS implementation scope is voice, foreground tools, native background delegation, and result speech. Camera/screen streaming and user-scoped cloud memory are not enabled. If the original remote session cannot be restored, the call reports an error; durable jobs and saved results remain available for a new call.
 
-`response.interrupted` allows missing run/turn identifiers. The adapter correlates a known stop first, then a unique matching active reply. An ambiguous event does not invent an identity or end the socket. Audio context and other mandatory identity-bearing events remain strict. Tests cover anonymous/partial interruptions and an old stop completing after a newer reply starts.
+`response.interrupted` allows missing run/turn identifiers. The adapter correlates a known stop first, then a known run or unique matching active reply. An ambiguous event does not invent an identity or end the socket.
+
+Real-service checks on 2026-11-15 found that session-level `session.commentary.append` can emit a nonempty `run_id` but empty `turn_id` and repeated empty `chunk_id` values. Local playback uses separate node identities, plays every chunk, and never sends fabricated identities or empty IDs as MOSS playback receipts. User speech stops run-only local playback; a delayed timeout for an already completed run cannot stop a newer reply. Malformed audio events are isolated from the conversation, and incomplete streams are reported as failures rather than successful previews.
+
+**Live-service limitation under investigation:** longer session-level commentary stopped after approximately two seconds of PCM and returned `playback_timeout`, before `response.audio.done`. This reproduced with client/server playback, and with default 48 kHz output. The local compatibility handling does not repair that upstream truncation. Normal voice turns and native delegation results carrying a real `delegation_id` completed with valid receipts. Do not treat passing offline fixtures or short audio as proof that longer proactive speech works.
 
 Voice profiles in `src/settings.ts` isolate credentials and options by provider. Legacy single-key settings migrate to their original provider only. `mergeSettings` is pure for unsaved previews; disk saves use OS encryption when available and a same-directory atomic replacement. Renderer settings contain only credential hints. Blank keys retain their own saved profile; removal is explicit. All edited provider drafts participate in save/discard and unsaved-change protection, including inactive providers.
 
@@ -71,6 +75,8 @@ node --test --test-concurrency=1 --test-timeout=60000 e2e/*.test.mjs
 ```
 
 `test/moss.test.ts` covers native protocol states, playback identities, ASR revisions, delegation deduplication/cancellation and reconnect replay. `e2e/moss-native.test.mjs` uses the real Electron renderer and audio player with isolated local WebSocket/model fixtures: microphone PCM, audible output, interruption, live task progress, actual source reading and note creation, foreground viewing, reconnect, spoken results and saved-call ownership. Existing Doubao/OpenAI/Qwen and task regressions remain in the full suite. Mock tests establish the application contract, not real-service latency or model quality; a live MOSS account check is still required for those measurements.
+
+`e2e/moss-commentary.test.mjs` exercises the actual settings preview button and production player with the observed empty-ID format, multiple PCM chunks, proactive speech interruption, late timeouts and continued ordinary conversation. The opt-in `scripts/verify-moss-live.mjs` uses real MOSS Live, the production player and a durable controlled calculation executor. It must pass preview, consecutive proactive speech, native result feedback and a subsequent conversation; a failed check prevents a success report. Set `MOSS_TEST_QUESTION_WAV` and `MOSS_TEST_TASK_WAV` to harmless 16 kHz mono PCM16 WAV fixtures described in that script. Supply `MOSS_API_KEY` in memory or via stdin, never in a tracked file. The check creates and removes an isolated profile, does not use the user's microphone, and writes a credential-free report in the system temporary directory.
 
 To refresh the README image from that actual desktop fixture:
 

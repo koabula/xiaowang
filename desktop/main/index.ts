@@ -30,7 +30,7 @@ import { listCanvasPages, resolveInsideWorkspace } from "../../src/workspace.ts"
 import { browseBotFiles, type BrowseOptions } from "../../src/file-browser.ts";
 import { BrowserPane } from "./browser.ts";
 import { loadSecrets, mergeSecrets, publicSettings, type SecretPatch, type SecretRecord } from "./secrets.ts";
-import { mergeSettings } from "../../src/settings.ts";
+import { availableRealtimeSettings, mergeSettings } from "../../src/settings.ts";
 import { MossVoiceCatalog } from "./moss-voices.ts";
 
 protocol.registerSchemesAsPrivileged([
@@ -56,6 +56,15 @@ let updateTimers: Array<ReturnType<typeof setInterval>> = [];
 let updateChecksStarted = false;
 let updateNotice = "";
 const mossVoices = new MossVoiceCatalog();
+const experimentalMossEnabled = process.env.XIAOWANG_ENABLE_MOSS === "1";
+function settingsView() { return { ...publicSettings(secrets), experimentalMossEnabled }; }
+function assertRealtimeAvailable(service: string): void {
+  if (service === "moss" && !experimentalMossEnabled) throw new Error("MOSS Live 支持已暂时停用，请选择其他语音服务。");
+}
+function realtimeUrlOverride(): string {
+  const url = process.env.XIAOWANG_REALTIME_URL?.trim() ?? "";
+  return !experimentalMossEnabled && /api\.mosi\.cn/i.test(url) ? "" : url;
+}
 
 function canInstallUpdate(): boolean {
   return updateWaitReasons().length === 0;
@@ -180,7 +189,7 @@ function present(id: number, event: SessionEvent): ChatItem | null {
 
 function publish(): void {
   const active = runtime.activeBot();
-  send("state", { version: app.getVersion(), update: updates?.snapshot(), bots: botRows(), activeSlug: active.slug, settings: publicSettings(secrets), jobs: publicJobs() });
+  send("state", { version: app.getVersion(), update: updates?.snapshot(), bots: botRows(), activeSlug: active.slug, settings: settingsView(), jobs: publicJobs() });
 }
 
 function publicJobs(): TaskJob[] {
@@ -332,7 +341,7 @@ function registerIpc(): void {
     version: app.getVersion(), update: updates.snapshot(), updateNotice,
     bots: botRows(),
     activeSlug: runtime.activeBot().slug,
-    settings: publicSettings(secrets), jobs: publicJobs(),
+    settings: settingsView(), jobs: publicJobs(),
     call: live ? { slug: liveSlug, state: liveState } : null,
     browser: browser.viewState(),
     };
@@ -478,16 +487,19 @@ function registerIpc(): void {
     return checkModel(configFromEnv(envFromRecord(draft)));
   });
   ipcMain.handle("link:key", (_event, service: string, region: string) => {
+    assertRealtimeAvailable(service);
     return shell.openExternal(realtimeKeyPage(typeof service === "string" ? service : "", typeof region === "string" ? region : ""));
   });
   ipcMain.handle("settings:save", (_event, patch: SecretPatch) => {
+    assertRealtimeAvailable(mergeSettings(secrets, patch).realtimeService);
     secrets = mergeSecrets(secrets, patch);
     publish();
-    return publicSettings(secrets);
+    return settingsView();
   });
   ipcMain.handle("settings:voices", async (event, patch: SecretPatch, refresh: boolean) => {
     if (event.sender !== window?.webContents) throw new Error("只能从应用设置读取音色。");
     const draft = mergeSettings(secrets, patch);
+    assertRealtimeAvailable(draft.realtimeService);
     if (draft.realtimeService !== "moss") return [];
     return mossVoices.list(draft.realtimeKey, refresh === true);
   });
@@ -603,17 +615,19 @@ function realtimeChoice() {
     workspace: secrets.realtimeWorkspace,
     url: secrets.realtimeUrl,
   });
-  return { ...choice, url: process.env.XIAOWANG_REALTIME_URL?.trim() || choice.url };
+  assertRealtimeAvailable(choice.service);
+  return { ...choice, url: realtimeUrlOverride() || choice.url };
 }
 
 function startPreview(patch: SecretPatch): void {
   if (live) throw new Error("正在通话。挂断后再试听。");
   const draft = mergeSettings(secrets, patch);
   const choice = resolveRealtime({ service: draft.realtimeService, model: draft.realtimeModel, voice: draft.realtimeVoice, region: draft.realtimeRegion, workspace: draft.realtimeWorkspace });
+  assertRealtimeAvailable(choice.service);
   if (!choice.url) throw new Error("先填写通义千问的工作空间。");
   const key = keyForService(choice.service, draft.realtimeKey, draft.apiKey, draft.baseUrl);
   if (!key) throw new Error("先填写这一家的密钥。");
-  const endpoint = realtimeEndpoint({ url: process.env.XIAOWANG_REALTIME_URL?.trim() || choice.url, model: choice.model, family: choice.service });
+  const endpoint = realtimeEndpoint({ url: realtimeUrlOverride() || choice.url, model: choice.model, family: choice.service });
   const session = endpoint.family === "moss" ? mossSession("仅试听音色，按要求读出一句话。", [], choice.voice) : endpoint.family === "doubao"
     ? doubaoSession({ instructions: "试听音色。", tools: [], voice: choice.voice })
     : sessionUpdate({
@@ -821,7 +835,7 @@ app.whenReady().then(async () => {
   ];
   const environmentPatch: SecretPatch = {};
   for (const [field, variable] of overrides) if (process.env[variable]?.trim()) environmentPatch[field] = process.env[variable]!.trim();
-  secrets = mergeSettings(secrets, environmentPatch);
+  secrets = availableRealtimeSettings(mergeSettings(secrets, environmentPatch), experimentalMossEnabled);
   attachDownloads();
   browser = new BrowserPane(
     () => runtime.activeBot().slug,

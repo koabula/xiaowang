@@ -196,3 +196,75 @@ test("MOSS ambiguous interruption cannot guess a reply or invent playback identi
   f.socket.emit("response.interrupted", { reason: "unknown" });
   assert.equal(f.call.isClosed(), false); assert.equal(f.interrupts.length, 0); assert.equal(f.socket.events("playback.stopped").length, 0);
 });
+
+test("MOSS real session-commentary preview plays every empty-ID chunk and closes only after local drain", t => {
+  const f = fixture(t, {}, "你好，这是语音连接测试。"); f.configure();
+  f.socket.emit("session.commentary.appended", { client_event_id: "preview", delegation_id: null, type: "session.commentary.appended" });
+  const ids = { run_id: "run-live-commentary", turn_id: "" };
+  f.socket.emit("response.audio.started", { ...ids, kind: "speech" });
+  for (let i = 0; i < 3; i++) {
+    f.socket.emit("response.audio.context", { ...ids, chunk_id: "", duration_ms: 100 });
+    f.socket.binary(Buffer.alloc(4800));
+  }
+  f.socket.emit("response.audio.done", ids);
+  assert.equal(f.call.isClosed(), false); assert.equal(f.audio.length, 3);
+  assert.equal(new Set(f.audio.map(a => a.identity.chunkId)).size, 3);
+  for (const a of f.audio.slice(0, 2)) f.call.noteChunkPlayed({ ...a.identity, serial: a.serial, playedMs: 100 });
+  assert.equal(f.call.isClosed(), false);
+  const last = f.audio[2]!; f.call.noteChunkPlayed({ ...last.identity, serial: last.serial, playedMs: 100 });
+  assert.equal(f.call.isClosed(), true); assert.equal(f.socket.events("playback.chunk.completed").length, 0);
+  assert.equal(f.socket.events("playback.completed").length, 0, "Local identities must never be fabricated into MOSS receipts");
+});
+
+test("MOSS completed proactive speech survives its late remote timeout and preserves a newer ordinary reply", t => {
+  const f = fixture(t); f.configure(); f.call.notify("notice", "测试任务已完成。");
+  f.speak("notice-run", "", ""); f.socket.emit("response.audio.done", { run_id: "notice-run", turn_id: "" });
+  const first = f.audio[0]!; f.call.noteChunkPlayed({ ...first.identity, serial: first.serial, playedMs: 100 });
+  f.speak("normal", "turn", "1");
+  f.socket.emit("response.interrupted", { run_id: "notice-run", reason: "playback_timeout", text: "" });
+  assert.equal(f.call.isClosed(), false); assert.equal(f.interrupts.length, 0);
+  f.socket.emit("response.audio.done", { run_id: "normal", turn_id: "turn" });
+  const next = f.audio[1]!; f.call.noteChunkPlayed({ ...next.identity, serial: next.serial, playedMs: 100 });
+  assert.deepEqual(f.socket.events("playback.completed"), [{ action: "playback.completed", run_id: "normal", turn_id: "turn" }]);
+});
+
+test("MOSS user speech interrupts only active run-only commentary and rejects its late PCM", t => {
+  const f = fixture(t); f.configure(); f.speak("notice", "", "", 500); f.speak("ordinary", "t", "1");
+  f.socket.emit("input.speech.started"); assert.equal(f.interrupts.length, 1);
+  const stop = f.interrupts[0]!, first = f.audio[0]!;
+  assert.equal(stop.itemId, first.identity.itemId); assert.equal(stop.responseId, "notice");
+  f.call.noteInterrupted({ callId: f.call.id, playbackEpoch: stop.playbackEpoch, position: { ...first.identity, serial: first.serial, playedMs: 125 } });
+  assert.equal(f.socket.events("playback.stopped").length, 0);
+  f.socket.emit("response.audio.context", { run_id: "notice", turn_id: "", chunk_id: "" }); f.socket.binary(Buffer.alloc(4800));
+  assert.equal(f.audio.length, 2);
+  f.socket.emit("response.audio.context", { run_id: "ordinary", turn_id: "t", chunk_id: "2" }); f.socket.binary(Buffer.alloc(4800));
+  assert.equal(f.audio.length, 3); assert.equal(f.call.isClosed(), false);
+});
+
+test("MOSS a malformed audio reply is isolated, while following conversation and native results keep valid receipts", t => {
+  const f = fixture(t, { delegate: () => job() }); f.configure();
+  f.socket.emit("response.audio.started", { turn_id: "broken" });
+  f.socket.emit("response.audio.context", { turn_id: "broken", chunk_id: "1" }); f.socket.binary(Buffer.alloc(4800));
+  assert.equal(f.call.isClosed(), false); assert.equal(f.audio.length, 0);
+  f.socket.emit("session.delegation.created", { delegation: { id: "native" }, objective: "计算" });
+  f.call.jobChanged(job({ status: "succeeded", result: "结果为八。" }));
+  assert.equal(f.socket.events("session.commentary.append")[0]?.delegation_id, "native");
+  f.speak("result", "t", "1"); f.socket.emit("response.audio.done", { run_id: "result", turn_id: "t" });
+  const a = f.audio[0]!; f.call.noteChunkPlayed({ ...a.identity, serial: a.serial, playedMs: 100 });
+  assert.equal(f.socket.events("playback.completed").length, 1); assert.equal(f.call.isClosed(), false);
+});
+
+test("MOSS truncated proactive streams never report successful preview completion", t => {
+  const f = fixture(t, {}, "长试听"); f.configure(); f.speak("truncated", "", "");
+  const a = f.audio[0]!; f.call.noteChunkPlayed({ ...a.identity, serial: a.serial, playedMs: 100 });
+  assert.equal(f.call.isClosed(), false, "A chunk drain is not a complete stream");
+  f.socket.emit("response.audio.stop", { run_id: "truncated", turn_id: "", reason: "playback_timeout" });
+  assert.equal(f.call.isClosed(), true); assert.match(f.phases.at(-1)!, /未完整发送/);
+});
+
+test("MOSS a preview whose provider never finishes has a bounded visible failure", t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture(t, {}, "试听"); f.configure();
+  t.mock.timers.tick(45000);
+  assert.equal(f.call.isClosed(), true); assert.match(f.phases.at(-1)!, /试听超时/);
+});

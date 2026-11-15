@@ -79,7 +79,7 @@ test('desktop: MOSS native audio, interruption, tools, durable delegation, spoke
       }
     });
   });
-  const env = { ...process.env, XIAOWANG_HOME: home, XIAOWANG_USER_DATA: profile, XIAOWANG_REALTIME_URL: `ws://127.0.0.1:${server.address().port}/realtime`, XIAOWANG_DISABLE_UPDATES: '1' }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, XIAOWANG_ENABLE_MOSS: '1', XIAOWANG_HOME: home, XIAOWANG_USER_DATA: profile, XIAOWANG_REALTIME_URL: `ws://127.0.0.1:${server.address().port}/realtime`, XIAOWANG_DISABLE_UPDATES: '1' }; delete env.ELECTRON_RUN_AS_NODE;
   const args = ['--no-sandbox', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required'];
   const app = process.env.XIAOWANG_E2E_EXECUTABLE ? await launchPackaged(process.env.XIAOWANG_E2E_EXECUTABLE, args, env) : await electron.launch({ args: [...args, 'desktop/dist/main.js'], env });
   t.after(async () => { gate.resolve(); cancelGate.resolve(); lateGate.resolve(); await closeTestApp(app); for (const client of server.clients) client.terminate(); await new Promise(resolve => server.close(resolve)); model.closeAllConnections(); await new Promise(resolve => model.close(resolve)); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });

@@ -62,6 +62,11 @@ export const REALTIME_SERVICES: { id: RealtimeServiceId; name: string; models: R
   },
 ];
 
+/** MOSS is retained for protocol development but is not offered in released settings. */
+export function realtimeServicesForSettings(experimentalMossEnabled = false): typeof REALTIME_SERVICES {
+  return REALTIME_SERVICES.filter(service => experimentalMossEnabled || service.id !== "moss");
+}
+
 const QWEN_VOICES: { id: string; name: string; generations: Array<"3.5" | "3.8"> }[] = [
   ["Tina", "甜甜", "both"],
   ["Cindy", "林欣宜", "both"],

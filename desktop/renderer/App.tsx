@@ -16,7 +16,7 @@ import { hasUnsavedSettings } from "./settings-draft.ts";
 const DocumentReader = lazy(() => import("./document-reader.tsx").then(module => ({ default: module.DocumentReader })));
 import { withCanvasPager } from "./canvas-pager.ts";
 import { copyFor, localeOf, type Copy, type Locale } from "./copy.ts";
-import { REALTIME_SERVICES, modelsFor, resolveRealtime, voicesFor, type RealtimeRegion, type RealtimeServiceId } from "../../src/realtime-catalog.ts";
+import { REALTIME_SERVICES, realtimeServicesForSettings, modelsFor, resolveRealtime, voicesFor, type RealtimeRegion, type RealtimeServiceId } from "../../src/realtime-catalog.ts";
 import { UpdateCheckButton, UpdateProgress, updateDescription } from "./update-panel.tsx";
 import { MossVoicePicker } from "./voice-picker.tsx";
 import type { VoiceProfilePatch } from "../../src/settings.ts";
@@ -1092,7 +1092,7 @@ function SettingsPanel({
           <div className="field-block">
             <span>{copy.service}</span>
             <div className="with-action">
-              <FieldSelect label={copy.service} value={service} onChange={(value) => chooseService(value as RealtimeServiceId)} options={REALTIME_SERVICES.map((item) => ({ value: item.id, label: item.name }))} />
+              <FieldSelect label={copy.service} value={service} onChange={(value) => chooseService(value as RealtimeServiceId)} options={realtimeServicesForSettings(settings?.experimentalMossEnabled).map((item) => ({ value: item.id, label: item.name }))} />
               <button type="button" onClick={() => void window.xiaowang.openKeyPage(service, region)}><ExternalLink size={15} strokeWidth={1.75} />{copy.getKey}</button>
             </div>
           </div>

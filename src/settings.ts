@@ -1,4 +1,4 @@
-import { REALTIME_SERVICES, resolveRealtime, type RealtimeServiceId } from "./realtime-catalog.ts";
+import { REALTIME_SERVICES, realtimeServicesForSettings, resolveRealtime, type RealtimeServiceId } from "./realtime-catalog.ts";
 
 export interface VoiceProfile { model: string; voice: string; region: string; workspace: string; url: string; key: string }
 export type VoiceProfilePatch = Partial<VoiceProfile> & { clearKey?: boolean };
@@ -89,4 +89,12 @@ export function publicSettings(secrets: SecretRecord): SettingsView {
   }
   return { ...rest, keyHint: keyHint(apiKey), realtimeKeyHint: keyHint(realtimeKey), realtimeProfiles: views,
     ready: Boolean(secrets.model) && (Boolean(apiKey) || /localhost|127\.0\.0\.1/.test(secrets.baseUrl)) };
+}
+
+/** Apply desktop availability without deleting an inactive provider's saved credentials. */
+export function availableRealtimeSettings(current: SecretRecord, experimentalMossEnabled = false): SecretRecord {
+  if (experimentalMossEnabled || resolveRealtime({ service: current.realtimeService, url: current.realtimeUrl }).service !== "moss") return current;
+  const profiles = voiceProfiles(current), available = realtimeServicesForSettings();
+  const fallback = available.find(({ id }) => profiles[id]?.key.trim() && profiles[id]?.url) ?? available[0]!;
+  return mergeSettings(current, { realtimeService: fallback.id });
 }

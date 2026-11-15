@@ -24,7 +24,7 @@ Choose an installer from the [latest GitHub Release](https://github.com/koabula/
 
 Settings shows the installed version, with a **Check for updates** button beside it. Installed builds also check on startup and every six hours. When a newer release is available, a circular download icon appears beside Settings. Click it to see download progress, followed by verification, installation and restart. Calls, background work, and unsaved settings defer installation; the UI explains what it is waiting for. Versions 0.1.4 and earlier need one manual installation of a version that includes the updater. Unsigned installers may trigger an operating-system security prompt. UI descriptions follow the current main branch; consult release notes for features in published installers.
 
-**MOSS Live is supported from v0.1.6.** After upgrading, select it in Settings and enter its voice key. Your existing background text model configuration can stay in place.
+**MOSS Live is temporarily unavailable in v0.1.8.** Its Settings option is removed, while its implementation and saved profiles remain. Existing MOSS selections switch to another configured voice provider; if none is configured, set up voice before calling.
 
 ## First run
 
@@ -32,9 +32,9 @@ Settings shows the installed version, with a **Check for updates** button beside
 2. For calls, separately choose a **voice** service, model, and voice, and enter that provider's key. Voice is optional; text and voice can use different providers.
 3. Create a topic workspace and add a paper or document, or start by typing a question. Click the **voice button on the right of the message input** to begin a call.
 
-The current source supports OpenAI, Qwen, Doubao full-duplex, and MOSS Live. Each voice provider keeps its own key, model and voice, restored when you switch back. A blank key retains that provider's saved key; use the explicit removal control to clear it. Voice credentials are separate from the text model's credentials, and delegated work still runs through your configured background model.
+The available voice providers are OpenAI, Qwen, and Doubao full-duplex. Each voice provider keeps its own key, model and voice, restored when you switch back. A blank key retains that provider's saved key; use the explicit removal control to clear it. Voice credentials are separate from the text model's credentials, and delegated work still runs through your configured background model.
 
-For MOSS Live, select `moss-live-1.0` and enter a [MOSS platform key](https://platform.moss.cn/app/api-keys/). Settings loads all available voices for that account, with search, refresh and preview controls. A failed refresh preserves the selected voice. See the [development notes](DEVELOPMENT.md#moss-live) for integration details.
+See the [development notes](DEVELOPMENT.md#moss-live) for the retained MOSS implementation, known protocol issues and development tests.
 
 ## Work with XiaoWang
 
@@ -60,7 +60,7 @@ Call and work records survive restarts. Work running when the app exits is marke
 
 Conversations and documents are stored locally in `~/.xiaowang/` by default. Voice, relevant context, and material needed for a task are sent to your configured model services. This is not a fully offline assistant. Settings live in the app's configuration directory; keys use operating-system secure storage when available, with local-file storage as a fallback.
 
-MOSS uses isolated session memory. The app does not enable shared cloud long-term memory across workspaces by default. Consult each provider's policies for data retention and use.
+The retained MOSS implementation uses isolated session memory. The app does not enable shared cloud long-term memory across workspaces by default. Consult each provider's policies for data retention and use.
 
 OCR for scanned documents is not included yet. Check model findings and action outcomes against the original sources.
 

@@ -18,7 +18,7 @@ export interface MossSocket {
   close(): void;
   addEventListener(type: string, listener: (event: { type?: string; data?: unknown }) => void): void;
 }
-interface Chunk { serial: number; identity: AudioIdentity; completed: boolean; duration: number }
+interface Chunk { serial: number; identity: AudioIdentity; wireId: string; completed: boolean; duration: number }
 interface Reply { run: string; turn: string; chunks: Chunk[]; done: boolean; stopped: boolean; completed: boolean }
 interface Append { action: string; content: string; delegation_id?: string; event_id: string; status?: string }
 
@@ -40,6 +40,7 @@ export class MossCall {
   private connection = 0;
   private reconnects = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private previewTimer: ReturnType<typeof setTimeout> | undefined;
   private retry: ReturnType<typeof setTimeout> | undefined;
   private serial = 0;
   private epoch = 0;
@@ -103,7 +104,19 @@ export class MossCall {
         if (typeof event.data === "string") this.event(object(JSON.parse(event.data)));
         else if (Buffer.isBuffer(event.data)) this.audio(event.data);
         else if (event.data instanceof ArrayBuffer) this.audio(Buffer.from(event.data));
-      } catch (error) { this.hangup(`MOSS 协议错误：${error instanceof Error ? error.message : String(error)}`); }
+      } catch (error) {
+        const packet = typeof event.data === "string" ? this.packet(event.data) : {};
+        const action = text(packet.action);
+        console.warn("MOSS protocol event rejected", { action, fields: Object.keys(object(packet.data)), reason: error instanceof Error ? error.message : "invalid event" });
+        if (/^response\.(audio\.|ended$|interrupted$)/.test(action) || typeof event.data !== "string") {
+          if (this.preview) { this.hangup("MOSS 试听音频格式异常，请稍后重试。"); return; }
+          // An unusable reply must not destroy an otherwise healthy conversation.
+          this.context = null;
+          const run = text(object(packet.data).run_id);
+          for (const reply of this.replies.values()) if (run && reply.run === run) this.stop(reply);
+          this.state("listening", "本次语音回复格式异常，已跳过，可以继续提问。");
+        } else this.hangup(`MOSS 协议错误：${error instanceof Error ? error.message : String(error)}`);
+      }
     });
     socket.addEventListener("error", () => { if (epoch === this.connection && !this.closed) this.state("reconnecting", "MOSS 连接异常，正在尝试恢复。"); });
     socket.addEventListener("close", () => {
@@ -126,6 +139,7 @@ export class MossCall {
     this.playbackReceipts.clear();
     for (const append of this.appends.values()) this.send(append);
     for (const [id, tool] of this.tools) if (tool.output !== undefined && !tool.resumed) this.output(id, tool.output);
+    if (this.preview && !this.previewTimer) this.previewTimer = setTimeout(() => this.hangup("MOSS 音色试听超时，请稍后重试。"), 45000);
     if (this.preview && !this.accepted.has("preview")) this.append({ action: "session.commentary.append", content: this.preview, event_id: "preview", status: "completed" });
   }
   private event(event: Data): void {
@@ -158,29 +172,35 @@ export class MossCall {
     } else if (/^output\.transcript\.(updated|done)$/.test(action)) {
       this.line(this.outputId(data), "assistant", text(data.text), action.endsWith("updated"));
       if (action.endsWith("done")) this.pendingOutput = null;
-    } else if (action === "input.speech.started") { this.state("listening");
+    } else if (action === "input.speech.started") {
+      // Session commentary has no usable remote playback receipts. Stop its local
+      // queue on speech onset; ordinary replies still use MOSS's audio.stop event.
+      for (const reply of this.replies.values()) if (!reply.turn) this.stop(reply);
+      this.state("listening");
     } else if (action === "input.speech.stopped") { this.state("thinking");
     } else if (action === "response.audio.started") { this.reply(data); this.outputId(data); this.state("speaking");
     } else if (action === "response.audio.context") {
       this.context = { reply: this.reply(data), chunk: text(data.chunk_id) };
-      if (!this.context.chunk) throw new Error("音频缺少 chunk_id");
+      if (!this.context.chunk && this.context.reply.turn) throw new Error("音频缺少 chunk_id");
     } else if (action === "response.audio.done") { const reply = this.reply(data); reply.done = true; this.drain(reply);
     } else if (action === "response.audio.stop") {
       const reply = this.reply(data);
       if (!reply.stopped && !reply.completed) this.pendingStopped = [...this.pendingStopped, reply].slice(-16);
-      this.stop(reply); this.state("listening");
+      this.stop(reply); this.replyStopped(reply, text(data.reason));
     } else if (action === "response.interrupted") {
       const run = text(data.run_id), turn = text(data.turn_id);
       const matches = (reply: Reply) => (!run || reply.run === run) && (!turn || reply.turn === turn);
       const stopped = this.pendingStopped.find(matches);
       const candidates = [...this.replies.values()].filter(reply => !reply.completed && !reply.stopped && matches(reply));
-      const reply = run && turn ? this.reply(data) : stopped ?? (candidates.length === 1 ? candidates[0] : undefined);
+      const known = run ? [...this.replies.values()].find(item => matches(item)) : undefined;
+      const reply = run && turn ? this.reply(data) : stopped ?? known ?? (candidates.length === 1 ? candidates[0] : undefined);
       if (reply) {
         this.pendingStopped = this.pendingStopped.filter(item => item !== reply);
         if (text(data.text)) this.line(this.outputId({ run_id: reply.run, turn_id: reply.turn }), "assistant", text(data.text), false);
         this.stop(reply);
+        this.replyStopped(reply, text(data.reason));
       } else console.warn("MOSS: unassociated interruption", { action, fields: Object.keys(data) });
-      if (this.ready && ![...this.replies.values()].some(item => !item.completed && !item.stopped)) this.state("listening");
+      if (!reply && this.ready && ![...this.replies.values()].some(item => !item.completed && !item.stopped)) this.state("listening");
     } else if (action === "response.ended") {
       const reply = this.reply(data);
       this.pendingStopped = this.pendingStopped.filter(item => item !== reply);
@@ -214,6 +234,15 @@ export class MossCall {
       this.hangup(`MOSS：${text(error.message) || text(error.code) || text(data.error) || "服务返回错误"}`);
     }
   }
+  private packet(value: string): Data {
+    try { return object(JSON.parse(value)); } catch { return {}; }
+  }
+  private replyStopped(reply: Reply, reason: string): void {
+    if (!reply.completed && /playback_(timeout|failed)/.test(reason)) {
+      const detail = "MOSS 未完整发送本次播报，可以重试或继续提问。";
+      if (this.preview) this.hangup(detail); else this.state("listening", detail);
+    } else if (![...this.replies.values()].some(item => !item.completed && !item.stopped)) this.state("listening");
+  }
   private line(id: string, who: "user" | "assistant", value: string, partial: boolean): void {
     if (!value) return;
     let line = this.lines.get(id);
@@ -227,7 +256,7 @@ export class MossCall {
   }
   private outputId(data: Data): string {
     const run = text(data.run_id), turn = text(data.turn_id);
-    const key = run && turn ? JSON.stringify([run, turn]) : undefined;
+    const key = run ? JSON.stringify([run, turn]) : undefined;
     const known = key && this.outputIds.get(key);
     if (known) return known;
     if (!this.pendingOutput || (key && this.pendingOutput.key && this.pendingOutput.key !== key)) this.pendingOutput = { id: `assistant:${this.outputTurn++}`, key };
@@ -236,7 +265,7 @@ export class MossCall {
   }
   private reply(data: Data): Reply {
     const run = text(data.run_id), turn = text(data.turn_id);
-    if (!run || !turn) throw new Error("回复缺少 run_id 或 turn_id");
+    if (!run) throw new Error("回复缺少 run_id");
     const key = JSON.stringify([run, turn]);
     let reply = this.replies.get(key);
     if (!reply) { reply = { run, turn, chunks: [], done: false, stopped: false, completed: false }; this.replies.set(key, reply); }
@@ -246,10 +275,14 @@ export class MossCall {
     const context = this.context; this.context = null;
     if (!context) throw new Error("音频没有对应的 response.audio.context");
     const { reply, chunk } = context;
-    if (!this.ready || reply.stopped || reply.completed || reply.chunks.some(item => item.identity.chunkId === chunk)) return;
-    const identity: AudioIdentity = { callId: this.id, responseId: reply.run, itemId: reply.turn, chunkId: chunk, playbackEpoch: this.epoch };
+    if (!this.ready || reply.stopped || reply.completed || (chunk && reply.chunks.some(item => item.wireId === chunk))) return;
+    // Live's session-level commentary currently has a run_id, but empty turn_id
+    // and chunk_id. Local IDs distinguish its audio nodes; never send them as
+    // provider IDs. In particular, repeated empty chunk IDs are distinct PCM.
+    const serial = ++this.serial;
+    const identity: AudioIdentity = { callId: this.id, responseId: reply.run, itemId: this.itemId(reply), chunkId: chunk || `local:${serial}`, playbackEpoch: this.epoch };
     if (pcm.length % 2) throw new Error("PCM16 音频字节数不完整");
-    const item: Chunk = { serial: ++this.serial, identity, completed: false, duration: pcm.length / 48 }; reply.chunks.push(item);
+    const item: Chunk = { serial, identity, wireId: chunk, completed: false, duration: pcm.length / 48 }; reply.chunks.push(item);
     if (pcm.length) this.handlers.onAudio(pcm, item.serial, identity); else this.noteChunkPlayed({ ...identity, serial: item.serial, playedMs: 0 });
   }
   sendAudio(pcm: Buffer): void { if (this.ready && !this.muted && !this.closed) this.socket?.send(pcm); }
@@ -262,14 +295,14 @@ export class MossCall {
       const chunk = reply.chunks.find(item => item.serial === position.serial && item.identity.chunkId === position.chunkId && item.identity.responseId === position.responseId && item.identity.itemId === position.itemId);
       if (!chunk || chunk.completed || (reply.stopped && ![...this.interruptions.values()].includes(reply))) continue;
       chunk.completed = true;
-      this.playbackReceipt({ action: "playback.chunk.completed", run_id: reply.run, turn_id: reply.turn, chunk_id: chunk.identity.chunkId });
+      if (reply.turn && chunk.wireId) this.playbackReceipt({ action: "playback.chunk.completed", run_id: reply.run, turn_id: reply.turn, chunk_id: chunk.wireId });
       this.drain(reply); this.resumeWaitingTools(); return;
     }
   }
   private drain(reply: Reply): void {
     if (!reply.done || reply.completed || reply.stopped || reply.chunks.some(chunk => !chunk.completed)) return;
     reply.completed = true;
-    this.playbackReceipt({ action: "playback.completed", run_id: reply.run, turn_id: reply.turn });
+    if (reply.turn) this.playbackReceipt({ action: "playback.completed", run_id: reply.run, turn_id: reply.turn });
     this.presentation.segmentPlayed(); this.state("listening");
     if ((this.preview || this.ending) && ![...this.replies.values()].some(item => !item.completed && !item.stopped && item.chunks.length)) this.hangup();
   }
@@ -280,7 +313,7 @@ export class MossCall {
       tool.controller.abort(); tool.resumed = true; tool.waiting = false;
     }
     const epoch = ++this.epoch; this.interruptions.set(epoch, reply);
-    this.handlers.onInterrupt({ callId: this.id, playbackEpoch: epoch, throughSerial: this.serial, responseId: reply.run, itemId: reply.turn, scope: "reply" });
+    this.handlers.onInterrupt({ callId: this.id, playbackEpoch: epoch, throughSerial: this.serial, responseId: reply.run, itemId: this.itemId(reply), scope: "reply" });
     this.resumeWaitingTools();
   }
   noteInterrupted(receipt: InterruptionReceipt): void {
@@ -289,8 +322,9 @@ export class MossCall {
     this.interruptions.delete(receipt.playbackEpoch);
     const p = receipt.position;
     const chunk = p && reply.chunks.find(chunk => chunk.serial === p.serial && chunk.identity.chunkId === p.chunkId && !chunk.completed);
-    this.playbackReceipt({ action: "playback.stopped", run_id: reply.run, turn_id: reply.turn, played_audio_ms: chunk && p && Number.isFinite(p.playedMs) ? Math.floor(Math.min(chunk.duration, Math.max(0, p.playedMs))) : 0 });
+    if (reply.turn) this.playbackReceipt({ action: "playback.stopped", run_id: reply.run, turn_id: reply.turn, played_audio_ms: chunk && p && Number.isFinite(p.playedMs) ? Math.floor(Math.min(chunk.duration, Math.max(0, p.playedMs))) : 0 });
   }
+  private itemId(reply: Reply): string { return reply.turn || `local:${reply.run}`; }
   private playbackReceipt(receipt: Data): void {
     const id = `${String(receipt.action)}:${String(receipt.run_id)}:${String(receipt.turn_id)}:${String(receipt.chunk_id ?? "")}`;
     if (this.ready) this.send(receipt); else this.playbackReceipts.set(id, receipt);
@@ -382,7 +416,7 @@ export class MossCall {
   }
   hangup(detail = ""): void {
     if (this.closed) return;
-    clearTimeout(this.timer); clearTimeout(this.retry);
+    clearTimeout(this.timer); clearTimeout(this.retry); clearTimeout(this.previewTimer);
     this.closed = true; this.ready = false;
     for (const reply of this.replies.values()) if (!reply.completed && !reply.stopped) this.stop(reply);
     this.connection++;

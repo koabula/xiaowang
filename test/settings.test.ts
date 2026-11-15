@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mergeSettings, readSettings, publicSettings } from "../src/settings.ts";
-import { resolveRealtime } from "../src/realtime-catalog.ts";
+import { availableRealtimeSettings, mergeSettings, readSettings, publicSettings } from "../src/settings.ts";
+import { realtimeServicesForSettings, resolveRealtime } from "../src/realtime-catalog.ts";
 import { hasUnsavedSettings } from "../desktop/renderer/settings-draft.ts";
 
 test("legacy voice key migrates only to its provider; switching and restarting restore independent profiles", () => {
@@ -45,4 +45,28 @@ test("unsaved provider drafts include inactive edits and explicit key removal", 
   assert.equal(hasUnsavedSettings(structuredClone(saved), saved), false);
   assert.equal(hasUnsavedSettings({ ...saved, realtimeProfiles: { ...saved.realtimeProfiles, moss: { key: "typed-key", voice: "a" } } }, saved), true);
   assert.equal(hasUnsavedSettings({ ...saved, realtimeProfiles: { ...saved.realtimeProfiles, moss: { key: "", voice: "a", clearKey: true } } }, saved), true);
+});
+
+test("suspended MOSS is absent from normal settings while its implementation remains opt-in", () => {
+  assert.deepEqual(realtimeServicesForSettings().map(item => item.id), ["qwen", "openai", "doubao"]);
+  assert.ok(realtimeServicesForSettings(true).some(item => item.id === "moss"));
+  assert.equal(resolveRealtime({ service: "moss" }).model, "moss-live-1.0");
+});
+test("suspended MOSS selection restores an available profile and preserves both providers' credentials", () => {
+  const old = readSettings({ realtimeService: "moss", realtimeKey: "M", realtimeVoice: "custom-moss", realtimeProfiles: { doubao: { key: "D", voice: "zh_male_m191_uranus_bigtts" } } });
+  const next = availableRealtimeSettings(old);
+  assert.equal(next.realtimeService, "doubao"); assert.equal(next.realtimeKey, "D"); assert.equal(next.realtimeVoice, "zh_male_m191_uranus_bigtts");
+  assert.equal(next.realtimeProfiles?.moss?.key, "M"); assert.equal(next.realtimeProfiles?.moss?.voice, "custom-moss");
+  assert.equal(old.realtimeService, "moss", "Migration must be pure");
+  const restarted = availableRealtimeSettings(readSettings(JSON.parse(JSON.stringify(mergeSettings(next, { locale: "en" })))));
+  assert.equal(restarted.realtimeKey, "D"); assert.equal(restarted.realtimeProfiles?.moss?.key, "M");
+  assert.equal(availableRealtimeSettings(old, true), old);
+});
+test("a MOSS-only account falls back to an unconfigured provider without borrowing its key", () => {
+  const old = readSettings({ realtimeUrl: "wss://api.mosi.cn/v1/realtime", realtimeKey: "M" });
+  const next = availableRealtimeSettings(old);
+  assert.equal(next.realtimeService, "qwen"); assert.equal(next.realtimeKey, "");
+  assert.equal(next.realtimeProfiles?.moss?.key, "M"); assert.equal(publicSettings(next).realtimeKeyHint, "");
+  assert.ok(!next.realtimeUrl.includes("mosi"));
+  assert.equal(availableRealtimeSettings(next), next);
 });

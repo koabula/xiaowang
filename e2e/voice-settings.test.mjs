@@ -47,7 +47,7 @@ test('desktop voice settings: provider isolation, encrypted restart, all voice p
       if (event.action?.startsWith('playback.')) receipts.push(event);
     });
   });
-  const env = { ...process.env, XIAOWANG_HOME: home, XIAOWANG_USER_DATA: profile, XIAOWANG_DISABLE_UPDATES: '1', XIAOWANG_REALTIME_URL: `ws://127.0.0.1:${ws.address().port}/realtime`, XIAOWANG_MOSS_VOICES_URL: `http://127.0.0.1:${catalog.address().port}/voices` }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, XIAOWANG_ENABLE_MOSS: '1', XIAOWANG_HOME: home, XIAOWANG_USER_DATA: profile, XIAOWANG_DISABLE_UPDATES: '1', XIAOWANG_REALTIME_URL: `ws://127.0.0.1:${ws.address().port}/realtime`, XIAOWANG_MOSS_VOICES_URL: `http://127.0.0.1:${catalog.address().port}/voices` }; delete env.ELECTRON_RUN_AS_NODE;
   let app, page; const errors = [];
   const launch = async () => {
     app = await electron.launch({ args: ['--no-sandbox', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required', '.'], env });
