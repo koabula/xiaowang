@@ -1,0 +1,118 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { createServer } from 'node:http';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { _electron as electron } from 'playwright';
+import { WebSocketServer } from 'ws';
+import { Runtime } from '../src/runtime.ts';
+import { closeTestApp } from './launch.mjs';
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function until(check, label = 'Gemini desktop condition timed out') { for (let n = 0; n < 400; n++) { const value = await check(); if (value) return value; await sleep(25); } throw Error(label); }
+function tone(ms) { const pcm = Buffer.alloc(ms * 48); for (let n = 0; n < pcm.length / 2; n++) pcm.writeInt16LE(Math.round(Math.sin(2 * Math.PI * 440 * n / 24000) * 7000), n * 2); return pcm.toString('base64'); }
+
+test('Gemini production call: native tools, playback continuation, reconnect, durable jobs and saved ownership', { timeout: 60000 }, async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'xw-gemini-native-')), home = path.join(root, 'home'), profile = path.join(root, 'profile'); await mkdir(profile);
+  const seed = Runtime.open(home), bot = seed.activeBot();
+  const other = seed.store.createBot({ name: 'Other', systemPrompt: 'test' });
+  await writeFile(path.join(bot.workspaceDir, 'lesson.html'), '<!doctype html><section data-xw-slide="1">First page</section><section data-xw-slide="2">Second page</section>'); seed.close();
+  let release; const gate = new Promise(resolve => { release = resolve; });
+  const model = createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk;
+    const body = JSON.parse(raw); res.writeHead(200, { 'content-type': 'text/event-stream' });
+    if (body.messages.some(item => item.role === 'tool' && item.content.includes('notes/native.md'))) res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'GEMINI-NATIVE-RESULT' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+    else { await gate; res.end(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'write', function: { name: 'write_file', arguments: JSON.stringify({ path: 'notes/native.md', content: 'GEMINI-NATIVE-RESULT' }) } }] }, finish_reason: 'tool_calls' }] })}\n\ndata: [DONE]\n\n`); }
+  }); await new Promise(resolve => model.listen(0, '127.0.0.1', resolve));
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 }); await new Promise(resolve => server.once('listening', resolve));
+  let socket, connections = 0, mic = 0, endAudio = 0; const setups = [], replies = [], cues = [];
+  server.on('connection', (client, req) => {
+    assert.equal(req.headers['x-goog-api-key'], 'gemini-secret-fixture'); socket = client; connections++;
+    client.on('message', raw => {
+      const message = JSON.parse(raw.toString());
+      if (message.setup) { setups.push(message.setup); client.send(JSON.stringify({ setupComplete: {} })); client.send(JSON.stringify({ sessionResumptionUpdate: { resumable: true, newHandle: 'resume-fixture' } })); }
+      if (message.realtimeInput?.audio) mic++;
+      if (message.realtimeInput?.audioStreamEnd) endAudio++;
+      if (message.clientContent) cues.push({ value: message.clientContent, at: Date.now() });
+      for (const reply of message.toolResponse?.functionResponses || []) replies.push({ ...reply, at: Date.now() });
+    });
+  });
+  await writeFile(path.join(profile, 'secrets.bin'), JSON.stringify({ model: 'fixture', apiKey: 'local', baseUrl: `http://127.0.0.1:${model.address().port}/v1`, realtimeService: 'gemini', realtimeModel: 'gemini-3.8-live', realtimeVoice: 'Kore', realtimeKey: 'gemini-secret-fixture', locale: 'zh' }));
+  const env = { ...process.env, XIAOWANG_HOME: home, XIAOWANG_USER_DATA: profile, XIAOWANG_REALTIME_URL: `ws://127.0.0.1:${server.address().port}`, XIAOWANG_ENABLE_GEMINI: '1', XIAOWANG_DISABLE_UPDATES: '1' }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await electron.launch({ args: ['--no-sandbox', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required', 'desktop/dist/main.js'], env });
+  t.after(async () => { release(); await closeTestApp(app); for (const client of server.clients) client.terminate(); await new Promise(resolve => server.close(resolve)); model.closeAllConnections(); await new Promise(resolve => model.close(resolve)); await rm(root, { recursive: true, force: true, maxRetries: 10 }); });
+  const page = await app.firstWindow(); page.setDefaultTimeout(12000); await page.waitForSelector('.composer');
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  await page.evaluate(() => { window.geminiNotes = []; window.xiaowang.onCall(note => { if (note.phase !== 'audio') window.geminiNotes.push(note); }); });
+  const emit = value => socket.send(JSON.stringify(value));
+  const tool = (id, name, args = {}) => emit({ toolCall: { functionCalls: [{ id, name, args }] } });
+  const result = id => until(() => replies.find(item => item.id === id), `No result for ${id}`);
+  const speak = (text, ms = 350) => { emit({ serverContent: { outputTranscription: { text }, modelTurn: { parts: [{ inlineData: { mimeType: 'audio/pcm;rate=24000', data: tone(ms) } }] } } }); emit({ serverContent: { turnComplete: true } }); };
+  await page.evaluate(() => window.xiaowang.callStart('xiaowang')); await until(() => mic > 1);
+  assert.equal(setups[0].model, 'models/gemini-3.8-live');
+  assert.equal(setups[0].tools[0].functionDeclarations.find(item => item.name === 'delegate_task').behavior, 'NON_BLOCKING');
+  assert.equal(setups[0].tools[0].functionDeclarations.some(item => item.name === 'continue_speaking'), false);
+  assert.equal(JSON.stringify(await page.evaluate(() => window.xiaowang.getState())).includes('gemini-secret-fixture'), false);
+  emit({ serverContent: { inputTranscription: { text: '逐页讲解 lesson.html' } } });
+  tool('start', 'manage_presentation', { action: 'start', goal: '逐页讲解' }); await result('start');
+  tool('show-1', 'show_stage', { mode: 'canvas', path: 'lesson.html', page: 1 }); await result('show-1');
+  await page.locator('.canvas-frame').waitFor();
+  const before = Date.now(); speak('第一页讲完了。', 600);
+  await sleep(250); assert.equal(cues.length, 0);
+  const cue = await until(() => cues[0]); assert.ok(cue.at - before >= 600, 'Application continuation cannot advance before actual playback');
+  tool('show-2', 'show_stage', { mode: 'canvas', path: 'lesson.html', page: 2 }); await result('show-2');
+  tool('complete', 'manage_presentation', { action: 'complete' }); await result('complete'); speak('第二页讲完，全部结束。');
+  await until(async () => (await page.evaluate(() => window.xiaowang.getState())).call?.state?.presentation.status === 'completed');
+  emit({ serverContent: { inputTranscription: { text: '请后台分析并写一份笔记。' } } }); tool('delegate', 'delegate_task', { task: '写 notes/native.md', notify: 'when_idle' });
+  const job = await until(async () => (await page.evaluate(() => window.xiaowang.getState())).jobs.find(item => item.channel === 'voice'));
+  speak('后台开始处理，你可以接着问。');
+  await page.locator(`.voice-panel [data-job-id="${job.id}"]`).waitFor();
+  emit({ serverContent: { interrupted: true, turnComplete: true } });
+  emit({ serverContent: { inputTranscription: { text: '进度怎么样？' } } }); tool('status', 'get_task');
+  assert.match(String((await result('status')).response.result), /running/); speak('后台仍在处理。');
+  socket.terminate(); await until(() => connections === 2); await until(() => setups.length === 2);
+  assert.deepEqual(setups[1].sessionResumption, { handle: 'resume-fixture' });
+  tool('delegate', 'delegate_task', { task: 'same request after resume' });
+  release(); const completed = await result('delegate');
+  assert.equal(completed.response.result.status, 'succeeded'); assert.match(completed.response.result.result, /GEMINI-NATIVE-RESULT/);
+  assert.equal((await page.evaluate(() => window.xiaowang.getState())).jobs.filter(item => item.channel === 'voice').length, 1);
+  assert.equal(await readFile(path.join(bot.workspaceDir, 'notes/native.md'), 'utf8'), 'GEMINI-NATIVE-RESULT');
+  speak('GEMINI-NATIVE-RESULT');
+  await page.evaluate(() => window.xiaowang.callMute(true)); await until(() => endAudio > 0);
+  const packets = mic; await sleep(150); assert.equal(mic, packets); await page.evaluate(() => window.xiaowang.callMute(false)); await until(() => mic > packets);
+  const live = (await page.evaluate(() => window.geminiNotes)).filter(item => item.phase === 'live'); assert.equal(live.length, 1);
+  await page.evaluate(() => window.xiaowang.callStop());
+  await page.reload(); await page.waitForSelector('.composer');
+  const events = await page.evaluate(() => window.xiaowang.events('xiaowang')), call = events.find(item => item.kind === 'call');
+  assert.equal(events.filter(item => item.kind === 'call').length, 1); assert.equal(call.callId, live[0].callId);
+  assert.match(JSON.stringify(call.lines), /第一页|后台/);
+  const record = page.locator(`[data-call-id="${call.callId}"]`); await record.locator(':scope > button').click();
+  await record.locator(`[data-job-id="${job.id}"]`).waitFor();
+  assert.equal(await page.locator('.bubble.assistant').filter({ hasText: 'GEMINI-NATIVE-RESULT' }).count(), 0);
+  await page.evaluate(slug => window.xiaowang.setActive(slug), other.slug); await record.waitFor({ state: 'detached' });
+  assert.equal(await page.locator('.call-tasks, .task-item').count(), 0);
+  await page.locator('button.settings').click();
+  const settings = page.getByRole('form', { name: '设置', exact: true });
+  assert.match(await settings.getByRole('combobox', { name: '服务', exact: true }).innerText(), /Gemini Live/);
+  await page.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-gemini-settings.png') });
+  await settings.getByRole('combobox', { name: '音色', exact: true }).click();
+  assert.equal(await page.getByRole('option').count(), 30); await page.getByRole('option', { name: 'Sulafat', exact: true }).click();
+  await settings.getByRole('button', { name: '保存并进入', exact: true }).click();
+  await page.reload(); await page.waitForSelector('.composer');
+  const saved = (await page.evaluate(() => window.xiaowang.getState())).settings;
+  assert.equal(saved.realtimeVoice, 'Sulafat'); assert.ok(saved.realtimeProfiles.gemini.keyHint);
+  await page.locator('button.settings').click();
+  const previewForm = page.getByRole('form', { name: '设置', exact: true });
+  await page.evaluate(() => { window.previewNotes = []; window.xiaowang.onCall(note => { if (note.preview && note.phase === 'closed') window.previewNotes.push(note); }); });
+  for (let index = 0; index < 2; index++) {
+    const previousConnections = connections;
+    await previewForm.getByRole('button', { name: '试听', exact: true }).click();
+    await until(() => connections > previousConnections);
+    await until(() => setups.length === connections);
+    speak('你好，我是小王同学。', 150);
+    await until(async () => (await page.evaluate(() => window.previewNotes)).length === index + 1);
+  }
+  assert.equal((await page.evaluate(() => window.previewNotes)).every(note => !note.detail), true);
+  assert.equal((await page.evaluate(() => window.xiaowang.events('xiaowang'))).filter(item => item.kind === 'call').length, 1);
+  assert.deepEqual(errors, []);
+});

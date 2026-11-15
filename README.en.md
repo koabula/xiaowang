@@ -32,7 +32,9 @@ Settings shows the installed version, with a **Check for updates** button beside
 2. For calls, separately choose a **voice** service, model, and voice, and enter that provider's key. Voice is optional; text and voice can use different providers.
 3. Create a topic workspace and add a paper or document, or start by typing a question. Click the **voice button on the right of the message input** to begin a call.
 
-The available voice providers are OpenAI, Qwen, and Doubao full-duplex. Each voice provider keeps its own key, model and voice, restored when you switch back. A blank key retains that provider's saved key; use the explicit removal control to clear it. Voice credentials are separate from the text model's credentials, and delegated work still runs through your configured background model.
+The available voice providers are OpenAI, Qwen, Doubao full-duplex, and **Gemini Live**. Each voice provider keeps its own key, model and voice, restored when you switch back. A blank key retains that provider's saved key; use the explicit removal control to clear it. Voice credentials are separate from the text model's credentials, and delegated work still runs through your configured background model.
+
+For Gemini, select **Gemini Live** under **Settings → Voice** and enter your own [Google Gemini API Key](https://aistudio.google.com/api-keys). The integration uses Gemini 3.8 Live with 30 prebuilt voices and preview playback. Calls can resume the same remote session after a disconnection. The app advances a complete walkthrough after actual playback, with pause and resume controls. Repeat anything said while the connection was unavailable.
 
 See the [development notes](DEVELOPMENT.md#moss-live) for the retained MOSS implementation, known protocol issues and development tests.
 
@@ -50,7 +52,13 @@ See the [development notes](DEVELOPMENT.md#moss-live) for the retained MOSS impl
 
 > Compare these papers' experimental settings and limitations. Write a note about the differences and let me know when it is ready.
 
-Click **＋** under **Files** or **Canvas** to browse the current workspace's imported originals, folders, and recently opened materials. PDFs support continuous scrolling, text selection, search, and zoom; source citations can jump to the original page. XiaoWang controls the browser by default. Take control before interacting with the web page yourself.
+**Ask XiaoWang to create a sub bot**
+
+> Create a sub bot named “Full-duplex speech research.” Summarize our agreed goals, keywords, and paper leads in its task brief, and have it start a literature review.
+
+XiaoWang creates a new workspace in the sidebar and can start its first task immediately. Sub bots have separate conversations and files, receiving the relevant background through their task brief. They do not automatically copy the parent's entire chat or files. Right-click a sidebar bot to rename or delete it; the main assistant cannot be deleted. Deletion stops that bot's calls and tasks, while local history and files remain on disk.
+
+Click **＋** under **Files** or **Canvas** to browse the current workspace's imported originals, folders, and recently opened materials. PDFs support continuous scrolling, text selection, search, zoom, trackpad pinch and Ctrl + wheel zoom; source citations can jump to the original page. XiaoWang controls the browser by default. Take control before interacting with the web page yourself.
 
 Each **workspace** keeps its own conversations, materials, and reading position. Voice-delegated **background tasks** live inside their source **call record**: expand the call to see progress, full results, generated files, or controls to stop and retry work. Ordinary text chat displays replies directly without an extra task card. Interrupting speech stops playback while background work continues; use the task's stop button to cancel the work.
 

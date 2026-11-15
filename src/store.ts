@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { STEWARD_SLUG, stewardPrompt } from "./persona.ts";
+import { APP_ICON_INK, APP_ICON_NAME } from "./beam.ts";
 import type { Bot, SessionEvent, StoredEvent, Term } from "./types.ts";
 
 interface BotRow {
@@ -98,6 +99,7 @@ export class Store {
     if (!columns.some((column) => column.name === "avatar_ink")) {
       db.exec("ALTER TABLE bots ADD COLUMN avatar_ink TEXT NOT NULL DEFAULT ''");
     }
+    if (!columns.some(column => column.name === "deleted_at")) db.exec("ALTER TABLE bots ADD COLUMN deleted_at TEXT");
     return new Store(home, db);
   }
 
@@ -125,8 +127,8 @@ export class Store {
       glossary: normalizeTerms(input.glossary ?? []),
       workspaceDir,
       parentBotId: input.parentBotId ?? null,
-      avatarSeed: "",
-      avatarInk: "",
+      avatarSeed: slug === STEWARD_SLUG ? APP_ICON_NAME : "",
+      avatarInk: slug === STEWARD_SLUG ? APP_ICON_INK : "",
       createdAt: new Date().toISOString(),
     };
     this.db
@@ -152,14 +154,14 @@ export class Store {
 
   listBots(): Bot[] {
     const rows = this.db
-      .prepare("SELECT * FROM bots ORDER BY created_at ASC, slug ASC")
+      .prepare("SELECT * FROM bots WHERE deleted_at IS NULL ORDER BY created_at ASC, slug ASC")
       .all() as unknown as BotRow[];
     return rows.map(rowToBot);
   }
 
   getBot(idOrSlug: string): Bot | null {
     const row = this.db
-      .prepare("SELECT * FROM bots WHERE id = ? OR slug = ? LIMIT 1")
+      .prepare("SELECT * FROM bots WHERE (id = ? OR slug = ?) AND deleted_at IS NULL LIMIT 1")
       .get(idOrSlug, idOrSlug) as BotRow | undefined;
     return row ? rowToBot(row) : null;
   }
@@ -193,6 +195,21 @@ export class Store {
       this.db.prepare("UPDATE bots SET name = ? WHERE id = ?").run(next, bot.id);
     }
     return this.requireBot(bot.id);
+  }
+
+  /** Tombstone the bot atomically. Keep local files and append-only history for
+   * recovery, but revoke all normal application access and never reuse its slug. */
+  deleteBot(idOrSlug: string): void {
+    const bot = this.requireBot(idOrSlug);
+    if (bot.slug === STEWARD_SLUG) throw new Error("不能删除主助手。");
+    const steward = this.requireBot(STEWARD_SLUG);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE bots SET parent_bot_id = ? WHERE parent_bot_id = ?").run(steward.id, bot.id);
+      if (this.getActiveBotId() === bot.id) this.setActiveBot(steward.id);
+      this.db.prepare("UPDATE bots SET deleted_at = ? WHERE id = ?").run(new Date().toISOString(), bot.id);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
 
   setAvatar(idOrSlug: string, patch: { seed?: string; ink?: string }): Bot {
@@ -404,14 +421,14 @@ export class Store {
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
       throw new Error(`slug 只能是小写字母、数字和连字符：${slug}`);
     }
-    if (this.getBot(slug)) throw new Error(`slug 已被占用：${slug}`);
+    if (this.db.prepare("SELECT 1 FROM bots WHERE slug = ?").get(slug)) throw new Error(`slug 已被占用：${slug}`);
     return slug;
   }
 
   private uniqueSlug(base: string): string {
     let slug = base;
     let n = 2;
-    while (this.getBot(slug)) {
+    while (this.db.prepare("SELECT 1 FROM bots WHERE slug = ?").get(slug)) {
       slug = `${base}-${n}`;
       n += 1;
     }

@@ -87,6 +87,16 @@ function PdfReader({ slug, file, locale }: { slug: string; file: ReaderFile; loc
     // Route PDF links through the same deliberate external-link action as chat citations.
     const links = (event: MouseEvent) => { const anchor = (event.target as Element).closest<HTMLAnchorElement>("a[href]"); if (!anchor || !/^https?:/i.test(anchor.href)) return; event.preventDefault(); event.stopPropagation(); void window.xiaowang.openLink(anchor.href); };
     area.addEventListener("click", links, { capture: true, signal: ac.signal });
+    // Chromium reports trackpad pinches as Ctrl+wheel. Scale the PDF at the
+    // gesture origin, leaving ordinary scrolling and the application's zoom alone.
+    area.addEventListener("wheel", event => {
+      if (!event.ctrlKey || !ready || !Number.isFinite(event.deltaY)) return;
+      event.preventDefault();
+      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? area.clientHeight : 1;
+      const delta = Math.max(-100, Math.min(100, event.deltaY * unit));
+      const next = Math.max(.25, Math.min(4, viewer.currentScale * Math.exp(-delta * .01)));
+      viewer.updateScale({ scaleFactor: next / viewer.currentScale, origin: [event.clientX, event.clientY], drawingDelay: 100 });
+    }, { passive: false, signal: ac.signal });
     const resources = new URL(`${import.meta.env.BASE_URL}pdfjs/`, window.location.href).href;
     void window.xiaowang.readFile(slug, file.id).then(async bytes => {
       if (ac.signal.aborted) return;

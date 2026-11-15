@@ -29,8 +29,8 @@ test('desktop: MOSS is hidden and blocked by default, saved profiles survive mig
   await page.locator('button.settings').click(); const settings = page.getByRole('form', { name: '设置', exact: true }); await settings.waitFor();
   assert.match(await settings.getByRole('combobox', { name: '服务', exact: true }).innerText(), /豆包/);
   await settings.getByRole('combobox', { name: '服务', exact: true }).click();
-  assert.equal(await page.getByRole('option').count(), 3); assert.equal(await page.getByRole('option', { name: 'MOSS Live', exact: true }).count(), 0);
-  for (const name of ['通义千问', 'OpenAI', '豆包全双工']) assert.equal(await page.getByRole('option', { name, exact: true }).count(), 1);
+  assert.equal(await page.getByRole('option').count(), 4); assert.equal(await page.getByRole('option', { name: 'MOSS Live', exact: true }).count(), 0);
+  for (const name of ['通义千问', 'OpenAI', '豆包全双工', 'Gemini Live']) assert.equal(await page.getByRole('option', { name, exact: true }).count(), 1);
   await page.keyboard.press('Escape'); await page.getByRole('listbox').waitFor({ state: 'detached' });
   assert.equal(await settings.getByRole('searchbox', { name: '搜索音色' }).count(), 0);
   await assert.rejects(page.evaluate(() => window.xiaowang.previewVoice({ realtimeService: 'moss' })), /暂时停用/);

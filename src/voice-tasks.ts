@@ -28,10 +28,10 @@ export class VoiceTasks {
     this.callId = callId;
   }
 
-  userText(text: string): TaskJob | null {
+  userText(text: string, startWork = true): TaskJob | null {
     this.turn += 1;
     this.accepted = null;
-    const work = text.split(/[。！？!?；;]/).some(clause => isVoiceWorkRequest(clause.trim()));
+    const work = startWork && text.split(/[。！？!?；;]/).some(clause => isVoiceWorkRequest(clause.trim()));
     if (!work) {
       if (isVoiceProgressRequest(text)) this.accepted = this.latest()?.id ?? null;
       return null;

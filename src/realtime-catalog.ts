@@ -1,6 +1,6 @@
 import { DOUBAO_REALTIME_MODEL, DOUBAO_REALTIME_URL, DOUBAO_VOICE } from "./realtime.ts";
 
-export type RealtimeServiceId = "qwen" | "openai" | "doubao" | "moss";
+export type RealtimeServiceId = "qwen" | "openai" | "doubao" | "moss" | "gemini";
 export type RealtimeRegion = "beijing" | "singapore";
 
 export interface RealtimeModelChoice {
@@ -60,11 +60,12 @@ export const REALTIME_SERVICES: { id: RealtimeServiceId; name: string; models: R
     name: "豆包全双工",
     models: [{ id: DOUBAO_REALTIME_MODEL, name: "实时语音 3.0" }],
   },
+  { id: "gemini", name: "Gemini Live", models: [{ id: "gemini-3.8-live", name: "Gemini 3.8 Live" }] },
 ];
 
 /** MOSS is retained for protocol development but is not offered in released settings. */
-export function realtimeServicesForSettings(experimentalMossEnabled = false): typeof REALTIME_SERVICES {
-  return REALTIME_SERVICES.filter(service => experimentalMossEnabled || service.id !== "moss");
+export function realtimeServicesForSettings(experimentalMossEnabled = false, geminiEnabled = true): typeof REALTIME_SERVICES {
+  return REALTIME_SERVICES.filter(service => (experimentalMossEnabled || service.id !== "moss") && (geminiEnabled || service.id !== "gemini"));
 }
 
 const QWEN_VOICES: { id: string; name: string; generations: Array<"3.5" | "3.8"> }[] = [
@@ -154,6 +155,7 @@ const DOUBAO_VOICES: RealtimeVoiceChoice[] = [
 ];
 
 export function realtimeKeyPage(service: string, region: string): string {
+  if (service === "gemini") return "https://aistudio.google.com/api-keys";
   if (service === "moss") return "https://platform.moss.cn/app/api-keys/";
   if (service === "openai") return "https://platform.openai.com/api-keys";
   if (service === "doubao") return "https://console.volcengine.com/speech/new/setting/apikeys?projectName=default";
@@ -166,6 +168,7 @@ export function modelsFor(service: RealtimeServiceId): RealtimeModelChoice[] {
 }
 
 export function voicesFor(service: RealtimeServiceId, model: string): RealtimeVoiceChoice[] {
+  if (service === "gemini") return ["Kore", "Aoede", "Puck", "Charon", "Fenrir", "Leda", "Orus", "Zephyr", "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar", "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"].map(id => ({ id, name: id }));
   if (service === "moss") return [
     { id: "6c3152b1-1d4f-4e49-ade3-09f447712fec", name: "暖暖" },
     { id: "6cc93520-3207-4f7a-bca9-2d560b9c306b", name: "沐沐" },
@@ -204,7 +207,8 @@ export function keyForService(service: RealtimeServiceId, realtimeKey: string, t
 }
 
 function serviceOf(draft: RealtimeDraft): RealtimeServiceId {
-  if (draft.service === "moss" || draft.service === "qwen" || draft.service === "openai" || draft.service === "doubao") return draft.service;
+  if (draft.service === "gemini" || draft.service === "moss" || draft.service === "qwen" || draft.service === "openai" || draft.service === "doubao") return draft.service;
+  if (/generativelanguage\.googleapis\.com/i.test(draft.url ?? "")) return "gemini";
   if (/api\.mosi\.cn/i.test(draft.url ?? "")) return "moss";
   const url = draft.url ?? "";
   if (/\/api\/v3\/duplex\/realtime\/dialogue/i.test(url)) return "doubao";
@@ -225,6 +229,7 @@ function workspaceOf(url: string): string {
 }
 
 function urlFor(service: RealtimeServiceId, model: string, region: RealtimeRegion, workspace: string): string {
+  if (service === "gemini") return "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
   if (service === "moss") return "wss://api.mosi.cn/v1/realtime";
   if (service === "openai") return OPENAI_URL;
   if (service === "doubao") return DOUBAO_REALTIME_URL;

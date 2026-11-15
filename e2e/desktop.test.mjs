@@ -195,6 +195,24 @@ test("desktop: voice interruption, PDF Viewer, bot files, settings and saved sta
   await until(async()=>(await page.getByRole('textbox',{name:'PDF page / PDF页码',exact:true}).inputValue())==='3');
   await page.getByRole('button',{name:'Close PDF search / 关闭文档搜索',exact:true}).click();
   await page.getByRole('combobox',{name:'PDF zoom / PDF缩放',exact:true}).selectOption('125');
+  const pdfZoom = page.getByRole('combobox', { name: 'PDF zoom / PDF缩放', exact: true });
+  const pageWidth = await page.locator('.pdfViewer .page').first().evaluate(node => node.getBoundingClientRect().width);
+  const appZoom = await app.evaluate(({ webContents }) => webContents.getAllWebContents().find(item => item.getType() === 'window').getZoomFactor());
+  await page.locator('.pdf-scroll').evaluate(node => {
+    const rect = node.getBoundingClientRect();
+    const event = new WheelEvent('wheel', { ctrlKey: true, deltaY: -24, clientX: rect.x + 100, clientY: rect.y + 100, bubbles: true, cancelable: true });
+    node.dispatchEvent(event); if (!event.defaultPrevented) throw new Error('Pinch did not suppress application zoom');
+  });
+  await until(async () => Number(await pdfZoom.inputValue()) > 125);
+  assert.ok(await page.locator('.pdfViewer .page').first().evaluate(node => node.getBoundingClientRect().width) > pageWidth);
+  const pinchZoom = await pdfZoom.inputValue();
+  await page.locator('.pdf-scroll').evaluate(node => node.dispatchEvent(new WheelEvent('wheel', { deltaY: 50, bubbles: true, cancelable: true })));
+  assert.equal(await pdfZoom.inputValue(), pinchZoom, 'Ordinary scroll must not zoom');
+  for (const [deltaY, expected] of [[-10000, '400'], [10000, '25']]) {
+    await page.locator('.pdf-scroll').evaluate((node, deltaY) => { for (let n = 0; n < 20; n++) node.dispatchEvent(new WheelEvent('wheel', { ctrlKey: true, deltaY, bubbles: true, cancelable: true })); }, deltaY);
+    assert.equal(await pdfZoom.inputValue(), expected);
+  }
+  assert.equal(await app.evaluate(({ webContents }) => webContents.getAllWebContents().find(item => item.getType() === 'window').getZoomFactor()), appZoom);
   await page.waitForTimeout(100);
   await page.getByRole('combobox',{name:'PDF zoom / PDF缩放',exact:true}).selectOption('page-width');
   await page.evaluate(id=>window.xiaowang.openReference('xiaowang',id,1),reference.id);

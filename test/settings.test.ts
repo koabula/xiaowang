@@ -48,7 +48,7 @@ test("unsaved provider drafts include inactive edits and explicit key removal", 
 });
 
 test("suspended MOSS is absent from normal settings while its implementation remains opt-in", () => {
-  assert.deepEqual(realtimeServicesForSettings().map(item => item.id), ["qwen", "openai", "doubao"]);
+  assert.deepEqual(realtimeServicesForSettings().map(item => item.id), ["qwen", "openai", "doubao", "gemini"]);
   assert.ok(realtimeServicesForSettings(true).some(item => item.id === "moss"));
   assert.equal(resolveRealtime({ service: "moss" }).model, "moss-live-1.0");
 });

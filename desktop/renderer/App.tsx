@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, AudioLines, Check, ChevronDown, ChevronRight, ChevronUp, Download, LoaderCircle, ExternalLink, Eye, FileText, Frame, Globe, Maximize2, MessageSquareText, Mic, MicOff, Minimize2, MousePointer2, PanelRight, Phone, PhoneOff, Play, Plus, RefreshCw, Search, Settings, Square, X } from "lucide-react";
 import * as Select from "@radix-ui/react-select";
 import Markdown from "react-markdown";
@@ -12,6 +12,7 @@ import { taskLayout } from "./task-view.ts";
 import { RichText } from "./rich-text.tsx";
 import { FileBrowser, rememberOpenedFile } from "./file-browser.tsx";
 import { ModalDialog } from "./modal-dialog.tsx";
+import { BotMenu, type BotMenuTarget } from "./bot-menu.tsx";
 import { hasUnsavedSettings } from "./settings-draft.ts";
 const DocumentReader = lazy(() => import("./document-reader.tsx").then(module => ({ default: module.DocumentReader })));
 import { withCanvasPager } from "./canvas-pager.ts";
@@ -63,6 +64,8 @@ export function App() {
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
   const [botName, setBotName] = useState("");
+  const [botMenu, setBotMenu] = useState<BotMenuTarget | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [fileBrowser, setFileBrowser] = useState<{ slug: string; mode: "file" | "canvas" } | null>(null);
   const [call, setCall] = useState<LiveCallView | null>(null);
@@ -101,15 +104,46 @@ export function App() {
   const visibleItems = itemsSlug === active ? items : [];
   const taskView = taskLayout(currentJobs, visibleItems);
   const conversationItems = visibleItems.filter(item => isConversation(item) && !taskView.hidden.has(item.id));
-  const backgroundRunning = taskView.background.some(job => job.status === "running");
+  const conversationWorking = currentJobs.find(job => !job.originCallId && job.channel !== "voice" && ["queued", "running"].includes(job.status));
+  const showThinking = busy && (Boolean(conversationWorking) || !workingJob);
+  const botBusy = (bot: BotRow) => Boolean(busyBySlug[bot.slug]) || Boolean(state?.jobs?.some(job => job.botId === bot.id && ["queued", "running"].includes(job.status)));
   const steward = state?.bots.find((bot) => bot.slug === "xiaowang");
   const ink = current?.avatarInk || inkFor(active || "xiaowang");
-  const covered = Boolean(fileBrowser) || settingsOpen || (state !== null && !state.settings.ready);
+  const covered = Boolean(fileBrowser) || Boolean(botMenu) || settingsOpen || (state !== null && !state.settings.ready);
+
+  useLayoutEffect(() => {
+    const node = composerRef.current; if (!node) return;
+    const resize = () => { node.style.height = "0px"; node.style.height = `${Math.min(144, node.scrollHeight)}px`; };
+    resize();
+    const observer = new ResizeObserver(resize); observer.observe(node.parentElement!);
+    return () => observer.disconnect();
+  }, [draft, active]);
+
+  function openBotMenu(event: React.MouseEvent<HTMLButtonElement>, bot: BotRow) {
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    setBotMenu({ bot, x: event.clientX || rect.left + 20, y: event.clientY || rect.bottom, trigger: event.currentTarget });
+  }
+
+  function botMenuKey(event: React.KeyboardEvent<HTMLButtonElement>, bot: BotRow | undefined) {
+    if (!bot || !(event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey))) return;
+    event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect();
+    setBotMenu({ bot, x: rect.left + 20, y: rect.bottom, trigger: event.currentTarget });
+  }
 
   function receiveItems(slug: string, next: ChatItem[]) {
     if (activeRef.current !== slug) return;
     setItems(next);
     setItemsSlug(slug);
+  }
+
+  function workspaceError(slug: string, error: unknown) {
+    // A cancellation can schedule a refresh just before deletion revokes the
+    // bot's IPC access. Recheck ownership rather than leaving a rejected promise
+    // or showing an error for a workspace the user has already removed.
+    void window.xiaowang.getState().then(latest => {
+      if (activeRef.current === slug && latest.bots.some(bot => bot.slug === slug)) setToast(plainError(error));
+    }).catch(() => {});
   }
 
   function patchStage(slug: string, patch: Partial<StageSnap>) {
@@ -123,7 +157,7 @@ export function App() {
       window.xiaowang.onJob(job => {
         setState(prev => prev ? { ...prev, jobs: [...(prev.jobs ?? []).filter(item => item.id !== job.id), job] } : prev);
         if (["succeeded", "cancelled", "failed", "interrupted"].includes(job.status) && job.slug === activeRef.current) {
-          void window.xiaowang.events(job.slug).then(items => receiveItems(job.slug, items));
+          void window.xiaowang.events(job.slug).then(items => receiveItems(job.slug, items)).catch(error => workspaceError(job.slug, error));
         }
       }),
       window.xiaowang.onState(setState),
@@ -134,11 +168,11 @@ export function App() {
       }),
       window.xiaowang.onDownload((note) => {
         setToast(note.error ? note.error : `已放入资料库 ${note.filename ?? ""}`);
-        if (note.slug && note.slug === activeRef.current) void window.xiaowang.library(note.slug).then(refs => { if (activeRef.current === note.slug) setLibrary(refs); });
+        if (note.slug && note.slug === activeRef.current) void window.xiaowang.library(note.slug).then(refs => { if (activeRef.current === note.slug) setLibrary(refs); }).catch(error => workspaceError(note.slug!, error));
       }),
       window.xiaowang.onStage((view) => rememberStage(view)),
       window.xiaowang.onCall((note) => {
-        void hearCall(note);
+        void hearCall(note).catch(error => workspaceError(note.slug, error));
       }),
       window.xiaowang.onStep((step) => {
         if (!step.activity?.trim()) return;
@@ -152,7 +186,7 @@ export function App() {
         }
         if (note.error) setToast(note.error.length > 160 ? `${note.error.slice(0, 160)}…` : note.error);
         if (activeRef.current !== note.slug) return;
-        void window.xiaowang.library(note.slug).then(refs => { if (activeRef.current === note.slug) setLibrary(refs); });
+        void window.xiaowang.library(note.slug).then(refs => { if (activeRef.current === note.slug) setLibrary(refs); }).catch(error => workspaceError(note.slug, error));
       }),
     ];
     return () => stops.forEach((stop) => stop());
@@ -232,7 +266,7 @@ export function App() {
     if (view.mode === "file") {
       pinTab(view.slug, "files", view.id);
       rememberOpenedFile(view.slug, `library:${view.id}`);
-      void window.xiaowang.library(view.slug).then(refs => { if (activeRef.current === view.slug) setLibrary(refs); });
+      void window.xiaowang.library(view.slug).then(refs => { if (activeRef.current === view.slug) setLibrary(refs); }).catch(error => workspaceError(view.slug, error));
       patchStage(view.slug, { mode: "file", open: true, file: { id: view.id, filename: view.filename, page: view.page, requestId: view.requestId, restore: view.restore } });
     } else if (view.mode === "browser") {
       patchStage(view.slug, { mode: "browser", open: true });
@@ -258,10 +292,11 @@ export function App() {
       const next = await window.xiaowang.ask(slug, text);
       if (activeRef.current === slug) {
         receiveItems(slug, next);
-        setLibrary(await window.xiaowang.library(slug));
+        const refs = await window.xiaowang.library(slug);
+        if (activeRef.current === slug) setLibrary(refs);
       }
     } catch (error) {
-      setToast(plainError(error));
+      workspaceError(slug, error);
     } finally {
       setBusyBySlug(prev => ({ ...prev, [slug]: false }));
     }
@@ -390,8 +425,8 @@ export function App() {
           <button className="icon" title={copy.search} type="button"><Search size={16} /></button>
           <button className="icon" title={copy.newTask} type="button" onClick={() => setCreating(true)}><Plus size={16} /></button>
         </div>
-        <button className={active === "xiaowang" ? "steward on" : "steward"} type="button" onClick={() => void window.xiaowang.setActive("xiaowang")}>
-          <Avatar slug="xiaowang" seed={steward?.avatarSeed} ink={steward?.avatarInk} size={72} mood={busyBySlug.xiaowang ? "think" : "idle"} />
+        <button className={active === "xiaowang" ? "steward on" : "steward"} type="button" onKeyDown={event => botMenuKey(event, steward)} onContextMenu={event => { if (steward) openBotMenu(event, steward); }} onClick={() => void window.xiaowang.setActive("xiaowang")}>
+          <Avatar slug="xiaowang" seed={steward?.avatarSeed} ink={steward?.avatarInk} size={72} mood={steward && botBusy(steward) ? "think" : "idle"} />
           <strong>{steward?.name ?? "小王同学"}</strong>
         </button>
         <div className="search-line">
@@ -404,8 +439,8 @@ export function App() {
         ) : null}
         <nav>
           {bots.filter((bot) => bot.slug !== "xiaowang").map((bot) => (
-            <button className={["bot", bot.slug === active ? "on" : "", busyBySlug[bot.slug] ? "working" : ""].filter(Boolean).join(" ")} key={bot.slug} type="button" onClick={() => void window.xiaowang.setActive(bot.slug)}>
-              <Avatar slug={bot.slug} seed={bot.avatarSeed} ink={bot.avatarInk} mood={busyBySlug[bot.slug] ? "think" : "idle"} />
+            <button className={["bot", bot.slug === active ? "on" : "", botBusy(bot) ? "working" : ""].filter(Boolean).join(" ")} key={bot.slug} type="button" onKeyDown={event => botMenuKey(event, bot)} onContextMenu={event => openBotMenu(event, bot)} onClick={() => void window.xiaowang.setActive(bot.slug)}>
+              <Avatar slug={bot.slug} seed={bot.avatarSeed} ink={bot.avatarInk} mood={botBusy(bot) ? "think" : "idle"} />
               <span>
                 <strong>{bot.name}</strong>
                 <em>{bot.preview}</em>
@@ -442,7 +477,7 @@ export function App() {
             {(taskView.chatIssues.get(item.id) ?? []).map(job => <ConversationIssue key={job.id} job={job} locale={localeOf(state?.settings.locale)} onError={setToast} />)}
           </div>)}
           {taskView.pendingChatIssues.map(job => <ConversationIssue key={job.id} job={job} locale={localeOf(state?.settings.locale)} onError={setToast} />)}
-          {busy && !backgroundRunning ? (
+          {showThinking ? (
             <div className="thinking" role="status" aria-label={localeOf(state?.settings.locale) === "en" ? "Working" : "正在处理任务"}>
               <Avatar slug={active || "xiaowang"} seed={current?.avatarSeed} ink={current?.avatarInk} size={28} mood="think" />
               {activity || workingJob?.activity ? <em key={activity || workingJob?.activity}>{activity || workingJob?.activity}</em> : <span className="dots" aria-hidden="true"><i /><i /><i /></span>}
@@ -453,6 +488,7 @@ export function App() {
         <form className="composer" onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
           <button className="icon" type="button" title={copy.addToLibrary} onClick={() => void window.xiaowang.addFiles().then(async () => { if (active) setLibrary(await window.xiaowang.library(active)); })}><Plus size={18} /></button>
           <textarea
+            ref={composerRef}
             rows={1}
             value={draft}
             placeholder={copy.message(current?.name ?? "")}
@@ -598,6 +634,13 @@ export function App() {
           }}
         />
       ) : null}
+      {botMenu ? <BotMenu key={botMenu.bot.id} target={botMenu} locale={localeOf(state?.settings.locale)} activeSlug={active} onClose={() => setBotMenu(null)} onDeleted={slug => {
+        setOpenTabs(prev => { const next = { ...prev }; delete next[slug]; saveTabs(next); return next; });
+        setDraftBySlug(prev => { const next = { ...prev }; delete next[slug]; return next; });
+        setStageBySlug(prev => { const next = { ...prev }; delete next[slug]; return next; });
+        setBusyBySlug(prev => { const next = { ...prev }; delete next[slug]; return next; });
+        setActivityBySlug(prev => { const next = { ...prev }; delete next[slug]; return next; });
+      }} /> : null}
       {toast ? <button className="toast" type="button" onClick={() => setToast("")}>{toast}</button> : null}
     </div>
   );
@@ -976,6 +1019,7 @@ function SettingsPanel({
       if (!note.preview) return;
       if (note.phase === "live") {
         setPreviewing(true);
+        audio.stop();
         void audio.startPlayback(note.outputRate ?? 24_000);
       }
       if (note.phase === "audio" && note.audio) audio.play(note.audio, note.serial, note.identity);
@@ -1015,9 +1059,11 @@ function SettingsPanel({
       return;
     }
     setNotice("");
+    setPreviewing(true);
     try {
       await window.xiaowang.previewVoice(patch);
     } catch (error) {
+      setPreviewing(false);
       setNotice(plainError(error));
     }
   }
@@ -1092,7 +1138,7 @@ function SettingsPanel({
           <div className="field-block">
             <span>{copy.service}</span>
             <div className="with-action">
-              <FieldSelect label={copy.service} value={service} onChange={(value) => chooseService(value as RealtimeServiceId)} options={realtimeServicesForSettings(settings?.experimentalMossEnabled).map((item) => ({ value: item.id, label: item.name }))} />
+              <FieldSelect label={copy.service} value={service} onChange={(value) => chooseService(value as RealtimeServiceId)} options={realtimeServicesForSettings(settings?.experimentalMossEnabled, settings?.geminiEnabled).map((item) => ({ value: item.id, label: item.name }))} />
               <button type="button" onClick={() => void window.xiaowang.openKeyPage(service, region)}><ExternalLink size={15} strokeWidth={1.75} />{copy.getKey}</button>
             </div>
           </div>
@@ -1116,7 +1162,7 @@ function SettingsPanel({
           <div className="field-block">
             <span>{copy.voice}</span>
             <div className="with-action">
-              {service === "moss" ? <MossVoicePicker value={voice} onChange={setVoice} patch={patch} keyHint={clearVoiceKey ? "" : settings?.realtimeProfiles?.moss?.keyHint || (saved.service === "moss" ? settings?.realtimeKeyHint ?? "" : "")} en={locale === "en"} /> : <FieldSelect label={copy.voice} value={voice} onChange={setVoice} options={voiceChoices.map((item) => ({ value: item.id, label: `${item.name} · ${item.id}` }))} />}
+              {service === "moss" ? <MossVoicePicker value={voice} onChange={setVoice} patch={patch} keyHint={clearVoiceKey ? "" : settings?.realtimeProfiles?.moss?.keyHint || (saved.service === "moss" ? settings?.realtimeKeyHint ?? "" : "")} en={locale === "en"} /> : <FieldSelect label={copy.voice} value={voice} onChange={setVoice} options={voiceChoices.map((item) => ({ value: item.id, label: item.name === item.id ? item.name : `${item.name} · ${item.id}` }))} />}
               <button className="voice-preview" type="button" aria-label={previewing ? copy.stopPreview : copy.preview} title={previewing ? copy.stopPreview : copy.preview} onClick={() => void preview()}>{previewing ? <Square size={14} strokeWidth={1.75} /> : <Play size={15} strokeWidth={1.75} />}</button>
             </div>
           </div>

@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("xiaowang", {
   setActive: (slug) => ipcRenderer.invoke("bot:active", slug),
   createBot: (name, baseline) => ipcRenderer.invoke("bot:create", name, baseline),
   renameBot: (slug, name) => ipcRenderer.invoke("bot:rename", slug, name),
+  deleteBot: slug => ipcRenderer.invoke("bot:delete", slug),
   setAvatar: (slug, patch) => ipcRenderer.invoke("bot:avatar", slug, patch),
   forgetFile: (slug, id) => ipcRenderer.invoke("library:forget", slug, id),
   events: (slug) => ipcRenderer.invoke("chat:events", slug),

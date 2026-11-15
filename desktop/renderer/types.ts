@@ -18,6 +18,7 @@ declare global {
       setActive: (slug: string) => Promise<void>;
       createBot: (name: string, baseline: string) => Promise<string>;
       renameBot: (slug: string, name: string) => Promise<void>;
+      deleteBot: (slug: string) => Promise<void>;
       setAvatar: (slug: string, patch: { seed?: string; ink?: string }) => Promise<void>;
       forgetFile: (slug: string, id: string) => Promise<void>;
       events: (slug: string) => Promise<ChatItem[]>;
@@ -118,6 +119,7 @@ export interface CanvasPage {
 
 export interface SettingsView {
   experimentalMossEnabled?: boolean;
+  geminiEnabled?: boolean;
   realtimeProfiles?: Partial<Record<RealtimeServiceId, VoiceProfileView>>;
   model: string;
   baseUrl: string;

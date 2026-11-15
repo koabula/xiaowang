@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { APP_ICON_INK, APP_ICON_NAME, beamHash, beamPalette, beamSvg } from "../src/beam.ts";
+import { APP_ICON_INK, APP_ICON_NAME, beamFace, beamHash, beamPalette, beamSvg } from "../src/beam.ts";
 
 const libraryHash = Function(
   `"use strict"; return (${readFileSync(new URL("../node_modules/boring-avatars/dist/index.js", import.meta.url), "utf8").match(/const m = \(l\) => \{[\s\S]*?return Math\.abs\(r\);\n\}/)?.[0].replace(/^const m = /, "")});`,
@@ -40,4 +40,16 @@ test("the app icon is a rounded dock tile with the tilted steward beam", () => {
   assert.match(svg, /#FFFFFF/);
   assert.match(svg, /rx="185"/);
   assert.doesNotMatch(svg, /<rect width="1024" height="1024"/);
+});
+
+test("the default steward matches the requested blue dock face geometry", () => {
+  assert.equal(APP_ICON_NAME, "xw-6udis");
+  const colors = beamPalette(APP_ICON_NAME, APP_ICON_INK);
+  assert.deepEqual(colors, ["#F4F4F5", "#F4F4F5", "#F4F4F5", "#F4F4F5", "#2B59C3"]);
+  assert.deepEqual(beamFace(APP_ICON_NAME, colors), {
+    wrapperColor: "#2B59C3", faceColor: "#FFFFFF", backgroundColor: "#F4F4F5",
+    wrapperTranslateX: 9, wrapperTranslateY: 9, wrapperRotate: 199, wrapperScale: 1.1,
+    isMouthOpen: false, isCircle: false, eyeSpread: 4, mouthSpread: 1,
+    faceRotate: -9, faceTranslateX: 4.5, faceTranslateY: 4.5,
+  });
 });

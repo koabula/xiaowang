@@ -81,7 +81,8 @@ export class BrowserPane {
     });
     contents.on("did-start-loading", () => this.patch({ loading: true }));
     contents.on("did-stop-loading", () => {
-      this.patch({ loading: false, url: contents.getURL(), title: contents.getTitle() });
+      const url = contents.getURL();
+      this.patch({ loading: false, url: url === "about:blank" ? "" : url, title: url === "about:blank" ? "" : contents.getTitle() });
     });
     contents.on("page-title-updated", (_event, title) => this.patch({ title }));
     contents.on("before-input-event", (event) => {
@@ -120,6 +121,21 @@ export class BrowserPane {
 
   viewState(): BrowserViewState {
     return this.state;
+  }
+
+  async clearBot(slug: string): Promise<void> {
+    if (this.ownerSlug !== slug && this.actingSlug !== slug) return;
+    this.controlEpoch++;
+    this.ownerSlug = this.actingSlug = "";
+    this.holder = "bot";
+    this.view?.setVisible(false);
+    const contents = this.view?.webContents;
+    contents?.stop();
+    if (contents && !contents.isDestroyed()) {
+      await contents.loadURL("about:blank");
+      contents.navigationHistory.clear();
+    }
+    this.patch({ url: "", title: "", holder: "bot", loading: false });
   }
 
   userNavigate(raw: string): Promise<string> { return this.navigate(raw, "user"); }
@@ -186,11 +202,13 @@ export class BrowserPane {
   }
 
   private async capturePdf(pageUrl: string): Promise<SavedPdf | null> {
+    const epoch = this.controlEpoch;
     const looksLikePdf = this.frameType.toLowerCase().includes("pdf") || /\/pdf(\/|$)/i.test(pageUrl);
     if (!looksLikePdf) return null;
     const response = await session.fromPartition("persist:xiaowang").fetch(pageUrl);
     const type = response.headers.get("content-type") ?? "";
     const bytes = Buffer.from(await response.arrayBuffer());
+    if (epoch !== this.controlEpoch) return null;
     const header = bytes.subarray(0, 5).toString("utf8");
     if (!type.toLowerCase().includes("pdf") && header !== "%PDF-") return null;
     return this.onPdf(pdfFilename(pageUrl), bytes);

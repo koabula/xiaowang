@@ -61,7 +61,7 @@ export function beamSvg(name: string, colors: string[], pixels = 1024): string {
 `;
 }
 
-function beamFace(name: string, colors: string[]) {
+export function beamFace(name: string, colors: string[]) {
   const hash = beamHash(name);
   const count = colors.length || 1;
   const pick = (offset: number) => colors[(hash + offset) % count] ?? "#18181B";

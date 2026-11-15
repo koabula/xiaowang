@@ -10,7 +10,7 @@ export const PREVIEW_LINE = "你好，我是小王同学。";
 
 export const TOOL_ACCEPTED = "已接过，正在做。先用一句口语接住用户，不要复述这句话，也不要说工具或后台。";
 
-export type RealtimeFamily = "openai" | "qwen" | "doubao" | "moss";
+export type RealtimeFamily = "openai" | "qwen" | "doubao" | "moss" | "gemini";
 
 export interface RealtimeEndpoint {
   url: string;
@@ -45,6 +45,7 @@ export function realtimeEndpoint(input?: { url?: string; model?: string; family?
   const url = (input?.url?.trim() || QWEN_REALTIME_URL).replace(/\/$/, "");
   const family = input?.family ?? realtimeFamily(url);
   const openai = family === "openai";
+  if (family === "gemini") return { url, family, model: input?.model?.trim() || "gemini-3.8-live", inputRate: 16_000, outputRate: 24_000, audioFormat: "pcm16", transcriptionModel: "" };
   if (family === "moss") return { url, family, model: input?.model?.trim() || "moss-live-1.0", inputRate: 16_000, outputRate: 24_000, audioFormat: "pcm16", transcriptionModel: "" };
   if (family === "doubao") {
     return {
@@ -69,13 +70,14 @@ export function realtimeEndpoint(input?: { url?: string; model?: string; family?
 }
 
 export function realtimeFamily(url: string): RealtimeFamily {
+  if (/generativelanguage\.googleapis\.com/i.test(url)) return "gemini";
   if (/api\.mosi\.cn/i.test(url)) return "moss";
   if (/\/api\/v3\/duplex\/realtime\/dialogue/i.test(url)) return "doubao";
   return /aliyuncs\.com|qwencloud/i.test(url) ? "qwen" : "openai";
 }
 
 export function socketUrl(endpoint: RealtimeEndpoint): string {
-  if (endpoint.family === "doubao") return endpoint.url;
+  if (endpoint.family === "doubao" || endpoint.family === "gemini") return endpoint.url;
   const url = new URL(endpoint.url);
   if (!url.searchParams.get("model")) url.searchParams.set("model", endpoint.model);
   return url.toString();
@@ -173,12 +175,12 @@ export function voiceTools(tools: ToolSchema[], locale: Locale = "zh"): ToolSche
   return [...tools, ...[delegate, manage, getTask, askTextTool(locale), keepGoing, endCall].filter((tool) => !names.has(tool.name))];
 }
 
-export function realtimeInstructions(personName: string, brief: string, locale: Locale = "zh"): string {
+export function realtimeInstructions(personName: string, brief: string, locale: Locale = "zh", appDrivenPresentation = false): string {
   if (locale === "en") {
     return [
       `You are "${personName}". This is a voice call. Speak in short sentences.`,
       "The user only hears your voice. When you look something up or read, say one short line first, then use the tool. Do not narrate the tool, and do not say you handed the work off.",
-      "A turn works like the text side: tools continue the same turn, and the turn ends when you finish speaking. Call continue_speaking only when another segment should start as soon as this one finishes, such as the next slide. Do not wait for the user to say continue.",
+      appDrivenPresentation ? "The app retains the user's walkthrough goal and drives continuation after actual playback. Do not wait for repeated user prompts or request a per-segment continuation tool." : "A turn works like the text side: tools continue the same turn, and the turn ends when you finish speaking. Call continue_speaking only when another segment should start as soon as this one finishes, such as the next slide. Do not wait for the user to say continue.",
       "When the user wants a new or edited canvas, ppt, slides, report, or written note, say one short line, then call ask_text and put their words in task. Do not write the long piece yourself.",
       "When presenting an existing canvas/ppt/slides HTML file, read it with read_file if needed and call show_stage(mode='canvas', path=..., page=N) as you move to each slide.",
       "When the user wants to end the call, say a short goodbye, then call end_call. The call hangs up after the goodbye.",
@@ -192,7 +194,7 @@ export function realtimeInstructions(personName: string, brief: string, locale: 
   return [
     `你是「${personName}」。这是一次语音通话，用口语短句。`,
     "用户只听见你的声音。要查文献或读资料时，先接一句再调用工具。不要念工具过程，也不要说自己把事情转交了。",
-    "一轮和文字那边一样：工具接在同一轮里，说完这一轮就停，开始听用户。只有还要接着讲下一段（比如下一页）时才调用 continue_speaking，当前段播完会自动接上。不要等用户说「继续」。",
+    appDrivenPresentation ? "应用保存用户的完整讲解目标，在当前音频实际播放完后驱动下一段。不要等待用户反复说继续，也不需要逐段调用续讲工具。" : "一轮和文字那边一样：工具接在同一轮里，说完这一轮就停，开始听用户。只有还要接着讲下一段（比如下一页）时才调用 continue_speaking，当前段播完会自动接上。不要等用户说「继续」。",
     "用户要新做或修改一份 canvas、ppt、slides、幻灯片、演示、汇报或写下来的笔记时，先接一句，再调用 ask_text，把原话放进 task。不要自己写长文。",
     "讲已有的 canvas/ppt/幻灯片时，必要时先 read_file，每讲一页调用 show_stage(mode='canvas', path=..., page=N) 把右栏翻到对应页。",
     "用户要结束通话时，先说一句简短的再见，然后调用 end_call。道别说完就会挂断。",

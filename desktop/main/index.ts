@@ -32,6 +32,8 @@ import { BrowserPane } from "./browser.ts";
 import { loadSecrets, mergeSecrets, publicSettings, type SecretPatch, type SecretRecord } from "./secrets.ts";
 import { availableRealtimeSettings, mergeSettings } from "../../src/settings.ts";
 import { MossVoiceCatalog } from "./moss-voices.ts";
+import { GeminiCall } from "./gemini-call.ts";
+import { geminiSession } from "../../src/gemini-session.ts";
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -57,7 +59,8 @@ let updateChecksStarted = false;
 let updateNotice = "";
 const mossVoices = new MossVoiceCatalog();
 const experimentalMossEnabled = process.env.XIAOWANG_ENABLE_MOSS === "1";
-function settingsView() { return { ...publicSettings(secrets), experimentalMossEnabled }; }
+const geminiEnabled = true;
+function settingsView() { return { ...publicSettings(secrets), experimentalMossEnabled, geminiEnabled }; }
 function assertRealtimeAvailable(service: string): void {
   if (service === "moss" && !experimentalMossEnabled) throw new Error("MOSS Live 支持已暂时停用，请选择其他语音服务。");
 }
@@ -234,7 +237,7 @@ function libraryOf(slug: string) {
 }
 
 let jobs: JobQueue;
-let live: LiveCall | MossCall | null = null;
+let live: LiveCall | MossCall | GeminiCall | null = null;
 let liveSlug = "";
 let liveState: VoiceState | null = null;
 const stages = new StageRequests(note => send("stage", note));
@@ -252,7 +255,7 @@ async function ask(job: TaskJob, signal: AbortSignal, activity: (text: string) =
     env: envFromSecrets(), locale: localeOf(secrets.locale), signal,
     browser: browserFor(bot.slug),
     stage: { show: view => stages.show(bot.slug, view) },
-    onKickoff: kickoff => { jobs.enqueue({ botId: kickoff.botId, task: kickoff.task, channel: "system" }); },
+    onKickoff: kickoff => { jobs.enqueue({ botId: kickoff.botId, task: kickoff.task, channel: "system", display: "conversation" }); },
     onTextDelta(current, text) { send("delta", { slug: current.slug, jobId: job.id, text }); },
     onStep(step) {
       if (step.final) resultEventId = step.eventId;
@@ -274,7 +277,7 @@ function jobChanged(job: TaskJob): void {
   send("turn", { slug: bot.slug, busy, error: job.status === "failed" ? job.error : "" });
   publish();
   if (live && liveSlug === bot.slug) {
-    if (live instanceof MossCall) { live.jobChanged(job); return; }
+    if (live instanceof MossCall || live instanceof GeminiCall) { live.jobChanged(job); return; }
     live.updateContext(`job:${job.id}`, JSON.stringify({ id: job.id, task: job.task.slice(0, 400), status: job.status, activity: job.activity, error: job.error, artifacts: job.artifacts }));
     const latestVoice = jobs.list(bot.id).filter(item => item.channel === "voice").at(-1);
     if (latestVoice) live.updateContext("currentVoiceTask", voiceJobReceipt(latestVoice));
@@ -372,6 +375,22 @@ function registerIpc(): void {
   });
   ipcMain.handle("bot:rename", (_event, slug: string, name: string) => {
     runtime.store.renameBot(slug, name);
+    publish();
+  });
+  ipcMain.handle("bot:delete", async (event, slug: string) => {
+    if (event.sender !== window?.webContents) throw new Error("只能从应用主窗口删除 Bot。");
+    const bot = runtime.store.requireBot(slug);
+    if (bot.slug === "xiaowang") throw new Error("不能删除主助手。");
+    if (liveSlug === slug) live?.hangup();
+    // Let aborted tools finish their cleanup before revoking their workspace.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([jobs.prepareBotDeletion(bot.id), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("任务正在停止，请稍后重试删除。")), 10_000); })]);
+    } finally { clearTimeout(timer); }
+    await browser.clearBot(slug);
+    runtime.store.deleteBot(bot.id);
+    jobs.forgetBot(bot.id);
+    focusedFiles.delete(slug);
     publish();
   });
   ipcMain.handle("bot:avatar", (_event, slug: string, patch: { seed?: string; ink?: string }) => {
@@ -548,6 +567,8 @@ function registerIpc(): void {
 function attachDownloads(): void {
   const partition = session.fromPartition("persist:xiaowang");
   partition.on("will-download", (_event, item) => {
+    const owner = runtime.store.getBot(browser.ownerSlug || runtime.activeBot().slug);
+    if (!owner) { item.cancel(); return; }
     const filename = item.getFilename() || "download";
     const savePath = path.join(app.getPath("temp"), `xiaowang-${Date.now()}-${filename}`);
     item.setSavePath(savePath);
@@ -555,7 +576,8 @@ function attachDownloads(): void {
       if (state !== "completed") return;
       try {
         const bytes = readFileSync(savePath);
-        const bot = runtime.store.requireBot(browser.ownerSlug || runtime.activeBot().slug);
+        const bot = runtime.store.getBot(owner.id);
+        if (!bot) return;
         const added = runtime.store.addLibraryBytes(bot.id, filename, bytes);
         send("stage", { slug: bot.slug, mode: "file", id: added.ref.id, filename: added.ref.filename, page: 1 });
         send("download", { slug: bot.slug, id: added.ref.id, filename: added.ref.filename });
@@ -628,7 +650,7 @@ function startPreview(patch: SecretPatch): void {
   const key = keyForService(choice.service, draft.realtimeKey, draft.apiKey, draft.baseUrl);
   if (!key) throw new Error("先填写这一家的密钥。");
   const endpoint = realtimeEndpoint({ url: realtimeUrlOverride() || choice.url, model: choice.model, family: choice.service });
-  const session = endpoint.family === "moss" ? mossSession("仅试听音色，按要求读出一句话。", [], choice.voice) : endpoint.family === "doubao"
+  const session = endpoint.family === "gemini" ? geminiSession("仅试听音色，按要求读出一句话。", [], choice.voice, choice.model) : endpoint.family === "moss" ? mossSession("仅试听音色，按要求读出一句话。", [], choice.voice) : endpoint.family === "doubao"
     ? doubaoSession({ instructions: "试听音色。", tools: [], voice: choice.voice })
     : sessionUpdate({
       instructions: "试听音色。用户要求说一句时，只说那一句。",
@@ -652,7 +674,7 @@ function startCall(slug: string): void {
   const library = runtime.store.listLibrary(bot.id).map((ref) => ({ id: ref.id, filename: ref.filename }));
   const locale = localeOf(secrets.locale);
   const brief = formatVoiceBrief(projectVoiceBrief(bot, runtime.store.getEvents(bot.id), { library }), person, locale);
-  const instructions = realtimeInstructions(person, brief, locale);
+  const instructions = realtimeInstructions(person, brief, locale, endpoint.family === "gemini");
   const voiceTasks = new VoiceTasks(jobs, bot.id, randomUUID(), task => {
     const focus = focusedFiles.get(slug);
     let reference = null;
@@ -661,7 +683,7 @@ function startCall(slug: string): void {
       + (reference ? `\n\n当前阅读的原文（上下文资料）：${JSON.stringify({ id: reference.id, filename: reference.filename })}。用户明确提到另一份资料时以用户要求为准。` : "");
   }, () => live?.id);
   const tools = voiceTools(toolSchemas(), locale);
-  const session = endpoint.family === "moss" ? mossSession(brief, tools, choice.voice) : endpoint.family === "doubao"
+  const session = endpoint.family === "gemini" ? geminiSession(instructions, tools, choice.voice, choice.model) : endpoint.family === "moss" ? mossSession(brief, tools, choice.voice) : endpoint.family === "doubao"
     ? doubaoSession({ instructions, tools, voice: choice.voice })
     : sessionUpdate({
       instructions,
@@ -675,7 +697,7 @@ function startCall(slug: string): void {
     onTranscript(who, text) {
       if (who !== "user") return;
       if (endpoint.family === "moss") return;
-      const accepted = voiceTasks.userText(text);
+      const accepted = voiceTasks.userText(text, endpoint.family !== "gemini");
       const job = accepted || voiceTasks.latest();
       live?.updateContext("currentVoiceTask", job ? voiceJobReceipt(job) : "没有已受理的后台任务。需要分析、梳理或调研时调用 delegate_task；口头承诺不代表已经开始。");
     },
@@ -719,7 +741,7 @@ function startCall(slug: string): void {
       const outcome = await executeTool(name, input, {
         store: runtime.store,
         bot,
-        enqueueKickoff: job => { jobs.enqueue({ botId: job.botId, task: job.task, channel: "system" }); },
+        enqueueKickoff: job => { jobs.enqueue({ botId: job.botId, task: job.task, channel: "system", display: "conversation" }); },
         env: envFromSecrets(),
         browser: browserFor(slug),
         signal,
@@ -755,8 +777,7 @@ function openCall(
   liveState = null;
   const initial = slug ? runtime.store.getEvents(runtime.store.requireBot(slug).id).findLast(item => item.event.type === "presentation")?.event : undefined;
   let previousPresentation = "";
-  let call: LiveCall | MossCall;
-  const Call = session.action === "moss.session" ? MossCall : LiveCall;
+  let call: LiveCall | MossCall | GeminiCall;
   const handlers: MossHandlers = {
     onState(state) {
       liveState = state;
@@ -802,7 +823,10 @@ function openCall(
     delegate: extra?.delegate,
     cancelDelegation: extra?.cancelDelegation,
   };
-  call = new Call(url, key, session, handlers, undefined, previewText, initial?.type === "presentation" ? initial.state : undefined);
+  const initialPresentation = initial?.type === "presentation" ? initial.state : undefined;
+  call = session.type === "gemini.session" ? new GeminiCall(url, key, session, handlers, undefined, previewText, initialPresentation)
+    : session.action === "moss.session" ? new MossCall(url, key, session, handlers, undefined, previewText, initialPresentation)
+    : new LiveCall(url, key, session, handlers, undefined, previewText, initialPresentation);
   live = call;
   call.start();
 }

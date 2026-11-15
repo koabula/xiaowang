@@ -64,6 +64,11 @@ export function installPreviewBridge(): void {
       state = { ...state, bots: state.bots.map((bot) => bot.slug === slug ? { ...bot, name } : bot) };
       publish();
     },
+    async deleteBot(slug) {
+      if (slug === "xiaowang") throw new Error("不能删除主助手。");
+      state = { ...state, bots: state.bots.filter(bot => bot.slug !== slug), activeSlug: state.activeSlug === slug ? "xiaowang" : state.activeSlug };
+      publish();
+    },
     async setAvatar(slug, patch) {
       state = {
         ...state,

@@ -13,6 +13,8 @@ const terminal = new Set(["succeeded", "failed", "cancelled", "interrupted"]);
 export class JobQueue {
   private readonly records = new Map<string, TaskJob>();
   private readonly running = new Map<string, AbortController>();
+  private readonly draining = new Map<string, Promise<void>>();
+  private readonly removing = new Set<string>();
   private readonly waiters = new Map<string, Array<(job: TaskJob) => void>>();
   private stopped = false;
   private enabled = false;
@@ -35,6 +37,7 @@ export class JobQueue {
 
   enqueue(input: { botId: string; task: string; channel?: Channel; notify?: TaskJob["notify"]; sourceCallId?: string; display?: TaskJob["display"]; title?: string; originCallId?: string }): TaskJob {
     if (this.stopped) throw new Error("任务队列正在关闭。");
+    if (this.removing.has(input.botId)) throw new Error("这个 Bot 正在删除。");
     this.store.requireBot(input.botId);
     const task = input.task.trim();
     if (!task || task.length > 40_000) throw new Error("任务内容不能为空，且不能超过 40000 字。");
@@ -85,6 +88,7 @@ export class JobQueue {
 
   retry(id: string): TaskJob {
     const job = this.get(id);
+    if (this.removing.has(job.botId)) throw new Error("这个 Bot 正在删除。");
     if (!terminal.has(job.status) || job.status === "succeeded") throw new Error("只能重试未完成的任务。");
     this.records.delete(id);
     this.change(job, { status: "queued", error: "", activity: "", result: "", resultEventId: undefined, queuedAt: new Date().toISOString() });
@@ -98,6 +102,17 @@ export class JobQueue {
       controller.abort(new DOMException("应用正在关闭", "AbortError"));
       this.change(this.get(id), { status: "interrupted", activity: "", error: "应用关闭时任务仍在进行。检查已有输出后，可手动重试。" });
     }
+  }
+
+  async prepareBotDeletion(botId: string): Promise<void> {
+    this.removing.add(botId);
+    for (const job of this.list(botId)) if (!terminal.has(job.status)) this.cancel(job.id);
+    await Promise.all(this.list(botId).map(job => this.draining.get(job.id)));
+  }
+
+  forgetBot(botId: string): void {
+    if (this.store.getBot(botId)) throw new Error("请先删除 Bot，再清理任务索引。");
+    for (const job of this.list(botId)) this.records.delete(job.id);
   }
 
   private change(job: TaskJob, patch: Partial<TaskJob>): void {
@@ -116,18 +131,19 @@ export class JobQueue {
     const occupied = new Set([...this.running.keys()].map(id => this.get(id).botId));
     for (const job of this.records.values()) {
       if (this.running.size >= this.concurrency) break;
-      if (job.status !== "queued" || occupied.has(job.botId)) continue;
+      if (job.status !== "queued" || occupied.has(job.botId) || this.removing.has(job.botId)) continue;
       occupied.add(job.botId);
       const controller = new AbortController();
       this.running.set(job.id, controller);
       this.change(job, { status: "running", attempts: job.attempts + 1 });
-      void this.run({ ...job }, controller.signal, activity => {
+      const done = this.run({ ...job }, controller.signal, activity => {
         if (!controller.signal.aborted && !this.stopped && activity !== job.activity) this.change(job, { activity: activity.slice(0, 240) });
       }).then(result => {
         if (!controller.signal.aborted && !this.stopped) this.change(job, { status: "succeeded", result: result.text, resultEventId: result.resultEventId, artifacts: result.artifacts ?? [], activity: "" });
       }).catch((error: unknown) => {
         if (!controller.signal.aborted && !this.stopped) this.change(job, { status: "failed", error: error instanceof Error ? error.message : String(error), activity: "" });
-      }).finally(() => { this.running.delete(job.id); this.pump(); });
+      }).finally(() => { this.running.delete(job.id); this.draining.delete(job.id); this.pump(); });
+      this.draining.set(job.id, done);
     }
   }
 }
