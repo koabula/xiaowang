@@ -4,6 +4,8 @@ dist/
 out/
 release/
 /demo/
+/scripts/generate-demo-tts.mjs
+/scripts/record-attention-demo.mjs
 desktop/dist/
 *.tsbuildinfo
 .xiaowang/
