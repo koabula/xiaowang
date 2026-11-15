@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, AudioLines, Check, ChevronDown, ChevronRight, ChevronUp, Download, LoaderCircle, ExternalLink, Eye, FileText, Frame, Globe, Maximize2, MessageSquareText, Mic, MicOff, Minimize2, MousePointer2, PanelRight, Phone, PhoneOff, Play, Plus, RefreshCw, Search, Settings, Square, X } from "lucide-react";
 import * as Select from "@radix-ui/react-select";
 import Markdown from "react-markdown";
@@ -77,7 +77,15 @@ export function App() {
     position => window.xiaowang.callPosition(position),
     position => window.xiaowang.callChunkPlayed(position),
   ));
-  const [toast, setToast] = useState("");
+  const [toastNotice, setToastNotice] = useState<{ text: string } | null>(null);
+  const toast = toastNotice?.text ?? "";
+  // A fresh notice also restarts the timer when its text matches the previous one.
+  const setToast = useCallback((text: string) => setToastNotice(text ? { text } : null), []);
+  useEffect(() => {
+    if (!toastNotice) return;
+    const timer = setTimeout(() => setToastNotice(current => current === toastNotice ? null : current), 3000);
+    return () => clearTimeout(timer);
+  }, [toastNotice]);
   const [rightWidth, setRightWidth] = useState(420);
   const [leftWidth, setLeftWidth] = useState(252);
   const [canvasWide, setCanvasWide] = useState(false);
@@ -626,7 +634,7 @@ export function App() {
         setBusyBySlug(prev => { const next = { ...prev }; delete next[slug]; return next; });
         setActivityBySlug(prev => { const next = { ...prev }; delete next[slug]; return next; });
       }} /> : null}
-      {toast ? <button className="toast" type="button" onClick={() => setToast("")}>{toast}</button> : null}
+      {toast ? <button className="toast" type="button" aria-live="polite" onClick={() => setToast("")}>{toast}</button> : null}
     </div>
   );
 }
