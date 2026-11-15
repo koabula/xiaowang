@@ -179,7 +179,7 @@ export function resolveRealtime(draft: RealtimeDraft = {}): ResolvedRealtime {
     : (service === "qwen" && /\.maas\./i.test(draft.url ?? "") ? "qwen3.8-omni-flash-realtime" : "");
   const model = models.some((item) => item.id === hinted) ? (hinted as string) : (models[0]?.id ?? "");
   const voices = voicesFor(service, model);
-  const voice = voices.some((item) => item.id === draft.voice) ? (draft.voice as string) : (voices[0]?.id ?? "");
+  const voice = (service === "moss" && draft.voice?.trim()) || (voices.some((item) => item.id === draft.voice) ? (draft.voice as string) : (voices[0]?.id ?? ""));
   const region = regionOf(draft);
   const workspace = (draft.workspace?.trim() || workspaceOf(draft.url ?? "")).trim();
   return { service, model, voice, region, workspace, url: urlFor(service, model, region, workspace) };
@@ -199,8 +199,8 @@ export function keyForService(service: RealtimeServiceId, realtimeKey: string, t
 }
 
 function serviceOf(draft: RealtimeDraft): RealtimeServiceId {
-  if (draft.service === "moss" || /api\.mosi\.cn/i.test(draft.url ?? "")) return "moss";
-  if (draft.service === "qwen" || draft.service === "openai" || draft.service === "doubao") return draft.service;
+  if (draft.service === "moss" || draft.service === "qwen" || draft.service === "openai" || draft.service === "doubao") return draft.service;
+  if (/api\.mosi\.cn/i.test(draft.url ?? "")) return "moss";
   const url = draft.url ?? "";
   if (/\/api\/v3\/duplex\/realtime\/dialogue/i.test(url)) return "doubao";
   if (/api\.openai\.com/i.test(url)) return "openai";

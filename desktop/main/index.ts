@@ -30,6 +30,8 @@ import { listCanvasPages, resolveInsideWorkspace } from "../../src/workspace.ts"
 import { browseBotFiles, type BrowseOptions } from "../../src/file-browser.ts";
 import { BrowserPane } from "./browser.ts";
 import { loadSecrets, mergeSecrets, publicSettings, type SecretPatch, type SecretRecord } from "./secrets.ts";
+import { mergeSettings } from "../../src/settings.ts";
+import { MossVoiceCatalog } from "./moss-voices.ts";
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -53,9 +55,13 @@ let updates: UpdateController;
 let updateTimers: Array<ReturnType<typeof setInterval>> = [];
 let updateChecksStarted = false;
 let updateNotice = "";
+const mossVoices = new MossVoiceCatalog();
 
 function canInstallUpdate(): boolean {
-  return !settingsDirty && !live && !(jobs?.list() ?? []).some(job => job.status === "queued" || job.status === "running");
+  return updateWaitReasons().length === 0;
+}
+function updateWaitReasons(): string[] {
+  return [...(settingsDirty ? ["settings"] : []), ...(live ? ["call"] : []), ...((jobs?.list() ?? []).some(job => job.status === "queued" || job.status === "running") ? ["jobs"] : [])];
 }
 function startUpdateChecks(): void {
   if (updateChecksStarted || process.env.XIAOWANG_DISABLE_UPDATES === "1" || (!app.isPackaged && !process.env.XIAOWANG_UPDATE_TEST_FEED)) return;
@@ -333,7 +339,7 @@ function registerIpc(): void {
   });
   ipcMain.handle("update:check", async event => {
     if (event.sender !== window?.webContents) throw new Error("只能从应用主窗口检查更新。");
-    await updates.check(); return updates.snapshot();
+    await updates.check(true); return updates.snapshot();
   });
   ipcMain.handle("update:download", async event => {
     if (event.sender !== window?.webContents) throw new Error("只能从应用主窗口更新应用。");
@@ -475,25 +481,15 @@ function registerIpc(): void {
     return shell.openExternal(realtimeKeyPage(typeof service === "string" ? service : "", typeof region === "string" ? region : ""));
   });
   ipcMain.handle("settings:save", (_event, patch: SecretPatch) => {
-    const choice = resolveRealtime({
-      service: patch.realtimeService,
-      model: patch.realtimeModel,
-      voice: patch.realtimeVoice,
-      region: patch.realtimeRegion,
-      workspace: patch.realtimeWorkspace,
-      url: secrets.realtimeUrl,
-    });
-    secrets = mergeSecrets(secrets, {
-      ...patch,
-      realtimeService: choice.service,
-      realtimeModel: choice.model,
-      realtimeVoice: choice.voice,
-      realtimeRegion: choice.region,
-      realtimeWorkspace: choice.service === "qwen" ? choice.workspace : "",
-      realtimeUrl: choice.url,
-    });
+    secrets = mergeSecrets(secrets, patch);
     publish();
     return publicSettings(secrets);
+  });
+  ipcMain.handle("settings:voices", async (event, patch: SecretPatch, refresh: boolean) => {
+    if (event.sender !== window?.webContents) throw new Error("只能从应用设置读取音色。");
+    const draft = mergeSettings(secrets, patch);
+    if (draft.realtimeService !== "moss") return [];
+    return mossVoices.list(draft.realtimeKey, refresh === true);
   });
   ipcMain.handle("settings:dirty", (_event, dirty: boolean) => { settingsDirty = dirty === true; });
   ipcMain.handle("settings:finishClose", (_event, intent: "window" | "quit") => {
@@ -612,17 +608,12 @@ function realtimeChoice() {
 
 function startPreview(patch: SecretPatch): void {
   if (live) throw new Error("正在通话。挂断后再试听。");
-  const choice = resolveRealtime({
-    service: patch.realtimeService,
-    model: patch.realtimeModel,
-    voice: patch.realtimeVoice,
-    region: patch.realtimeRegion,
-    workspace: patch.realtimeWorkspace,
-  });
+  const draft = mergeSettings(secrets, patch);
+  const choice = resolveRealtime({ service: draft.realtimeService, model: draft.realtimeModel, voice: draft.realtimeVoice, region: draft.realtimeRegion, workspace: draft.realtimeWorkspace });
   if (!choice.url) throw new Error("先填写通义千问的工作空间。");
-  const key = patch.realtimeKey?.trim() || keyForService(choice.service, secrets.realtimeKey, secrets.apiKey, secrets.baseUrl);
+  const key = keyForService(choice.service, draft.realtimeKey, draft.apiKey, draft.baseUrl);
   if (!key) throw new Error("先填写这一家的密钥。");
-  const endpoint = realtimeEndpoint({ url: choice.url, model: choice.model, family: choice.service });
+  const endpoint = realtimeEndpoint({ url: process.env.XIAOWANG_REALTIME_URL?.trim() || choice.url, model: choice.model, family: choice.service });
   const session = endpoint.family === "moss" ? mossSession("仅试听音色，按要求读出一句话。", [], choice.voice) : endpoint.family === "doubao"
     ? doubaoSession({ instructions: "试听音色。", tools: [], voice: choice.voice })
     : sessionUpdate({
@@ -824,11 +815,13 @@ app.whenReady().then(async () => {
   secrets = loadSecrets();
   try { const outcome = JSON.parse(readFileSync(path.join(app.getPath("userData"), "update-outcome.json"), "utf8")); if (typeof outcome.error === "string") updateNotice = outcome.error.slice(0, 180); } catch { /* No failed installation to report. */ }
   // Environment configuration stays in memory and never rewrites stored keys.
-  const overrides: Array<[keyof SecretRecord, string]> = [
+  const overrides: Array<[Exclude<keyof SecretPatch, "realtimeProfiles">, string]> = [
     ["model", "XIAOWANG_MODEL"], ["baseUrl", "XIAOWANG_BASE_URL"], ["apiStyle", "XIAOWANG_API_STYLE"], ["apiKey", "XIAOWANG_API_KEY"],
     ["realtimeService", "XIAOWANG_REALTIME_SERVICE"], ["realtimeModel", "XIAOWANG_REALTIME_MODEL"], ["realtimeKey", "XIAOWANG_REALTIME_KEY"],
   ];
-  for (const [field, variable] of overrides) if (process.env[variable]?.trim()) secrets[field] = process.env[variable]!.trim();
+  const environmentPatch: SecretPatch = {};
+  for (const [field, variable] of overrides) if (process.env[variable]?.trim()) environmentPatch[field] = process.env[variable]!.trim();
+  secrets = mergeSettings(secrets, environmentPatch);
   attachDownloads();
   browser = new BrowserPane(
     () => runtime.activeBot().slug,
@@ -843,7 +836,7 @@ app.whenReady().then(async () => {
     },
   );
   jobs = new JobQueue(runtime.store, ask, jobChanged);
-  updates = new UpdateController(app.getVersion(), createUpdateEngine(canInstallUpdate), state => send("update", state), canInstallUpdate);
+  updates = new UpdateController(app.getVersion(), createUpdateEngine(canInstallUpdate), state => send("update", state), canInstallUpdate, updateWaitReasons);
   registerIpc();
   await createWindow();
   app.on("activate", () => {

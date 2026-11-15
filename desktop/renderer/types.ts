@@ -4,6 +4,8 @@ import type { TaskJob } from "../../src/types.ts";
 import type { AudioIdentity, InterruptionReceipt, PlaybackInterruption, PlaybackPosition, VoiceState } from "../main/call.ts";
 import type { StageReceipt } from "../../src/stage.ts";
 import type { BrowseOptions, BrowseResult } from "../../src/file-browser.ts";
+import type { VoiceProfilePatch, VoiceProfileView } from "../../src/settings.ts";
+import type { RealtimeServiceId, RealtimeVoiceChoice } from "../../src/realtime-catalog.ts";
 export type { TaskJob, VoiceState };
 
 declare global {
@@ -39,6 +41,7 @@ declare global {
       finishSettingsClose: (intent: "window" | "quit") => Promise<void>;
       onSettingsClose: (callback: (intent: "window" | "quit") => void) => () => void;
       listModels: (patch: SettingsPatch) => Promise<string[]>;
+      listVoices: (patch: SettingsPatch, refresh?: boolean) => Promise<RealtimeVoiceChoice[]>;
       checkSettings: (patch: SettingsPatch) => Promise<string>;
       openKeyPage: (service: string, region: string) => Promise<void>;
       browserBounds: (bounds: Bounds | null) => Promise<void>;
@@ -114,6 +117,7 @@ export interface CanvasPage {
 }
 
 export interface SettingsView {
+  realtimeProfiles?: Partial<Record<RealtimeServiceId, VoiceProfileView>>;
   model: string;
   baseUrl: string;
   apiStyle: string;
@@ -130,6 +134,7 @@ export interface SettingsView {
 }
 
 export interface SettingsPatch {
+  realtimeProfiles?: Partial<Record<RealtimeServiceId, VoiceProfilePatch>>;
   model?: string;
   baseUrl?: string;
   apiStyle?: string;

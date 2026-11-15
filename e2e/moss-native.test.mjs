@@ -89,6 +89,7 @@ test('desktop: MOSS native audio, interruption, tools, durable delegation, spoke
   const state = () => page.evaluate(() => window.xiaowang.getState());
   const energy = () => page.evaluate(() => { const meter = window.meters.at(-1); if (!meter) return 0; const data = new Float32Array(meter.fftSize); meter.getFloatTimeDomainData(data); return Math.sqrt(data.reduce((sum, value) => sum + value * value, 0) / data.length); });
   await page.evaluate(() => window.xiaowang.callStart('xiaowang')); await until(() => mic > 0, 'Microphone did not reach native binary transport');
+  emit('response.interrupted', { reason: 'no-associated-output' });
   assert.ok(!configurations[0].tools.some(tool => ['delegate_task', 'ask_text'].includes(tool.name)));
   emit('input.transcript.updated', { text: '你' }); emit('input.transcript.done', { text: '你好', turn: 'hello' });
   const long = speak('old', '我在，随时可以交流。', 2200); const start = Date.now();
@@ -96,7 +97,7 @@ test('desktop: MOSS native audio, interruption, tools, durable delegation, spoke
   assert.equal(events.filter(event => event.action === 'playback.completed' && event.run_id === 'old').length, 0);
   const micBefore = mic; await sleep(100); assert.ok(mic > micBefore, 'Duplex microphone must continue during playback');
   emit('input.speech.started'); await sleep(60); assert.ok(await energy() > .05, 'Speech-start is not a MOSS stop decision');
-  emit('response.audio.stop', long); emit('response.interrupted', long);
+  emit('response.audio.stop', long); emit('response.interrupted', { reason: 'user-input' });
   const stop = await until(() => events.find(event => event.action === 'playback.stopped' && event.run_id === 'old'));
   assert.ok(stop.played_audio_ms > 0 && stop.played_audio_ms < 2200);
   await until(async () => await energy() < .001, 'Old audio continued after stop');

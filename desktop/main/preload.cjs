@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld("xiaowang", {
   finishSettingsClose: (intent) => ipcRenderer.invoke("settings:finishClose", intent),
   onSettingsClose: (callback) => listeners("settings:closeRequested", callback),
   listModels: (patch) => ipcRenderer.invoke("settings:models", patch),
+  listVoices: (patch, refresh) => ipcRenderer.invoke("settings:voices", patch, refresh),
   checkSettings: (patch) => ipcRenderer.invoke("settings:check", patch),
   openKeyPage: (service, region) => ipcRenderer.invoke("link:key", service, region),
   browserBounds: (bounds) => ipcRenderer.invoke("browser:bounds", bounds),

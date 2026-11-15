@@ -55,6 +55,12 @@ The native adapter is `desktop/main/moss-call.ts`; `src/moss-realtime.ts` builds
 
 MOSS implementation scope is voice, foreground tools, native background delegation, and result speech. Camera/screen streaming and user-scoped cloud memory are not enabled. If the original remote session cannot be restored, the call reports an error; durable jobs and saved results remain available for a new call.
 
+`response.interrupted` allows missing run/turn identifiers. The adapter correlates a known stop first, then a unique matching active reply. An ambiguous event does not invent an identity or end the socket. Audio context and other mandatory identity-bearing events remain strict. Tests cover anonymous/partial interruptions and an old stop completing after a newer reply starts.
+
+Voice profiles in `src/settings.ts` isolate credentials and options by provider. Legacy single-key settings migrate to their original provider only. `mergeSettings` is pure for unsaved previews; disk saves use OS encryption when available and a same-directory atomic replacement. Renderer settings contain only credential hints. Blank keys retain their own saved profile; removal is explicit. All edited provider drafts participate in save/discard and unsaved-change protection, including inactive providers.
+
+`desktop/main/moss-voices.ts` retrieves every page from `/v1/audio/voices`, deduplicates IDs, detects cursor loops, and caches successful catalogs per credential fingerprint. Failed refreshes do not overwrite cached data. `XIAOWANG_MOSS_VOICES_URL` is a loopback-only test override. Real keys remain in main; voice choices and names cross IPC. Dynamic MOSS voice IDs are preserved through settings normalization and call setup.
+
 ### Tests
 
 ```sh

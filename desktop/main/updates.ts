@@ -62,14 +62,14 @@ export function createUpdateEngine(idle: () => boolean): UpdateEngine {
   updater.on('update-downloaded', event => { downloadedFile = event.downloadedFile; });
   return {
     async check() {
-      if (!app.isPackaged && !override) return null;
+      if (!app.isPackaged && !override) throw new Error('开发模式不检查安装包更新，请使用已安装的应用。');
       const result = await updater.checkForUpdates();
       latest = result?.isUpdateAvailable ? result.updateInfo : undefined;
       return latest?.version ?? null;
     },
     async download(progress) {
       downloadedFile = undefined;
-      const handler = (value: { percent: number }) => progress(value.percent);
+      const handler = (value: { percent: number; transferred?: number; total?: number; bytesPerSecond?: number }) => progress(value.percent, value);
       updater.on('download-progress', handler);
       try {
         const files = await updater.downloadUpdate();

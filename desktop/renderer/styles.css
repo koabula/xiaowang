@@ -774,3 +774,45 @@ dialog::backdrop { background: #15131b66; backdrop-filter: blur(5px); }
 .update-button:disabled { cursor: default; opacity: .7; }
 .app-version { color: var(--muted); font-size: 12px; white-space: nowrap; }
 @media (max-width: 900px) { .rail footer { gap: 4px; } .rail footer .update-button { width: 28px; height: 28px; flex-basis: 28px; } }
+
+.update-button.has-progress { background: conic-gradient(var(--accent) var(--update-angle), var(--line) 0); border: 0; position: relative; opacity: 1; }
+.update-button.has-progress::before { content: ""; position: absolute; inset: 3px; border-radius: inherit; background: var(--surface); }
+.update-button.has-progress svg { z-index: 1; }
+.voice-picker { display: grid; gap: 7px; min-width: 0; width: 100%; }
+.voice-picker .with-action input { min-width: 0; }
+.voice-picker select { width: 100%; min-width: 0; text-overflow: ellipsis; }
+.voice-picker small { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.clear-voice-key { justify-self: start; font-size: 12px; }
+
+.settings-modal form { width: min(1000px, calc(100vw - 40px)); max-height: calc(100dvh - 32px); padding: 20px 24px 16px; gap: 18px; }
+.settings-modal .columns { gap: 32px; }
+.settings-modal .columns > section { gap: 12px; min-width: 0; }
+.settings-modal button:disabled { cursor: default; opacity: .45; }
+.settings-modal button:focus-visible, .settings-modal select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-modal .voice-picker .with-action > button { height: 34px; padding: 0 10px; font-size: 12px; border: 1px solid var(--line); background: var(--surface); border-radius: 9px; white-space: nowrap; }
+.settings-modal .voice-picker input { height: 34px; font-size: 13px; border-radius: 9px; }
+.settings-modal .voice-key-heading { display: flex; align-items: center; justify-content: space-between; min-height: 20px; gap: 8px; }
+.settings-modal .clear-voice-key { padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; }
+.settings-modal .clear-voice-key:hover { color: var(--ink); text-decoration: underline; }
+.settings-modal .app-version { padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; font-size: 11px; }
+.settings-modal .voice-picker { gap: 6px; }
+.settings-modal .voice-picker select { display: block; appearance: auto; }
+@media (max-height: 760px) {
+  .settings-modal form { padding: 16px 20px 14px; gap: 14px; }
+  .settings-modal .columns > section { gap: 9px; }
+  .settings-modal input, .settings-modal .field, .settings-modal .row button, .settings-modal .with-action > button { height: 36px; font-size: 13px; border-radius: 10px; }
+  .settings-modal label, .settings-modal .field-block { gap: 4px; font-size: 12px; }
+  .settings-modal .voice-picker input, .settings-modal .voice-picker .with-action > button { height: 30px; font-size: 12px; }
+}
+
+.settings-modal .update-check { display: inline-flex; align-items: center; justify-content: center; gap: 5px; width: auto; height: 30px; padding: 0 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); color: var(--muted); font: inherit; font-size: 11px; white-space: nowrap; cursor: pointer; }
+.settings-modal .update-check:hover:not(:disabled) { background: var(--surface); border-color: var(--faint); color: var(--ink); }
+.settings-modal .update-progress { padding: 9px 12px; border-radius: 11px; background: var(--surface-soft); display: grid; gap: 5px; }
+.update-progress-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.update-progress p { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.update-progress small { font-size: 11px; color: var(--muted); }
+.update-progress progress { width: 100%; height: 7px; accent-color: var(--accent); }
+.settings-modal .update-download { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; padding: 5px 10px; min-height: 30px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; }
+.settings-modal .update-download:hover { border-color: var(--faint); }
+.settings-modal .with-action > .voice-preview { width: 36px; flex: 0 0 36px; padding: 0; justify-content: center; border: 1px solid var(--line); background: var(--surface-soft); }
+.settings-modal .with-action > .voice-preview:hover { background: var(--surface); border-color: var(--faint); }

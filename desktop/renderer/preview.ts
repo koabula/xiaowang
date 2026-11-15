@@ -112,6 +112,7 @@ export function installPreviewBridge(): void {
     async stageAck() { return true; },
     async stagePosition() {},
     async settingsDirty() {},
+    async listVoices() { return []; },
     async finishSettingsClose() {},
     onSettingsClose() { return () => {}; },
     callPosition() {},

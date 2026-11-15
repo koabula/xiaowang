@@ -22,7 +22,7 @@ Choose an installer from the [latest GitHub Release](https://github.com/koabula/
 | Windows | `x64` | `.exe` |
 | Linux | `x64` | `.AppImage` or `.deb` |
 
-Settings shows the installed version. When a newer release is available, a circular download icon appears beside Settings. Click it to download, verify, install, and restart when idle. Calls, background work, and unsaved settings defer installation. Versions 0.1.4 and earlier need one manual installation of a version that includes the updater. Unsigned installers may trigger an operating-system security prompt.
+Settings shows the installed version, with a **Check for updates** button beside it. Installed builds also check on startup and every six hours. When a newer release is available, a circular download icon appears beside Settings. Click it to see download progress, followed by verification, installation and restart. Calls, background work, and unsaved settings defer installation; the UI explains what it is waiting for. Versions 0.1.4 and earlier need one manual installation of a version that includes the updater. Unsigned installers may trigger an operating-system security prompt. UI descriptions follow the current main branch; consult release notes for features in published installers.
 
 **MOSS Live is supported from v0.1.6.** After upgrading, select it in Settings and enter its voice key. Your existing background text model configuration can stay in place.
 
@@ -32,7 +32,9 @@ Settings shows the installed version. When a newer release is available, a circu
 2. For calls, separately choose a **voice** service, model, and voice, and enter that provider's key. Voice is optional; text and voice can use different providers.
 3. Create a topic workspace and add a paper or document, or start by typing a question. Click the **voice button on the right of the message input** to begin a call.
 
-The current source supports OpenAI, Qwen, Doubao full-duplex, and MOSS Live. For MOSS Live, select `moss-live-1.0`, enter a [MOSS platform key](https://platform.moss.cn/app/api-keys/), and choose Nuannuan or Mumu. Voice credentials are separate from the text model's credentials; delegated work still runs through your configured background model. See the [development notes](DEVELOPMENT.md#moss-live) for integration details.
+The current source supports OpenAI, Qwen, Doubao full-duplex, and MOSS Live. Each voice provider keeps its own key, model and voice, restored when you switch back. A blank key retains that provider's saved key; use the explicit removal control to clear it. Voice credentials are separate from the text model's credentials, and delegated work still runs through your configured background model.
+
+For MOSS Live, select `moss-live-1.0` and enter a [MOSS platform key](https://platform.moss.cn/app/api-keys/). Settings loads all available voices for that account, with search, refresh and preview controls. A failed refresh preserves the selected voice. See the [development notes](DEVELOPMENT.md#moss-live) for integration details.
 
 ## Work with XiaoWang
 

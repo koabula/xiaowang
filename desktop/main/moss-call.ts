@@ -46,6 +46,7 @@ export class MossCall {
   private context: { reply: Reply; chunk: string } | null = null;
   private readonly replies = new Map<string, Reply>();
   private readonly interruptions = new Map<number, Reply>();
+  private pendingStopped: Reply[] = [];
   private readonly delegates = new Map<string, string>();
   private readonly cancelled = new Set<string>();
   private readonly terminalAttempts = new Map<string, number>();
@@ -89,6 +90,7 @@ export class MossCall {
     const epoch = ++this.connection;
     this.attached = this.ready = this.configured = this.media = this.voice = false;
     this.context = null;
+    this.pendingStopped = [];
     const socket = this.connect(this.url, { Authorization: `Bearer ${this.key}` }); this.socket = socket;
     this.timer = setTimeout(() => this.hangup("MOSS 连接或配置超时。"), 15000);
     socket.addEventListener("open", () => {
@@ -163,10 +165,25 @@ export class MossCall {
       this.context = { reply: this.reply(data), chunk: text(data.chunk_id) };
       if (!this.context.chunk) throw new Error("音频缺少 chunk_id");
     } else if (action === "response.audio.done") { const reply = this.reply(data); reply.done = true; this.drain(reply);
-    } else if (action === "response.audio.stop" || action === "response.interrupted") {
-      this.stop(this.reply(data)); this.state("listening");
+    } else if (action === "response.audio.stop") {
+      const reply = this.reply(data);
+      if (!reply.stopped && !reply.completed) this.pendingStopped = [...this.pendingStopped, reply].slice(-16);
+      this.stop(reply); this.state("listening");
+    } else if (action === "response.interrupted") {
+      const run = text(data.run_id), turn = text(data.turn_id);
+      const matches = (reply: Reply) => (!run || reply.run === run) && (!turn || reply.turn === turn);
+      const stopped = this.pendingStopped.find(matches);
+      const candidates = [...this.replies.values()].filter(reply => !reply.completed && !reply.stopped && matches(reply));
+      const reply = run && turn ? this.reply(data) : stopped ?? (candidates.length === 1 ? candidates[0] : undefined);
+      if (reply) {
+        this.pendingStopped = this.pendingStopped.filter(item => item !== reply);
+        if (text(data.text)) this.line(this.outputId({ run_id: reply.run, turn_id: reply.turn }), "assistant", text(data.text), false);
+        this.stop(reply);
+      } else console.warn("MOSS: unassociated interruption", { action, fields: Object.keys(data) });
+      if (this.ready && ![...this.replies.values()].some(item => !item.completed && !item.stopped)) this.state("listening");
     } else if (action === "response.ended") {
       const reply = this.reply(data);
+      this.pendingStopped = this.pendingStopped.filter(item => item !== reply);
       if (data.status !== "completed") this.stop(reply);
       else if (!reply.chunks.length) reply.completed = true;
       if (reply.completed || reply.stopped || !reply.chunks.length) this.state("listening");

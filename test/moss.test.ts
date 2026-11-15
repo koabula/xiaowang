@@ -179,3 +179,20 @@ test("MOSS voice preview ends only after actual audio playback", t => {
   f.speak(); f.socket.emit("response.audio.done", { run_id: "run", turn_id: "turn" }); assert.equal(f.call.isClosed(), false);
   const chunk = f.audio[0]!; f.call.noteChunkPlayed({ ...chunk.identity, serial: chunk.serial, playedMs: 100 }); assert.equal(f.call.isClosed(), true);
 });
+
+test("MOSS identifier-free interruption during setup does not close the session", t => {
+  const f = fixture(t); f.socket.emit("response.interrupted", { reason: "playback_failed" }); assert.equal(f.call.isClosed(), false);
+  f.configure(); f.speak(); assert.equal(f.audio.length, 1);
+});
+test("MOSS optional interruption IDs resolve a unique reply and preserve a queued newer reply", t => {
+  const f = fixture(t); f.configure(); f.speak("old", "old-turn");
+  f.socket.emit("response.audio.stop", { run_id: "old", turn_id: "old-turn" }); f.speak("new", "new-turn");
+  f.socket.emit("response.interrupted", { reason: "user_input" });
+  assert.equal(f.call.isClosed(), false); assert.equal(f.interrupts.length, 1, "Anonymous completion of old stop must not interrupt the new reply");
+  f.socket.emit("response.interrupted", { run_id: "new" }); assert.equal(f.interrupts.length, 2);
+});
+test("MOSS ambiguous interruption cannot guess a reply or invent playback identities", t => {
+  const f = fixture(t); f.configure(); f.speak("a", "a"); f.speak("b", "b");
+  f.socket.emit("response.interrupted", { reason: "unknown" });
+  assert.equal(f.call.isClosed(), false); assert.equal(f.interrupts.length, 0); assert.equal(f.socket.events("playback.stopped").length, 0);
+});

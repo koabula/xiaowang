@@ -17,6 +17,9 @@ const DocumentReader = lazy(() => import("./document-reader.tsx").then(module =>
 import { withCanvasPager } from "./canvas-pager.ts";
 import { copyFor, localeOf, type Copy, type Locale } from "./copy.ts";
 import { REALTIME_SERVICES, modelsFor, resolveRealtime, voicesFor, type RealtimeRegion, type RealtimeServiceId } from "../../src/realtime-catalog.ts";
+import { UpdateCheckButton, UpdateProgress, updateDescription } from "./update-panel.tsx";
+import { MossVoicePicker } from "./voice-picker.tsx";
+import type { VoiceProfilePatch } from "../../src/settings.ts";
 import { mergeUtterance } from "../../src/realtime.ts";
 import type { AppState, BotRow, BrowserNote, CallNote, CanvasPage, ChatItem, TaskJob, LibraryItem, SettingsPatch, StageNote, TurnNote } from "./types.ts";
 
@@ -585,6 +588,7 @@ export function App() {
         <SettingsPanel
           settings={state?.settings}
           version={state?.version || ""}
+          update={state?.update}
           forced={state !== null && !state.settings.ready}
           onClose={() => setSettingsOpen(false)}
           onSave={async (patch) => {
@@ -601,17 +605,13 @@ export function App() {
 
 function UpdateButton({ update, locale, onError }: { update: import("./types.ts").UpdateState; locale: Locale; onError: (error: string) => void }) {
   const en = locale === "en";
-  const active = update.phase === "downloading" || update.phase === "installing";
-  const label = update.phase === "downloading" ? `${en ? "Downloading update" : "正在下载更新"} ${Math.round(update.percent || 0)}%`
-    : update.phase === "installing" ? en ? "Installing update" : "正在安装更新"
-    : update.phase === "ready" ? en ? "Downloaded; installs when idle and settings are saved" : "下载完成，通话、后台工作和未保存设置处理完毕后自动安装"
-    : update.phase === "error" ? `${en ? "Retry update" : "重试更新"}：${update.error || ""}`
-    : `${en ? "Download and install" : "下载并安装"} v${update.version}`;
+  const active = ["checking", "downloading", "verifying", "installing"].includes(update.phase);
+  const label = `${updateDescription(update, en)}${update.version ? ` · v${update.version}` : ""}`;
   async function install() {
     try { const next = await window.xiaowang.updateApp(); if (next.phase === "error") onError(next.error || (en ? "Update failed" : "更新失败")); }
     catch (error) { onError(plainError(error)); }
   }
-  return <button className="update-button" type="button" aria-label={label} title={label} disabled={active || update.phase === "ready"} onClick={() => void install()}>
+  return <button className={`update-button${update.phase === "downloading" ? " has-progress" : ""}`} style={{ "--update-angle": `${(update.percent ?? 0) * 3.6}deg` } as React.CSSProperties} type="button" aria-label={label} title={label} disabled={active || update.phase === "ready"} onClick={() => void install()}>
     {active ? <LoaderCircle className="spin" size={17} /> : update.phase === "ready" ? <Check size={17} /> : <Download size={17} />}
   </button>;
 }
@@ -871,12 +871,14 @@ function FieldSelect({
 function SettingsPanel({
   settings,
   version,
+  update,
   forced,
   onClose,
   onSave,
 }: {
   settings: AppState["settings"] | undefined;
   version: string;
+  update?: import("./types.ts").UpdateState;
   forced: boolean;
   onClose: () => void;
   onSave: (patch: SettingsPatch) => Promise<void>;
@@ -900,6 +902,12 @@ function SettingsPanel({
   const [region, setRegion] = useState<RealtimeRegion>(saved.region);
   const [workspace, setWorkspace] = useState(saved.workspace);
   const [realtimeKey, setRealtimeKey] = useState("");
+  const [clearVoiceKey, setClearVoiceKey] = useState(false);
+  const [profileDrafts, setProfileDrafts] = useState<Partial<Record<RealtimeServiceId, VoiceProfilePatch>>>(() => Object.fromEntries(REALTIME_SERVICES.map(({ id }) => {
+    const profile = settings?.realtimeProfiles?.[id];
+    const choice = resolveRealtime({ service: id, ...(profile ?? (id === saved.service ? saved : {})) });
+    return [id, { model: choice.model, voice: choice.voice, region: choice.region, workspace: choice.workspace, url: choice.url, key: "", clearKey: false }];
+  })));
   const [locale, setLocale] = useState<Locale>(localeOf(settings?.locale));
   const [notice, setNotice] = useState("");
   const copy = copyFor(locale);
@@ -918,6 +926,7 @@ function SettingsPanel({
     realtimeWorkspace: workspace,
     realtimeKey,
     locale,
+    realtimeProfiles: { ...profileDrafts, [service]: { model: realtimeModel, voice, region, workspace, url: resolveRealtime({ service, model: realtimeModel, workspace, region }).url, key: realtimeKey, clearKey: clearVoiceKey } },
   };
   const initial = useRef(patch);
   const dirty = hasUnsavedSettings(patch, initial.current);
@@ -983,10 +992,13 @@ function SettingsPanel({
   useEffect(() => () => previewAudio.current.stop(), []);
 
   function chooseService(next: RealtimeServiceId) {
-    const nextModel = modelsFor(next)[0]?.id ?? "";
+    const profiles = patch.realtimeProfiles!;
+    setProfileDrafts(profiles);
+    const profile = profiles[next] ?? {};
+    const choice = resolveRealtime({ service: next, ...profile });
     setService(next);
-    setRealtimeModel(nextModel);
-    setVoice(voicesFor(next, nextModel)[0]?.id ?? "");
+    setRealtimeModel(choice.model); setVoice(choice.voice); setRegion(choice.region); setWorkspace(choice.workspace);
+    setRealtimeKey(profile.key ?? ""); setClearVoiceKey(profile.clearKey === true);
   }
 
   function chooseRealtimeModel(next: string) {
@@ -1006,7 +1018,7 @@ function SettingsPanel({
     try {
       await window.xiaowang.previewVoice(patch);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
+      setNotice(plainError(error));
     }
   }
 
@@ -1038,17 +1050,19 @@ function SettingsPanel({
   }
 
   return (
-    <div className="modal" onMouseDown={event => { if (event.target === event.currentTarget && !forced) requestClose("panel"); }}>
+    <div className="modal settings-modal" onMouseDown={event => { if (event.target === event.currentTarget && !forced) requestClose("panel"); }}>
       <form aria-label={copy.settings} onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <header>
           <strong>{forced ? copy.connectModel : copy.settings}</strong>
           <span className="app-version">{locale === "en" ? "Version" : "版本"} {version}</span>
+          <UpdateCheckButton update={update} en={locale === "en"} onResult={setNotice} />
           <div className="lang" role="group" aria-label={copy.language}>
             <button type="button" className={locale === "zh" ? "on" : ""} onClick={() => setLocale("zh")}>中文</button>
             <button type="button" className={locale === "en" ? "on" : ""} onClick={() => setLocale("en")}>English</button>
           </div>
           {forced ? null : <button type="button" aria-label={copy.close} onClick={() => requestClose("panel")}><X size={16} strokeWidth={1.75} /></button>}
         </header>
+        <UpdateProgress update={update} en={locale === "en"} />
         <div className="columns">
         <section>
           <h2><MessageSquareText size={16} strokeWidth={1.75} />{copy.text}</h2>
@@ -1072,7 +1086,6 @@ function SettingsPanel({
               <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="deepseek-chat" />
             )}
           </label>
-
         </section>
         <section>
           <h2><AudioLines size={16} strokeWidth={1.75} />{copy.callSection}</h2>
@@ -1094,15 +1107,17 @@ function SettingsPanel({
           {needsWorkspace ? (
             <label>{copy.workspace}<input value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder={copy.workspacePlaceholder} /></label>
           ) : null}
-          <label>{copy.key}<input value={realtimeKey} type="password" onChange={(event) => setRealtimeKey(event.target.value)} placeholder={settings?.realtimeKeyHint || "····"} /></label>
+          <div className="field-block"><div className="voice-key-heading"><label htmlFor="realtime-key">{copy.key}</label>{(settings?.realtimeProfiles?.[service]?.keyHint || (service === saved.service && settings?.realtimeKeyHint)) ? <button className="clear-voice-key" type="button" onClick={() => { setClearVoiceKey(!clearVoiceKey); setRealtimeKey(""); }}>{clearVoiceKey ? locale === "en" ? "Undo key removal" : "撤销密钥清除" : locale === "en" ? "Remove saved key" : "清除已保存密钥"}</button> : null}</div>
+          <input id="realtime-key" data-testid="voice-key" value={realtimeKey} type="password" onChange={(event) => { setRealtimeKey(event.target.value); setClearVoiceKey(false); }} placeholder={clearVoiceKey ? "" : settings?.realtimeProfiles?.[service]?.keyHint || (service === saved.service ? settings?.realtimeKeyHint : "") || (locale === "en" ? "Not configured" : "未配置")} />
+          {clearVoiceKey ? <small>{locale === "en" ? "Saving will remove this provider’s key." : "保存后将清除此服务的密钥。"}</small> : null}</div>
           <label>{copy.model}
             <FieldSelect label={copy.model} value={realtimeModel} onChange={chooseRealtimeModel} options={modelChoices.map((item) => ({ value: item.id, label: `${item.name} · ${item.id}` }))} />
           </label>
           <div className="field-block">
             <span>{copy.voice}</span>
             <div className="with-action">
-              <FieldSelect label={copy.voice} value={voice} onChange={setVoice} options={voiceChoices.map((item) => ({ value: item.id, label: `${item.name} · ${item.id}` }))} />
-              <button type="button" onClick={() => void preview()}>{previewing ? <Square size={14} strokeWidth={1.75} /> : <Play size={15} strokeWidth={1.75} />}{previewing ? copy.stopPreview : copy.preview}</button>
+              {service === "moss" ? <MossVoicePicker value={voice} onChange={setVoice} patch={patch} keyHint={clearVoiceKey ? "" : settings?.realtimeProfiles?.moss?.keyHint || (saved.service === "moss" ? settings?.realtimeKeyHint ?? "" : "")} en={locale === "en"} /> : <FieldSelect label={copy.voice} value={voice} onChange={setVoice} options={voiceChoices.map((item) => ({ value: item.id, label: `${item.name} · ${item.id}` }))} />}
+              <button className="voice-preview" type="button" aria-label={previewing ? copy.stopPreview : copy.preview} title={previewing ? copy.stopPreview : copy.preview} onClick={() => void preview()}>{previewing ? <Square size={14} strokeWidth={1.75} /> : <Play size={15} strokeWidth={1.75} />}</button>
             </div>
           </div>
         </section>
