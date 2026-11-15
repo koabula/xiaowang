@@ -114,7 +114,7 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
   assert.equal(await page.locator('.thinking').count(), 0, 'Background progress has one primary display');
   assert.equal((await state()).jobs.length, 1);
   assert.equal(await page.locator('.bubble.assistant').count(), 0, 'Intermediate streamed prefaces must not become completed answer bubbles');
-  await page.screenshot({ path: '/private/tmp/xiaowang-research-working.png' });
+  await page.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-research-working.png') });
   speak('long-before-progress', '正在阅读原文。', 2500);
   await until(async () => await energy() > .05);
   user('progress', '梳理了吗？'); tool('status', 'get_task');
@@ -177,7 +177,7 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
   await lateCall.locator(`[data-job-id="${lateJob.id}"] .call-task-result summary`).click();
   await lateCall.locator('.call-task-result').getByText('论文分析结果：', { exact: false }).waitFor();
   assert.equal(await sourceCall.locator('.task-item').count(), 0, 'Earlier calls do not absorb later work');
-  await page.screenshot({ path: '/private/tmp/xiaowang-research-complete.png' });
+  await page.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-research-complete.png') });
   assert.deepEqual(errors, []);
   console.log('Verified analysis acceptance, visible progress, no duplicate jobs after interruption/status, native result return during preface, actual PDF reading, saved notes, spoken result, source display receipt and baseline text progress.');
 });

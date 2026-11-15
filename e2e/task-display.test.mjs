@@ -60,7 +60,7 @@ test('desktop: chat stays clean; voice work and results live only inside their c
   await research.getByRole('button', { name: '打开 memo.md', exact: true }).click();
   await page.locator('.canvas-frame, .document-reader').first().waitFor();
   await page.getByText('ARTIFACT-CONTENT-ONLY', { exact: true }).waitFor();
-  await page.screenshot({ path: '/private/tmp/xiaowang-task-history.png' });
+  await page.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-task-history.png') });
   await sourceCall.locator('[data-job-id="old-failure"]').getByRole('button', { name: '重试', exact: true }).click();
   await until(async () => (await page.evaluate(() => window.xiaowang.getState())).jobs.find(job => job.id === 'old-failure')?.status === 'succeeded');
   const retried = sourceCall.locator('[data-job-id="old-failure"]');
@@ -87,7 +87,7 @@ test('desktop: chat stays clean; voice work and results live only inside their c
   await page.reload(); await sourceCall.waitFor();
   assert.equal(await page.locator('.task-panel, .task-item, .call-tasks').count(), 0);
   assert.equal(await page.locator('.bubble.assistant').filter({ hasText: /CANONICAL-RESEARCH-RESULT|RETRIED-BACKGROUND-REPLY/ }).count(), 0);
-  await page.screenshot({ path: '/private/tmp/xiaowang-task-display.png' });
+  await page.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-task-display.png') });
   await sourceCall.locator(':scope > button').click();
   assert.equal(await sourceCall.locator('.task-item').count(), 2, 'Reload preserves both call-owned jobs');
   await sourceCall.locator('[data-job-id="old-failure"] summary').click();

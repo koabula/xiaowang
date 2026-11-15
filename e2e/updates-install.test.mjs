@@ -69,6 +69,6 @@ test('packaged mac: click updates, replaces and restarts the app while preservin
   assert.equal(state.version, nextVersion); assert.equal(state.settings.model, 'fixture'); assert.equal(state.settings.ready, true);
   assert.equal(JSON.parse(asar.extractFile(path.join(installed, 'Contents/Resources/app.asar'), 'package.json').toString()).version, nextVersion);
   await nextPage.locator('.rail .settings').click(); assert.equal((await nextPage.locator('.app-version').textContent()).trim(), `版本 ${nextVersion}`);
-  await nextPage.screenshot({ path: '/private/tmp/xiaowang-updated-version.png' });
+  await nextPage.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-updated-version.png') });
   console.log(`Verified actual ${currentVersion} → ${nextVersion} download, SHA-512 verification, app replacement, relaunch, version display, saved settings and conversation preservation in an isolated install.`);
 });

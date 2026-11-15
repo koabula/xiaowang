@@ -44,7 +44,9 @@ test('native browser: ownership gates mouse, wheel, keyboard, IME, modals, frame
   const input = async (...events) => { await app.evaluate(({ BrowserWindow }, events) => { BrowserWindow.getAllWindows()[0]?.focus(); const wc = globalThis.pane.view.webContents; wc.focus(); for (const event of events) wc.sendInputEvent(event); }, events); await sleep(80); };
   const click = (x, y, button = 'left') => input({ type: 'mouseMove', x, y }, { type: 'mouseDown', x, y, button, clickCount: 1 }, { type: 'mouseUp', x, y, button, clickCount: 1 });
   const key = () => input({ type: 'keyDown', keyCode: 'A' }, { type: 'char', keyCode: 'a' }, { type: 'keyUp', keyCode: 'A' });
-  const wheel = () => input({ type: 'mouseWheel', x: 250, y: 250, deltaY: -300, deltaX: 0 });
+  // Electron's AppKit wheel bridge uses the opposite native Y sign to Linux.
+  const wheelDelta = process.platform === 'darwin' ? -300 : 300;
+  const wheel = () => input({ type: 'mouseWheel', x: 250, y: 250, deltaY: wheelDelta, deltaX: 0 });
   const read = () => run('({hits,dialogHits,globalHits,wheels,contexts,drops,value:document.getElementById("entry").value,scrollY})');
   await bot('navigate', `${base}/normal`);
   assert.deepEqual(await app.evaluate(() => { const p = globalThis.pane.view.webContents.getLastWebPreferences(); return { sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration }; }), { sandbox: true, contextIsolation: true, nodeIntegration: false });
@@ -66,7 +68,7 @@ test('native browser: ownership gates mouse, wheel, keyboard, IME, modals, frame
   await run('document.getElementById("modal").close();window.globalHits=0');
   await click(400, 70);
   assert.equal(await app.evaluate(async () => { const frame = globalThis.pane.view.webContents.mainFrame.frames[0]; return frame.executeJavaScript('window.hits'); }), 0, 'Native input is blocked inside a cross-origin frame');
-  await input({ type: 'mouseWheel', x: 400, y: 70, deltaY: -300, deltaX: 0 });
+  await input({ type: 'mouseWheel', x: 400, y: 70, deltaY: wheelDelta, deltaX: 0 });
   assert.equal(await app.evaluate(async () => globalThis.pane.view.webContents.mainFrame.frames[0].executeJavaScript('window.scrollY')), 0, 'Wheel input is blocked inside a cross-origin frame');
   await app.evaluate(async () => { const wc = globalThis.pane.view.webContents; await wc.mainFrame.frames[0].executeJavaScript('document.getElementById("frameEntry").focus()'); await wc.insertText('BLOCKED'); });
   assert.equal(await app.evaluate(async () => globalThis.pane.view.webContents.mainFrame.frames[0].executeJavaScript('document.getElementById("frameEntry").value')), '', 'Text insertion is blocked inside a cross-origin frame');

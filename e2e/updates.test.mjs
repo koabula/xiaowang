@@ -54,7 +54,7 @@ test('desktop updates: version, icon-only offer, verified download, retry and de
   assert.match(await button.getAttribute('aria-label'), new RegExp(nextVersion.replaceAll('.', '\\.')));
   const settingsBox = await page.locator('.rail footer .settings').boundingBox(); const updateBox = await button.boundingBox();
   assert.ok(updateBox.x >= settingsBox.x + settingsBox.width, 'The icon is to the right of Settings');
-  await page.screenshot({ path: '/private/tmp/xiaowang-update-offer.png' });
+  await page.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-update-offer.png') });
   await page.setViewportSize({ width: 850, height: 760 });
   const smallSettings = await page.locator('.rail footer .settings').boundingBox(); const smallUpdate = await button.boundingBox();
   assert.ok(smallUpdate.x >= smallSettings.x + smallSettings.width && Math.abs(smallUpdate.y - smallSettings.y) < 8, 'The icon remains to the right in the compact sidebar');
