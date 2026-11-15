@@ -44,10 +44,14 @@ test('native browser: ownership gates mouse, wheel, keyboard, IME, modals, frame
   const input = async (...events) => { await app.evaluate(({ BrowserWindow }, events) => { BrowserWindow.getAllWindows()[0]?.focus(); const wc = globalThis.pane.view.webContents; wc.focus(); for (const event of events) wc.sendInputEvent(event); }, events); await sleep(80); };
   const click = (x, y, button = 'left') => input({ type: 'mouseMove', x, y }, { type: 'mouseDown', x, y, button, clickCount: 1 }, { type: 'mouseUp', x, y, button, clickCount: 1 });
   const key = () => input({ type: 'keyDown', keyCode: 'A' }, { type: 'char', keyCode: 'a' }, { type: 'keyUp', keyCode: 'A' });
-  const wheelDelta = -300;
-  const wheel = () => input({ type: 'mouseMove', x: 250, y: 250 }, { type: 'mouseWheel', x: 250, y: 250, deltaY: wheelDelta, deltaX: 0, canScroll: true });
+  let browserPage;
+  // Chromium trusted wheel input also exercises the isolated preload guard;
+  // Electron's sendInputEvent wheel synthesis is not delivered under Linux Xvfb.
+  const wheelAt = async (x, y) => { await browserPage.mouse.move(x, y); await browserPage.mouse.wheel(0, 300); await sleep(80); };
+  const wheel = () => wheelAt(250, 250);
   const read = () => run('({hits,dialogHits,globalHits,wheels,contexts,drops,value:document.getElementById("entry").value,scrollY})');
   await bot('navigate', `${base}/normal`);
+  browserPage = await until(() => app.context().pages().find(page => page.url().startsWith(base)));
   assert.deepEqual(await app.evaluate(() => { const p = globalThis.pane.view.webContents.getLastWebPreferences(); return { sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration }; }), { sandbox: true, contextIsolation: true, nodeIntegration: false });
   assert.equal(await run('typeof require'), 'undefined');
   assert.equal(await app.evaluate(async () => globalThis.pane.view.webContents.mainFrame.frames[0].executeJavaScript('typeof require')), 'undefined');
@@ -67,7 +71,7 @@ test('native browser: ownership gates mouse, wheel, keyboard, IME, modals, frame
   await run('document.getElementById("modal").close();window.globalHits=0');
   await click(400, 70);
   assert.equal(await app.evaluate(async () => { const frame = globalThis.pane.view.webContents.mainFrame.frames[0]; return frame.executeJavaScript('window.hits'); }), 0, 'Native input is blocked inside a cross-origin frame');
-  await input({ type: 'mouseWheel', x: 400, y: 70, deltaY: wheelDelta, deltaX: 0, canScroll: true });
+  await wheelAt(400, 70);
   assert.equal(await app.evaluate(async () => globalThis.pane.view.webContents.mainFrame.frames[0].executeJavaScript('window.scrollY')), 0, 'Wheel input is blocked inside a cross-origin frame');
   await app.evaluate(async () => { const wc = globalThis.pane.view.webContents; await wc.mainFrame.frames[0].executeJavaScript('document.getElementById("frameEntry").focus()'); await wc.insertText('BLOCKED'); });
   assert.equal(await app.evaluate(async () => globalThis.pane.view.webContents.mainFrame.frames[0].executeJavaScript('document.getElementById("frameEntry").value')), '', 'Text insertion is blocked inside a cross-origin frame');
@@ -79,7 +83,7 @@ test('native browser: ownership gates mouse, wheel, keyboard, IME, modals, frame
   await app.evaluate(async () => { await globalThis.pane.view.webContents.insertText('IME'); });
   assert.match((await read()).value, /aIME/);
   // Starting between the scroll bounds tests movement independent of native wheel direction.
-  await run('document.getElementById("entry").blur();window.scrollTo(0,600)');
+  await run('window.scrollTo(0,600)');
   const scrollBefore = (await read()).scrollY;
   await wheel();
   await until(async () => (await read()).scrollY !== scrollBefore).catch(async error => {
