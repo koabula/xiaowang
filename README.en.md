@@ -62,7 +62,9 @@ During calls, **Gemini Live, OpenAI and Qwen** also receive images from sent mes
 
 XiaoWang creates a new workspace in the sidebar and can start its first task immediately. Sub bots have separate conversations and files, receiving the relevant background through their task brief. They do not automatically copy the parent's entire chat or files. Right-click a sidebar bot to rename or delete it; the main assistant cannot be deleted. Deletion stops that bot's calls and tasks, while local history and files remain on disk.
 
-Click **＋** under **Files** or **Canvas** to browse the current workspace's imported originals, folders, and recently opened materials. PDFs support continuous scrolling, text selection, search, zoom, trackpad pinch and Ctrl + wheel zoom; source citations can jump to the original page. XiaoWang controls the browser by default. Take control before interacting with the web page yourself.
+When delegating an existing paper, ask XiaoWang to pass it to the sub bot. Only the selected file references are shared; the child’s first turn starts after the parent finishes handing over the material.
+
+Click **＋** under **Files** or **Canvas** to browse the current workspace's imported originals, folders, and recently opened materials. PDFs support continuous scrolling, text selection, search, zoom, trackpad pinch and Ctrl + wheel zoom; source citations can jump to the original page. Each bot has its own browser page, navigation history and control rights, while sharing website sign-ins. Logging out or changing a website account affects the other bots using that shared profile. Take control before interacting with the current bot’s web page yourself.
 
 Each **workspace** keeps its own conversations, materials, and reading position. Voice-delegated **background tasks** live inside their source **call record**: expand the call to see progress, full results, generated files, or controls to stop and retry work. Ordinary text chat displays replies directly without an extra task card. Interrupting speech stops playback while background work continues; use the task's stop button to cancel the work.
 

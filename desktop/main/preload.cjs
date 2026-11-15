@@ -46,7 +46,7 @@ contextBridge.exposeInMainWorld("xiaowang", {
   listVoices: (patch, refresh) => ipcRenderer.invoke("settings:voices", patch, refresh),
   checkSettings: (patch) => ipcRenderer.invoke("settings:check", patch),
   openKeyPage: (service, region) => ipcRenderer.invoke("link:key", service, region),
-  browserBounds: (bounds) => ipcRenderer.invoke("browser:bounds", bounds),
+  browserBounds: (bounds, slug) => ipcRenderer.invoke("browser:bounds", bounds, slug),
   browserGo: (url) => ipcRenderer.invoke("browser:go", url),
   browserBack: () => ipcRenderer.invoke("browser:back"),
   browserForward: () => ipcRenderer.invoke("browser:forward"),

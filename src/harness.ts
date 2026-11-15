@@ -57,7 +57,17 @@ export interface RunTurnOptions {
  * 模型连接本身不保存记忆。派生项目的首轮调研在当前轮结束后单独跑，避免嵌进同一次工具调用。
  */
 export async function runTurn(runtime: Runtime, options: RunTurnOptions): Promise<TurnResult> {
-  const primary = await runTurnOnce(runtime, options);
+  // Keep kickoffs local to this parent turn. The desktop queue may otherwise
+  // dispatch a child between spawn_bot and a later share_file tool call.
+  const pending: import("./types.ts").Kickoff[] = [];
+  let finished = false;
+  const primary = await runTurnOnce(runtime, { ...options, onKickoff: job => pending.push(job), onStep(step) { finished = Boolean(step.final); options.onStep?.(step); } });
+  if (!options.signal?.aborted && finished) {
+    for (const job of pending) {
+      if (options.onKickoff) options.onKickoff(job);
+      else runtime.enqueueKickoff(job);
+    }
+  }
   if (options.onKickoff) return primary;
   const kickoffs: TurnResult[] = [];
   let ran = 0;

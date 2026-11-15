@@ -529,7 +529,7 @@ const TOOLS: Tool[] = [
     schema: {
       name: "spawn_bot",
       description:
-        "仅当用户明确要求把一件事单独交给一个任务时使用。新任务里的你仍是同一个人，名字与总入口相同。新任务有自己的会话和工作区，不会自动复制当前对话，也不会自己和其他任务交谈。baseline 只写要带去的目标、已确认结论和论文线索。kickoff_task 可选；写了的话，新任务会在当前这轮结束后自己做第一轮。",
+        "仅当用户明确要求把一件事单独交给一个任务时使用。新任务有自己的会话和工作区，不会自动复制当前对话或全部资料。baseline 只写目标、已确认结论和论文线索。让子任务分析已有文件时，务必用 files 传入资料 id 或文件名，只共享必要原件的引用。kickoff_task 可选；写了的话，新任务会在当前这轮完成资料交接后做第一轮，保持用户要求的分析深度，不擅自增加详细笔记或额外调研。",
       parameters: objectSchema(
         {
           name: { type: "string", description: "新任务的显示名，用用户的叫法。" },
@@ -540,6 +540,7 @@ const TOOLS: Tool[] = [
             description: "一并记住的专有名词，可省略。",
           },
           kickoff_task: { type: "string", description: "新任务的第一轮要交付什么。不需要就省略。" },
+          files: { type: "array", items: { type: "string" }, description: "子任务需要的当前资料库文件 id 或文件名。在启动首轮前共享引用，不复制原件。" },
         },
         ["name", "baseline"],
       ),
@@ -563,6 +564,12 @@ const TOOLS: Tool[] = [
       const terms = Array.isArray(input.terms)
         ? input.terms.filter((item): item is string => typeof item === "string").map((term) => ({ term }))
         : [];
+      if (input.files !== undefined && (!Array.isArray(input.files) || input.files.some(file => typeof file !== "string" || !file.trim()))) {
+        return { isError: true, output: "files 必须是资料 id 或文件名的数组。" };
+      }
+      // Resolve every ref before creating the bot, so a missing file cannot
+      // leave behind a partially created child with a runnable kickoff.
+      const files = [...new Set((input.files as string[] | undefined ?? []).map(file => host.store.resolveLibraryRef(host.bot.id, file).id))];
       const bot = host.store.createBot({
         name,
         systemPrompt: baseline,
@@ -570,13 +577,14 @@ const TOOLS: Tool[] = [
         parentBotId: host.bot.id,
       });
       host.store.append(bot.id, { type: "baseline", text: baseline, fromBotId: host.bot.id });
+      for (const file of files) host.store.shareLibraryFile(host.bot.id, file, bot.id);
       if (kickoff) host.enqueueKickoff({ botId: bot.id, task: kickoff });
       const followup = kickoff
         ? "首轮会在这轮结束后，在新任务里单独进行。"
         : "没有安排首轮。";
       return {
         isError: false,
-        output: `已建立任务「${bot.name}」（${bot.slug}）。工作区：${bot.workspaceDir}。任务说明已写入新会话，没有复制当前对话。${followup}`,
+        output: `已建立任务「${bot.name}」（${bot.slug}）。工作区：${bot.workspaceDir}。任务说明已写入新会话，没有复制当前对话。${files.length ? `已交接 ${files.length} 份资料的引用。` : ""}${followup}`,
       };
     },
   },

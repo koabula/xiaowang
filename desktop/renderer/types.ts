@@ -50,7 +50,7 @@ declare global {
       listVoices: (patch: SettingsPatch, refresh?: boolean) => Promise<RealtimeVoiceChoice[]>;
       checkSettings: (patch: SettingsPatch) => Promise<string>;
       openKeyPage: (service: string, region: string) => Promise<void>;
-      browserBounds: (bounds: Bounds | null) => Promise<void>;
+      browserBounds: (bounds: Bounds | null, slug?: string) => Promise<void>;
       browserGo: (url: string) => Promise<string>;
       browserBack: () => Promise<void>;
       browserForward: () => Promise<void>;
@@ -209,6 +209,7 @@ export type StageNote = { slug: string; requestId?: string } & (
 );
 
 export interface BrowserNote {
+  slug?: string;
   url: string;
   title: string;
   holder: "bot" | "user";

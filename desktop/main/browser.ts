@@ -18,35 +18,37 @@ export interface SavedPdf {
 // The isolated preload checks exceptional input paths (IME, paste, drop and
 // touch) against the same synchronous policy as native mouse/keyboard input.
 const inputOwners = new Map<number, () => boolean>();
+const headerOwners = new Map<number, (type: string) => void>();
+const observedSessions = new WeakSet<Electron.Session>();
+type Bounds = { x: number; y: number; width: number; height: number };
 ipcMain.on("browser:input-allowed", event => {
   event.returnValue = inputOwners.get(event.sender.id)?.() ?? false;
 });
 
 export class BrowserPane {
   readonly driver: BrowserDriver;
-  ownerSlug = "";
-  actingSlug = "";
   private view: WebContentsView | null = null;
   private window: BrowserWindow | null = null;
   private holder: "bot" | "user" = "bot";
+  private visible = false;
   private controlEpoch = 0;
   private state: BrowserViewState = { url: "", title: "", holder: "bot", loading: false };
 
   private frameType = "";
+  private operations: Promise<unknown> = Promise.resolve();
 
-  private readonly currentSlug: () => string;
   private readonly onState: (state: BrowserViewState) => void;
   private readonly onPdf: (filename: string, bytes: Buffer) => SavedPdf;
-  constructor(currentSlug: () => string, onState: (state: BrowserViewState) => void, onPdf: (filename: string, bytes: Buffer) => SavedPdf) {
-    this.currentSlug = currentSlug; this.onState = onState; this.onPdf = onPdf;
+  constructor(onState: (state: BrowserViewState) => void, onPdf: (filename: string, bytes: Buffer) => SavedPdf) {
+    this.onState = onState; this.onPdf = onPdf;
     this.driver = {
       holder: () => this.holder,
-      navigate: (url) => this.navigate(url, "bot"),
-      snapshot: () => this.snapshot(),
-      click: (target) => this.click(target),
-      type: (target, text) => this.type(target, text),
-      scroll: (direction) => this.scroll(direction),
-      back: () => this.back("bot"),
+      navigate: (url) => this.enqueue(() => this.navigate(url, "bot")),
+      snapshot: () => this.enqueue(() => this.snapshot()),
+      click: (target) => this.enqueue(() => this.click(target)),
+      type: (target, text) => this.enqueue(() => this.type(target, text)),
+      scroll: (direction) => this.enqueue(() => this.scroll(direction)),
+      back: () => this.enqueue(() => this.back("bot")),
     };
   }
 
@@ -56,6 +58,15 @@ export class BrowserPane {
     this.controlEpoch += 1;
     this.state = { url: "", title: "", holder: "bot", loading: false };
     const partition = session.fromPartition("persist:xiaowang");
+    // Session hooks are shared too. Register once and route by the originating
+    // WebContents, rather than replacing another bot's header listener.
+    if (!observedSessions.has(partition)) {
+      observedSessions.add(partition);
+      partition.webRequest.onHeadersReceived((details, callback) => {
+        if (details.resourceType === "mainFrame") headerOwners.get(details.webContentsId ?? -1)?.(headerValue(details.responseHeaders, "content-type"));
+        callback({ responseHeaders: details.responseHeaders });
+      });
+    }
     this.view = new WebContentsView({
       webPreferences: {
         preload: fileURLToPath(new URL("./browser-preload.cjs", import.meta.url)),
@@ -70,11 +81,8 @@ export class BrowserPane {
     });
     window.contentView.addChildView(this.view);
     this.view.setVisible(false);
-    partition.webRequest.onHeadersReceived((details, callback) => {
-      if (details.resourceType === "mainFrame") this.frameType = headerValue(details.responseHeaders, "content-type");
-      callback({ responseHeaders: details.responseHeaders });
-    });
     const contents = this.view.webContents;
+    headerOwners.set(contents.id, type => { this.frameType = type; });
     contents.setWindowOpenHandler(({ url }) => {
       void this.navigate(url, this.holder).catch(() => {});
       return { action: "deny" };
@@ -86,21 +94,24 @@ export class BrowserPane {
     });
     contents.on("page-title-updated", (_event, title) => this.patch({ title }));
     contents.on("before-input-event", (event) => {
-      if (this.holder === "bot") event.preventDefault();
+      if (!this.acceptsInput()) event.preventDefault();
     });
     contents.on("before-mouse-event", event => {
-      if (this.holder === "bot") event.preventDefault();
+      if (!this.acceptsInput()) event.preventDefault();
     });
-    inputOwners.set(contents.id, () => this.holder === "user");
-    contents.once("destroyed", () => inputOwners.delete(contents.id));
+    inputOwners.set(contents.id, () => this.acceptsInput());
+    const id = contents.id;
+    contents.once("destroyed", () => { inputOwners.delete(id); headerOwners.delete(id); });
   }
 
   setBounds(bounds: { x: number; y: number; width: number; height: number } | null): void {
     if (!this.view) return;
     if (!bounds || bounds.width < 8 || bounds.height < 8) {
+      this.visible = false;
       this.view.setVisible(false);
       return;
     }
+    this.visible = true;
     this.view.setVisible(true);
     this.view.setBounds({
       x: Math.round(bounds.x),
@@ -114,7 +125,6 @@ export class BrowserPane {
     if (holder !== "bot" && holder !== "user") throw new Error("无效的浏览器控制权。");
     if (holder !== this.holder) this.controlEpoch += 1;
     this.holder = holder;
-    this.ownerSlug = this.currentSlug();
     if (holder === "bot") this.window?.webContents.focus();
     this.patch({ holder });
   }
@@ -123,19 +133,26 @@ export class BrowserPane {
     return this.state;
   }
 
-  async clearBot(slug: string): Promise<void> {
-    if (this.ownerSlug !== slug && this.actingSlug !== slug) return;
+  contentsId(): number | undefined { return this.view?.webContents.id; }
+
+  private enqueue(action: () => Promise<string>): Promise<string> {
+    const epoch = this.controlEpoch;
+    const pending = this.operations.then(() => {
+      if (epoch !== this.controlEpoch) throw new Error("浏览器控制权已切换，请重新操作。");
+      return action();
+    });
+    this.operations = pending.catch(() => {});
+    return pending;
+  }
+
+  dispose(): void {
     this.controlEpoch++;
-    this.ownerSlug = this.actingSlug = "";
-    this.holder = "bot";
-    this.view?.setVisible(false);
-    const contents = this.view?.webContents;
-    contents?.stop();
-    if (contents && !contents.isDestroyed()) {
-      await contents.loadURL("about:blank");
-      contents.navigationHistory.clear();
+    this.visible = false;
+    if (this.view) {
+      if (this.window && !this.window.isDestroyed()) this.window.contentView.removeChildView(this.view);
+      if (!this.view.webContents.isDestroyed()) this.view.webContents.close();
     }
-    this.patch({ url: "", title: "", holder: "bot", loading: false });
+    this.view = null;
   }
 
   userNavigate(raw: string): Promise<string> { return this.navigate(raw, "user"); }
@@ -150,9 +167,11 @@ export class BrowserPane {
     this.requireHolder(actor);
     const url = assertHttpUrl(raw);
     if (typeof url !== "string") return url.error;
-    this.ownerSlug = actor === "user" ? this.currentSlug() : this.actingSlug || this.currentSlug();
+    const epoch = this.controlEpoch;
     this.patch({ url, loading: true });
     await this.contents().loadURL(url);
+    this.requireHolder(actor);
+    if (epoch !== this.controlEpoch) throw new Error("浏览器控制权已切换，请重新操作。");
     const saved = await this.capturePdf(this.contents().getURL());
     if (saved) {
       return `已打开 ${url}\n这是 PDF，已放入当前任务的资料库：${saved.id} ${saved.filename}。请用 read_document 按页阅读。阅读器快照里没有可选中的文字。`;
@@ -244,6 +263,69 @@ export class BrowserPane {
 
   private requireHolder(actor: "bot" | "user"): void {
     if (this.holder !== actor) throw new Error(actor === "user" ? "请先取得浏览器控制权。" : USER_HAS_BROWSER);
+  }
+
+  private acceptsInput(): boolean { return this.visible && this.holder === "user"; }
+}
+
+/** Independent pages and control rights, with one shared signed-in profile. */
+export class BotBrowsers {
+  private readonly panes = new Map<string, BrowserPane>();
+  private window: BrowserWindow | null = null;
+  private activeSlug = "";
+  private readonly onState: (slug: string, state: BrowserViewState) => void;
+  private readonly onPdf: (slug: string, filename: string, bytes: Buffer) => SavedPdf;
+  constructor(onState: (slug: string, state: BrowserViewState) => void, onPdf: (slug: string, filename: string, bytes: Buffer) => SavedPdf) { this.onState = onState; this.onPdf = onPdf; }
+
+  attach(window: BrowserWindow): void {
+    this.dispose();
+    this.window = window;
+    window.once("closed", () => { if (this.window === window) this.dispose(); });
+  }
+
+  forBot(slug: string): BrowserPane {
+    let pane = this.panes.get(slug);
+    if (!pane) {
+      if (!this.window || this.window.isDestroyed()) throw new Error("浏览器还没有窗口。");
+      pane = new BrowserPane(state => this.onState(slug, state), (filename, bytes) => this.onPdf(slug, filename, bytes));
+      pane.attach(this.window);
+      this.panes.set(slug, pane);
+    }
+    return pane;
+  }
+
+  activate(slug: string): void {
+    if (this.activeSlug !== slug) {
+      this.panes.get(this.activeSlug)?.setBounds(null);
+      this.window?.webContents.focus();
+    }
+    this.activeSlug = slug;
+    this.onState(slug, this.viewState(slug));
+  }
+
+  viewState(slug: string): BrowserViewState {
+    return this.panes.get(slug)?.viewState() ?? { url: "", title: "", holder: "bot", loading: false };
+  }
+
+  setBounds(slug: string, bounds: Bounds | null): void {
+    if (slug !== this.activeSlug) return; // Ignore late renderer measurements.
+    if (bounds) this.forBot(slug).setBounds(bounds);
+    else this.panes.get(slug)?.setBounds(null);
+  }
+
+  slugForContents(id: number): string | undefined {
+    for (const [slug, pane] of this.panes) if (pane.contentsId() === id) return slug;
+    return undefined;
+  }
+
+  clearBot(slug: string): void {
+    this.panes.get(slug)?.dispose();
+    this.panes.delete(slug);
+  }
+
+  dispose(): void {
+    for (const pane of this.panes.values()) pane.dispose();
+    this.panes.clear(); this.window = null; this.activeSlug = "";
   }
 }
 

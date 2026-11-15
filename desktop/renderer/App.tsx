@@ -82,7 +82,7 @@ export function App() {
   const [leftWidth, setLeftWidth] = useState(252);
   const [canvasWide, setCanvasWide] = useState(false);
   const [stageMenu, setStageMenu] = useState(true);
-  const [browser, setBrowser] = useState<BrowserNote>({ url: "", title: "", holder: "bot", loading: false });
+  const [browserBySlug, setBrowserBySlug] = useState<Record<string, BrowserNote>>({});
   const [address, setAddress] = useState("");
   const holeRef = useRef<HTMLDivElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
@@ -91,6 +91,8 @@ export function App() {
   const liveCallId = useRef("");
   const active = state?.activeSlug ?? "";
   activeRef.current = active;
+  const browser = browserBySlug[active] ?? { url: "", title: "", holder: "bot", loading: false };
+  useEffect(() => { setAddress(browser.url); }, [active, browser.url]);
   const stage = stageBySlug[active] ?? EMPTY_STAGE;
   const mode = stage.mode;
   const file = stage.file;
@@ -151,7 +153,7 @@ export function App() {
   }
 
   useEffect(() => {
-    void window.xiaowang.getState().then(initial => { setState(initial); if (initial.updateNotice) setToast(initial.updateNotice); if (initial.browser) { setBrowser(initial.browser); setAddress(initial.browser.url); } });
+    void window.xiaowang.getState().then(initial => { setState(initial); if (initial.updateNotice) setToast(initial.updateNotice); if (initial.browser) { setBrowserBySlug(previous => ({ ...previous, [initial.activeSlug]: initial.browser! })); } });
     const stops = [
       window.xiaowang.onJob(job => {
         setState(prev => prev ? { ...prev, jobs: [...(prev.jobs ?? []).filter(item => item.id !== job.id), job] } : prev);
@@ -162,8 +164,7 @@ export function App() {
       window.xiaowang.onState(setState),
       window.xiaowang.onUpdate(update => setState(prev => prev ? { ...prev, update } : prev)),
       window.xiaowang.onBrowser((next) => {
-        setBrowser(next);
-        setAddress(next.url);
+        if (next.slug) setBrowserBySlug(previous => ({ ...previous, [next.slug!]: next }));
       }),
       window.xiaowang.onDownload((note) => {
         setToast(note.error ? note.error : `已放入资料库 ${note.filename ?? ""}`);
@@ -212,14 +213,14 @@ export function App() {
 
   useEffect(() => {
     if (mode !== "browser" || covered || !stageOpen) {
-      void window.xiaowang.browserBounds(null);
+      void window.xiaowang.browserBounds(null, active);
       return;
     }
     const node = holeRef.current;
     if (!node) return;
     const send = () => {
       const rect = node.getBoundingClientRect();
-      void window.xiaowang.browserBounds({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
+      void window.xiaowang.browserBounds({ x: rect.left, y: rect.top, width: rect.width, height: rect.height }, active);
     };
     send();
     const observer = new ResizeObserver(send);
@@ -229,7 +230,7 @@ export function App() {
       observer.disconnect();
       window.removeEventListener("resize", send);
     };
-  }, [mode, covered, rightWidth, leftWidth, stageOpen]);
+  }, [active, mode, covered, rightWidth, leftWidth, stageOpen]);
 
   useEffect(() => {
     if (!(canvasWide && mode === "canvas")) return;
@@ -498,11 +499,11 @@ export function App() {
       <aside className="stage" style={wide ? undefined : { width: rightWidth }}>
         <div className={stageMenu ? "stage-tabs" : "stage-tabs shut"}>
           {stageMenu ? (
-            <>
+            <div className="stage-modes" role="group" aria-label="Workspace / 工作区">
               <button className={mode === "file" ? "on" : ""} type="button" onClick={() => { setCanvasWide(false); patchStage(active, { mode: "file" }); }}><FileText size={15} /> {copy.files}</button>
               <button className={mode === "browser" ? "on" : ""} type="button" onClick={() => { setCanvasWide(false); patchStage(active, { mode: "browser" }); }}><Globe size={15} /> {copy.browser}</button>
               <button className={mode === "canvas" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "canvas" })}><Frame size={15} /> {copy.canvas}</button>
-            </>
+            </div>
           ) : null}
           <span className="stage-tab-end">
             {mode === "canvas" ? (

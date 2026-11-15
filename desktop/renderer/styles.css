@@ -13,7 +13,12 @@
   --shadow: 0 4px 20px rgba(15, 15, 20, 0.06), 0 1px 2px rgba(15, 15, 20, 0.04);
 }
 
-* { box-sizing: border-box; }
+* { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 32%, transparent) transparent; }
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent; }
+*::-webkit-scrollbar-thumb { border-radius: 999px; background: color-mix(in srgb, var(--muted) 32%, transparent); }
+*::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--muted) 58%, transparent); }
+@media (forced-colors: active) { * { scrollbar-color: auto; } }
 html, body, #root { height: 100%; margin: 0; }
 button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
@@ -270,15 +275,17 @@ nav { overflow: auto; display: flex; flex-direction: column; gap: 2px; padding-t
 .split:hover, .split:active { background-image: linear-gradient(#d8d8dc, #d8d8dc); }
 
 .stage { flex: 0 0 auto; background: #f6f6f7; display: flex; flex-direction: column; min-width: 0; }
-.stage-tabs { display: flex; align-items: center; gap: 4px; padding: 14px 12px 8px; }
+.stage-tabs { display: flex; align-items: center; gap: 6px; padding: 6px 8px; min-height: 42px; }
+.stage-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; flex: 1; min-width: 0; }
+.stage-modes button { width: 100%; min-width: 0; justify-content: center; white-space: nowrap; font-size: 12px; }
 .stage-tabs.shut { padding-top: 10px; padding-bottom: 4px; }
-.stage-tab-end { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.stage-tab-end { flex: 0 0 auto; margin-left: auto; display: flex; align-items: center; gap: 4px; }
 .stage-tabs .fit { width: 32px; height: 32px; padding: 0; justify-content: center; }
 .shell.canvas-wide .rail,
 .shell.canvas-wide > .split,
 .shell.canvas-wide .thread { display: none; }
 .shell.canvas-wide .stage { flex: 1; width: auto; }
-.shell.canvas-wide .stage-tabs { padding: 16px 16px 8px 84px; -webkit-app-region: drag; }
+.shell.canvas-wide .stage-tabs { padding: 6px 12px 6px 84px; -webkit-app-region: drag; }
 .shell.canvas-wide .stage-tabs button { -webkit-app-region: no-drag; }
 .shell.canvas-wide .canvas-frame { margin: 0 16px 16px; }
 .stage-tabs button, .pager button {
@@ -292,14 +299,14 @@ nav { overflow: auto; display: flex; flex-direction: column; gap: 2px; padding-t
   align-items: center;
   gap: 6px;
 }
-.stage-tabs button.on { background: #fff; color: var(--ink); box-shadow: var(--shadow); }
+.stage-tabs button.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px #00000008; }
 .file-stage, .slides, .browser-stage, .canvas-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.open-strip { padding: 0 12px 8px; }
+.open-strip { padding: 0 8px 4px; }
 .open-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 32px;
+  min-height: 28px;
 }
 .open-scroll {
   display: flex;
@@ -310,19 +317,19 @@ nav { overflow: auto; display: flex; flex-direction: column; gap: 2px; padding-t
   overflow: auto;
 }
 .open-chip {
-  height: 32px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   flex: 0 1 auto;
-  max-width: 220px;
+  max-width: 240px;
   min-width: 0;
   background: rgba(255, 255, 255, 0.72);
   border-radius: 999px;
   padding-right: 2px;
 }
-.open-chip.on { background: #fff; box-shadow: var(--shadow); }
+.open-chip.on { background: var(--surface); box-shadow: none; }
 .open-chip .name, .open-choice, .open-add, .open-find {
-  height: 32px;
+  height: 28px;
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -330,7 +337,8 @@ nav { overflow: auto; display: flex; flex-direction: column; gap: 2px; padding-t
 }
 .open-chip .name {
   min-width: 0;
-  padding: 0 4px 0 12px;
+  padding: 0 4px 0 10px;
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -661,7 +669,7 @@ body { color: var(--ink); background: var(--app-bg); }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .document-reader { display: flex; flex: 1; flex-direction: column; min-height: 0; position: relative; overflow: hidden; }
-.reader-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.reader-toolbar { display: flex; align-items: center; gap: 8px; padding: 5px 10px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .reader-toolbar > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reader-pager { display: flex; align-items: center; gap: 5px; margin-left: auto; white-space: nowrap; }
 .reader-pager button { display: grid; place-items: center; width: 26px; height: 28px; border: 0; border-radius: 7px; background: transparent; }
@@ -740,13 +748,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .pdf-viewer-host .pdfViewer { padding: 12px 0 24px; --page-margin: 1px auto 14px; }
 .pdf-viewer-host .pdfViewer .page { box-shadow: 0 2px 12px #00000014; }
 .pdf-viewer-host .pdfViewer canvas { margin: 0; box-shadow: none; }
-.pdf-title > span { flex: 1; }
-.pdf-title button, .pdf-controls button, .pdf-find button { border: 0; background: transparent; border-radius: 6px; display: grid; place-items: center; width: 27px; height: 28px; flex-shrink: 0; color: var(--muted); }
-.pdf-title button:hover, .pdf-controls button:hover, .pdf-find button:hover { background: var(--surface-soft); color: var(--ink); }
-.pdf-controls { display: flex; align-items: center; justify-content: center; gap: 3px; padding: 6px 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; font-size: 12px; }
+.pdf-controls .pdf-search-toggle { margin-left: auto; }
+.pdf-controls button, .pdf-find button { border: 0; background: transparent; border-radius: 6px; display: grid; place-items: center; width: 27px; height: 28px; flex-shrink: 0; color: var(--muted); }
+.pdf-controls button:hover, .pdf-find button:hover { background: var(--surface-soft); color: var(--ink); }
+.pdf-controls { display: flex; align-items: center; justify-content: center; gap: 3px; padding: 3px 6px; border-bottom: 1px solid var(--line); flex-wrap: wrap; font-size: 12px; }
 .pdf-controls button:disabled { opacity: .3; }
 .pdf-controls form { display: flex; align-items: center; gap: 4px; color: var(--muted); }
-.pdf-controls input { width: 36px; padding: 4px; text-align: center; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); }
+.pdf-controls input { width: 36px; padding: 2px; text-align: center; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); }
 .pdf-controls select { max-width: 140px; padding: 5px 2px; border: 0; background: transparent; color: var(--ink); font-size: 11px; }
 .control-divider { width: 1px; height: 16px; margin: 0 5px; background: var(--line); }
 .pdf-find { display: flex; align-items: center; gap: 3px; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 11px; }

@@ -26,11 +26,11 @@ import { Runtime } from "../../src/runtime.ts";
 import { resolveHome } from "../../src/store.ts";
 import { executeTool, toolSchemas } from "../../src/tools.ts";
 import type { BrowserDriver, StageView } from "../../src/stage.ts";
-import { BROWSER_BUSY, CANVAS_HTML_CAP, assertHttpUrl } from "../../src/stage.ts";
+import { CANVAS_HTML_CAP, assertHttpUrl } from "../../src/stage.ts";
 import type { Channel, SessionEvent } from "../../src/types.ts";
 import { listCanvasPages, resolveInsideWorkspace } from "../../src/workspace.ts";
 import { browseBotFiles, type BrowseOptions } from "../../src/file-browser.ts";
-import { BrowserPane } from "./browser.ts";
+import { BotBrowsers } from "./browser.ts";
 import { loadSecrets, mergeSecrets, publicSettings, type SecretPatch, type SecretRecord } from "./secrets.ts";
 import { availableRealtimeSettings, mergeSettings } from "../../src/settings.ts";
 import { MossVoiceCatalog } from "./moss-voices.ts";
@@ -86,7 +86,7 @@ function startUpdateChecks(): void {
   updateTimers = [setInterval(() => void updates.check(), 6 * 60 * 60 * 1000), setInterval(() => void updates.installWhenIdle(), 2000)];
   for (const timer of updateTimers) timer.unref();
 }
-let browser: BrowserPane;
+let browser: BotBrowsers;
 let secrets: SecretRecord = {
   model: "",
   baseUrl: "",
@@ -360,27 +360,14 @@ function taskArgument(args: string): string {
 }
 
 function browserFor(slug: string): BrowserDriver {
-  const claim = (): string | null => {
-    const owner = browser.ownerSlug;
-    if (owner && owner !== slug && jobs.busy(runtime.store.requireBot(owner).id)) return BROWSER_BUSY;
-    browser.actingSlug = slug;
-    browser.ownerSlug = slug;
-    return null;
-  };
-  const run = async (action: () => Promise<string>): Promise<string> => {
-    const blocked = claim();
-    if (blocked) return blocked;
-    return action();
-  };
-  const real = browser.driver;
+  runtime.store.requireBot(slug);
+  // Merely starting a text turn must not allocate a Chromium page.
+  const driver = () => browser.forBot(slug).driver;
   return {
-    holder: () => real.holder(),
-    navigate: (url) => run(() => real.navigate(url)),
-    snapshot: () => run(() => real.snapshot()),
-    click: (target) => run(() => real.click(target)),
-    type: (target, text) => run(() => real.type(target, text)),
-    scroll: (direction) => run(() => real.scroll(direction)),
-    back: () => run(() => real.back()),
+    holder: () => browser.viewState(slug).holder,
+    navigate: url => driver().navigate(url), snapshot: () => driver().snapshot(),
+    click: target => driver().click(target), type: (target, text) => driver().type(target, text),
+    scroll: direction => driver().scroll(direction), back: () => driver().back(),
   };
 }
 
@@ -396,7 +383,7 @@ function registerIpc(): void {
     activeSlug: runtime.activeBot().slug,
     settings: settingsView(), jobs: publicJobs(),
     call: live ? { slug: liveSlug, state: liveState } : null,
-    browser: browser.viewState(),
+    browser: browser.viewState(runtime.activeBot().slug),
     };
   });
   ipcMain.handle("update:check", async event => {
@@ -409,6 +396,7 @@ function registerIpc(): void {
   });
   ipcMain.handle("bot:active", (_event, slug: string) => {
     runtime.store.setActiveBot(runtime.store.requireBot(slug).id);
+    browser.activate(slug);
     publish();
   });
   ipcMain.handle("bot:create", (_event, name: string, baseline: string) => {
@@ -420,6 +408,7 @@ function registerIpc(): void {
     });
     runtime.store.append(bot.id, { type: "baseline", text: baseline || `${name}的任务。`, fromBotId: parent.id });
     runtime.store.setActiveBot(bot.id);
+    browser.activate(bot.slug);
     publish();
     return bot.slug;
   });
@@ -439,6 +428,7 @@ function registerIpc(): void {
     } finally { clearTimeout(timer); }
     await browser.clearBot(slug);
     runtime.store.deleteBot(bot.id);
+    browser.activate(runtime.activeBot().slug);
     jobs.forgetBot(bot.id);
     focusedFiles.delete(slug); viewFrames.delete(slug); shared.forget(bot.id);
     publish();
@@ -650,27 +640,27 @@ function registerIpc(): void {
   ipcMain.on("call:idle", (_event, serial: number, callId?: string) => {
     live?.noteSpeakerIdle(serial, callId);
   });
-  ipcMain.handle("browser:bounds", (_event, bounds: { x: number; y: number; width: number; height: number } | null) => {
-    browser.setBounds(bounds);
+  ipcMain.handle("browser:bounds", (_event, bounds: { x: number; y: number; width: number; height: number } | null, slug?: string) => {
+    browser.setBounds(slug || runtime.activeBot().slug, bounds);
   });
   ipcMain.handle("browser:go", async (_event, url: string) => {
-    browser.actingSlug = runtime.activeBot().slug;
-    return browser.userNavigate(url);
+    return browser.forBot(runtime.activeBot().slug).userNavigate(url);
   });
-  ipcMain.handle("browser:back", () => browser.userBack());
-  ipcMain.handle("browser:forward", () => browser.userForward());
+  ipcMain.handle("browser:back", () => browser.forBot(runtime.activeBot().slug).userBack());
+  ipcMain.handle("browser:forward", () => browser.forBot(runtime.activeBot().slug).userForward());
   ipcMain.handle("browser:holder", (_event, holder: "bot" | "user") => {
-    browser.setHolder(holder);
+    browser.forBot(runtime.activeBot().slug).setHolder(holder);
   });
 }
 
 function attachDownloads(): void {
   const partition = session.fromPartition("persist:xiaowang");
-  partition.on("will-download", (_event, item) => {
-    const owner = runtime.store.getBot(browser.ownerSlug || runtime.activeBot().slug);
+  partition.on("will-download", (_event, item, contents) => {
+    const slug = contents && browser.slugForContents(contents.id);
+    const owner = slug ? runtime.store.getBot(slug) : undefined;
     if (!owner) { item.cancel(); return; }
     const filename = item.getFilename() || "download";
-    const savePath = path.join(app.getPath("temp"), `xiaowang-${Date.now()}-${filename}`);
+    const savePath = path.join(app.getPath("temp"), `xiaowang-${randomUUID()}-${filename}`);
     item.setSavePath(savePath);
     item.once("done", (_done, state) => {
       if (state !== "completed") return;
@@ -714,6 +704,7 @@ async function createWindow(): Promise<void> {
     },
   });
   browser.attach(window);
+  browser.activate(runtime.activeBot().slug);
   // Native edit-menu accelerators can consume Ctrl+V before Chromium dispatches
   // a key/paste event for an image. The renderer checks composer focus first.
   window.webContents.on("before-input-event", (_event, input) => {
@@ -978,11 +969,10 @@ app.whenReady().then(async () => {
   for (const [field, variable] of overrides) if (process.env[variable]?.trim()) environmentPatch[field] = process.env[variable]!.trim();
   secrets = availableRealtimeSettings(mergeSettings(secrets, environmentPatch), experimentalMossEnabled);
   attachDownloads();
-  browser = new BrowserPane(
-    () => runtime.activeBot().slug,
-    (state) => send("browser", state),
-    (filename, bytes) => {
-      const bot = runtime.store.requireBot(browser.ownerSlug || runtime.activeBot().slug);
+  browser = new BotBrowsers(
+    (slug, state) => { if (slug === runtime.activeBot().slug) send("browser", { ...state, slug }); },
+    (slug, filename, bytes) => {
+      const bot = runtime.store.requireBot(slug);
       const added = runtime.store.addLibraryBytes(bot.id, filename, bytes);
       send("stage", { slug: bot.slug, mode: "file", id: added.ref.id, filename: added.ref.filename, page: 1 });
       send("download", { slug: bot.slug, id: added.ref.id, filename: added.ref.filename });
