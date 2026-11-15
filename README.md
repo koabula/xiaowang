@@ -8,9 +8,22 @@
 
 直接开口交流，也可以用文字布置工作。小王把实时语音和后台 Agent 放在一起：复杂的调研交给后台处理，通话可以继续；完成后，再把结果告诉你。PDF、网页、讲解用的 Canvas 和生成的笔记都在同一个窗口中。
 
+## 演示视频
+
+[![点击观看：获取论文、创建子 bot、语音问答与打断](assets/readme/attention-demo.png)](assets/readme/attention-demo.mp4)
+
+[▶ 查看高清演示（1 分 43 秒，2940 × 1846 · 30 fps）](assets/readme/attention-demo.mp4)
+
+从刚初始化的小王开始，用文字获取 *Attention Is All You Need*，让小王创建子 bot 快速分析，再打电话聊论文、自注意力和例子，演示短回答接话、语音打断与口语挂断。视频使用真实模型服务：小王为豆包小何 2.0，提问语音由 Bill TTS 合成；保留实际等待和对话过程。
+
+<details>
+<summary>更多界面示意</summary>
+
 ![小王同学的语音、论文阅读与后台任务界面](assets/readme/voice-research.png)
 
-*当前源码的真实桌面界面；演示使用本地模拟服务与示例资料，不代表真实模型的回答质量或延迟。*
+*此截图使用本地模拟服务与示例资料，不代表真实模型的回答质量或延迟。*
+
+</details>
 
 ## 下载与更新
 

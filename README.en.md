@@ -8,9 +8,22 @@
 
 Speak naturally or give instructions in text. XiaoWang brings realtime voice and a background agent together: longer research runs while your conversation continues, and XiaoWang can tell you when the results are ready. PDFs, web pages, Canvas presentations, and generated notes share one window.
 
+## Demo video
+
+[![Watch: fetch a paper, create a sub bot, ask questions, and interrupt speech](assets/readme/attention-demo.png)](assets/readme/attention-demo.mp4)
+
+[▶ View the HD demo (1:43, 2940 × 1846 · 30 fps)](assets/readme/attention-demo.mp4)
+
+Starting with a fresh workspace, ask XiaoWang to fetch *Attention Is All You Need* and create a sub bot for a quick analysis, then call to discuss the paper, self-attention, and an example. The demo includes immediate follow-ups to short answers, a voice interruption, and a spoken request to hang up. It uses real model services: Doubao's Xiaohe 2.0 for XiaoWang and Bill TTS for the questions, with actual waiting and conversation preserved. The conversation is in Chinese.
+
+<details>
+<summary>More interface examples</summary>
+
 ![XiaoWang voice conversation, paper viewer, and background research](assets/readme/voice-research.png)
 
-*Actual desktop UI from the current source, demonstrated with local mock services and sample material. This does not measure real-model answer quality or latency.*
+*This screenshot uses local mock services and sample material; it does not measure real-model answer quality or latency.*
+
+</details>
 
 ## Download and update
 
