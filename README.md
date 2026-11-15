@@ -18,15 +18,6 @@ https://github.com/user-attachments/assets/7b27eaa3-ece9-470b-a0b3-87df8baa8588
 
 从刚初始化的小王开始，用文字获取 *Attention Is All You Need*，让小王创建子 bot 快速分析，再打电话聊论文、自注意力和例子，演示短回答接话、语音打断与口语挂断。视频使用真实模型服务：小王为豆包小何 2.0，提问语音由 Bill TTS 合成；保留实际等待和对话过程。
 
-<details>
-<summary>更多界面示意</summary>
-
-![小王同学的语音、论文阅读与后台任务界面](assets/readme/voice-research.png)
-
-*此截图使用本地模拟服务与示例资料，不代表真实模型的回答质量或延迟。*
-
-</details>
-
 ## 下载与更新
 
 在 [GitHub Releases 最新版](https://github.com/koabula/xiaowang/releases/latest) 中选择适合设备的安装包：

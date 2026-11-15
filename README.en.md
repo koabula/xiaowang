@@ -18,15 +18,6 @@ https://github.com/user-attachments/assets/7b27eaa3-ece9-470b-a0b3-87df8baa8588
 
 Starting with a fresh workspace, ask XiaoWang to fetch *Attention Is All You Need* and create a sub bot for a quick analysis, then call to discuss the paper, self-attention, and an example. The demo includes immediate follow-ups to short answers, a voice interruption, and a spoken request to hang up. It uses real model services: Doubao's Xiaohe 2.0 for XiaoWang and Bill TTS for the questions, with actual waiting and conversation preserved. The conversation is in Chinese.
 
-<details>
-<summary>More interface examples</summary>
-
-![XiaoWang voice conversation, paper viewer, and background research](assets/readme/voice-research.png)
-
-*This screenshot uses local mock services and sample material; it does not measure real-model answer quality or latency.*
-
-</details>
-
 ## Download and update
 
 Choose an installer from the [latest GitHub Release](https://github.com/koabula/xiaowang/releases/latest):
