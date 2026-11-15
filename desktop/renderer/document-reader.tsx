@@ -2,15 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, FileText, LoaderCircle, Minus, Plus, Search, X } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { AnnotationMode, GlobalWorkerOptions, getDocument, type PDFDocumentLoadingTask } from "pdfjs-dist";
+import { AnnotationMode, GlobalWorkerOptions, getDocument, type PDFDocumentLoadingTask, type PDFDocumentProxy } from "pdfjs-dist";
 import { EventBus, PDFViewer, PDFLinkService, PDFFindController, ScrollMode, RenderingStates } from "pdfjs-dist/web/pdf_viewer.mjs";
 import "pdfjs-dist/web/pdf_viewer.css";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
 export interface ReaderFile { id: string; filename: string; page: number; requestId?: string; restore?: boolean }
-export function DocumentReader({ slug, file, locale = "zh" }: { slug: string; file: ReaderFile; locale?: "zh" | "en" }) {
-  return /\.(png|jpe?g|webp|gif)$/i.test(file.filename) ? <ImageReader key={`${slug}:${file.id}`} slug={slug} file={file} /> : /\.pdf$/i.test(file.filename) ? <PdfReader key={`${slug}:${file.id}`} slug={slug} file={file} locale={locale} /> : <TextReader key={`${slug}:${file.id}`} slug={slug} file={file} />;
+export function DocumentReader({ slug, file, locale = "zh", visualCallId }: { slug: string; file: ReaderFile; locale?: "zh" | "en"; visualCallId?: string }) {
+  return /\.(png|jpe?g|webp|gif)$/i.test(file.filename) ? <ImageReader key={`${slug}:${file.id}`} slug={slug} file={file} /> : /\.pdf$/i.test(file.filename) ? <PdfReader key={`${slug}:${file.id}`} slug={slug} file={file} locale={locale} visualCallId={visualCallId} /> : <TextReader key={`${slug}:${file.id}`} slug={slug} file={file} />;
 }
 
 function ImageReader({ slug, file }: { slug: string; file: ReaderFile }) {
@@ -44,7 +44,7 @@ function TextReader({ slug, file }: { slug: string; file: ReaderFile }) {
 }
 function Loading() { return <div className="reader-loading" role="status" aria-label="Loading document / 正在载入文档"><LoaderCircle size={18} className="spin" /></div>; }
 
-function PdfReader({ slug, file, locale }: { slug: string; file: ReaderFile; locale: "zh" | "en" }) {
+function PdfReader({ slug, file, locale, visualCallId }: { slug: string; file: ReaderFile; locale: "zh" | "en"; visualCallId?: string }) {
   const en = locale === "en";
   const container = useRef<HTMLDivElement>(null); const viewerElement = useRef<HTMLDivElement>(null);
   const engine = useRef<PDFViewer | null>(null); const bus = useRef<EventBus | null>(null);
@@ -54,6 +54,31 @@ function PdfReader({ slug, file, locale }: { slug: string; file: ReaderFile; loc
   const [error, setError] = useState(""); const [loading, setLoading] = useState(true);
   const [findOpen, setFindOpen] = useState(false); const [query, setQuery] = useState(""); const [matches, setMatches] = useState({ current: 0, total: 0 });
   const [pageInput, setPageInput] = useState("1");
+  const captureReady = useRef<{ page: number; done: Promise<boolean> } | null>(null);
+  const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
+  useEffect(() => {
+    if (!document || !pages) return;
+    let stopped = false;
+    let revision = -1;
+    let finish!: (value: boolean) => void;
+    captureReady.current = { page, done: new Promise<boolean>(resolve => { finish = resolve; }) };
+    let render: ReturnType<Awaited<ReturnType<PDFDocumentProxy["getPage"]>>["render"]> | undefined;
+    // A separate bounded canvas avoids viewer recycling, zoom changes and blank-page captures.
+    const timer = setTimeout(() => { void (async () => {
+      revision = await window.xiaowang.stagePosition(slug, { path: file.id, page, totalPages: pages, mode: "file" });
+      if (stopped || revision < 0) return;
+      const pdfPage = await document.getPage(page); if (stopped) return;
+      const original = pdfPage.getViewport({ scale: 1 });
+      const viewport = pdfPage.getViewport({ scale: Math.min(2, 1600 / Math.max(original.width, original.height)) });
+      const canvas = window.document.createElement("canvas"); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
+      render = pdfPage.render({ canvas, viewport, background: "rgb(255,255,255)" }); await render.promise;
+      if (!stopped) finish(await window.xiaowang.stageVisual(slug, { refId: file.id, page, revision, data: canvas.toDataURL("image/jpeg", .85).split(",")[1]!, ...(visualCallId ? { callId: visualCallId } : {}) }));
+      canvas.width = canvas.height = 0;
+    })().catch(() => {
+      if (!stopped) void window.xiaowang.stageVisual(slug, { refId: file.id, page, revision, data: "", ...(visualCallId ? { callId: visualCallId } : {}) });
+    }).finally(() => finish(false)); }, 350);
+    return () => { stopped = true; clearTimeout(timer); render?.cancel(); finish(false); };
+  }, [document, pages, page, slug, file.id, visualCallId]);
   const positionKey = `xiaowang.pdfPosition:${slug}:${file.id}`;
   useEffect(() => { setPageInput(String(page)); }, [page]);
   useEffect(() => {
@@ -69,9 +94,18 @@ function PdfReader({ slug, file, locale }: { slug: string; file: ReaderFile; loc
     let task: PDFDocumentLoadingTask | null = null; let ready = false; let pending: ReaderFile | null = null;
     const acknowledged = new Set<string>();
     let savedPage = 0; try { savedPage = Number(localStorage.getItem(positionKey)); } catch { /* Optional reading position. */ }
-    const ack = (requested: ReaderFile, reason?: string) => {
+    const ack = async (requested: ReaderFile, reason?: string) => {
       if (!requested.requestId || acknowledged.has(requested.requestId)) return;
       acknowledged.add(requested.requestId);
+      if (!reason) {
+        for (let attempt = 0; attempt < 40 && !ac.signal.aborted && captureReady.current?.page !== requested.page; attempt++) await new Promise(resolve => setTimeout(resolve, 50));
+        const capture = captureReady.current;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const captured = capture?.page === requested.page && await Promise.race([capture.done, new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 4000); })]);
+        clearTimeout(timer);
+        if (ac.signal.aborted) return;
+        if (!captured) reason = "页面已显示，但视觉画面尚未共享；不要声称已经看到了页面图像。";
+      }
       void window.xiaowang.stageAck(slug, requested.requestId, { page: requested.page, totalPages: viewer.pagesCount || 1, title: requested.filename, ...(reason ? { error: reason } : {}) });
     };
     const navigate = (requested: ReaderFile) => {
@@ -117,7 +151,7 @@ function PdfReader({ slug, file, locale }: { slug: string; file: ReaderFile; loc
       if (ac.signal.aborted) return;
       task = getDocument({ data: new Uint8Array(bytes), useSystemFonts: true, cMapUrl: `${resources}cmaps/`, cMapPacked: true, standardFontDataUrl: `${resources}standard_fonts/`, wasmUrl: `${resources}wasm/`, iccUrl: `${resources}iccs/` });
       const pdf = await task.promise; if (ac.signal.aborted) return;
-      link.setDocument(pdf); viewer.setDocument(pdf);
+      setDocument(pdf); link.setDocument(pdf); viewer.setDocument(pdf);
     }).catch(reason => { if (!ac.signal.aborted) { const message = reason instanceof Error ? reason.message : String(reason); setError(message); setLoading(false); ack(latest.current, message); } });
     const resize = new ResizeObserver(() => { if (ready && ["page-width", "page-fit", "auto"].includes(viewer.currentScaleValue)) viewer.currentScaleValue = viewer.currentScaleValue; });
     resize.observe(area);

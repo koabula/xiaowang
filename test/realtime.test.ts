@@ -282,3 +282,17 @@ test("a transport reconnect keeps the task but never replays an old tool call", 
   assert.ok(states.some(state => state.phase === "reconnecting"));
   assert.equal(sockets[1]!.sent.some(event => event.item?.call_id === "once"), false);
 });
+
+test("OpenAI images are passive conversation items; Qwen waits for audio then appends images without a response request", async t => {
+  const image = { key: "view:paper:2", refId: "paper", filename: "paper.pdf", page: 2, revision: 1, mimeType: "image/jpeg" as const, data: "REAL-PIXELS" };
+  const openai = fixture(t); await openai.call.shareVisual([image]);
+  const item = openai.sent.find(p => p.item?.content?.some((c: any) => c.type === "input_image"));
+  assert.equal(item?.item.content[1].image_url, "data:image/jpeg;base64,REAL-PIXELS"); assert.equal(openai.creates().length, 0);
+  const qwen = fixture(t, undefined, QWEN_REALTIME_URL);
+  const sending = qwen.call.shareVisual([image]); await delay(60);
+  assert.equal(qwen.sent.some(p => p.type === "input_image_buffer.append"), false);
+  qwen.call.sendAudio(Buffer.alloc(640)); assert.equal(await sending, true);
+  assert.ok(qwen.sent.findIndex(p => p.type === "input_audio_buffer.append") < qwen.sent.findIndex(p => p.type === "input_image_buffer.append"));
+  assert.equal(qwen.sent.find(p => p.type === "input_image_buffer.append")?.image, "REAL-PIXELS"); assert.equal(qwen.creates().length, 0);
+  const doubao = fixture(t, undefined, DOUBAO_REALTIME_URL); assert.equal(await doubao.call.shareVisual([image]), false); assert.equal(doubao.sent.some(p => p.type === "input_image_buffer.append" || p.item), false);
+});

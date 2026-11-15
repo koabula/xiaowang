@@ -1,3 +1,4 @@
+import { modelText } from './fixtures/model-content.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
@@ -32,8 +33,8 @@ test('desktop: MOSS native audio, interruption, tools, durable delegation, spoke
     let raw = ''; for await (const chunk of request) raw += chunk;
     const input = JSON.parse(raw); requests++;
     const user = input.messages.findLast(message => message.role === 'user');
-    const cancelled = (user?.content || '').lastIndexOf('取消测试') > (user?.content || '').lastIndexOf('延后测试');
-    const late = /延后测试/.test(user?.content || '');
+    const cancelled = modelText(user).lastIndexOf('取消测试') > modelText(user).lastIndexOf('延后测试');
+    const late = /延后测试/.test(modelText(user));
     const hasRead = input.messages.some(message => message.role === 'tool' && message.content.includes('MOSS-RESEARCH-42'));
     const hasWritten = input.messages.some(message => message.role === 'tool' && message.content.includes('notes/research.md'));
     response.writeHead(200, { 'content-type': 'text/event-stream' });

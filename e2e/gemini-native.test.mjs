@@ -33,7 +33,7 @@ test('Gemini production call: native tools, playback continuation, reconnect, du
       if (message.setup) { setups.push(message.setup); client.send(JSON.stringify({ setupComplete: {} })); client.send(JSON.stringify({ sessionResumptionUpdate: { resumable: true, newHandle: 'resume-fixture' } })); }
       if (message.realtimeInput?.audio) mic++;
       if (message.realtimeInput?.audioStreamEnd) endAudio++;
-      if (message.clientContent) cues.push({ value: message.clientContent, at: Date.now() });
+      if (message.clientContent?.turnComplete === true) cues.push({ value: message.clientContent, at: Date.now() });
       for (const reply of message.toolResponse?.functionResponses || []) replies.push({ ...reply, at: Date.now() });
     });
   });

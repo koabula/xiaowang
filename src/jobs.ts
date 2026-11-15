@@ -35,7 +35,7 @@ export class JobQueue {
 
   start(): void { if (this.enabled) return; this.enabled = true; this.pump(); }
 
-  enqueue(input: { botId: string; task: string; messageText?: string; attachments?: Attachment[]; channel?: Channel; notify?: TaskJob["notify"]; sourceCallId?: string; display?: TaskJob["display"]; title?: string; originCallId?: string }): TaskJob {
+  enqueue(input: { botId: string; task: string; messageText?: string; attachments?: Attachment[]; sharedContext?: TaskJob["sharedContext"]; channel?: Channel; notify?: TaskJob["notify"]; sourceCallId?: string; display?: TaskJob["display"]; title?: string; originCallId?: string }): TaskJob {
     if (this.stopped) throw new Error("任务队列正在关闭。");
     if (this.removing.has(input.botId)) throw new Error("这个 Bot 正在删除。");
     this.store.requireBot(input.botId);
@@ -50,6 +50,7 @@ export class JobQueue {
     job.queuedAt = now;
     if (input.attachments?.length) job.attachments = input.attachments.map(a => ({ ...a }));
     if (input.messageText !== undefined) job.messageText = input.messageText;
+    if (input.sharedContext) job.sharedContext = structuredClone(input.sharedContext);
     this.change(job, {});
     // Dispatch in a microtask so the caller can retain the durable job ID first.
     queueMicrotask(() => this.pump());

@@ -1,3 +1,4 @@
+import { modelText } from './fixtures/model-content.mjs';
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer } from "node:http";
@@ -51,7 +52,7 @@ test("desktop: voice interruption, PDF Viewer, bot files, settings and saved sta
     const input = JSON.parse(body);
     assert.equal(input.stream, true);
     response.writeHead(200, { "content-type": "text/event-stream" });
-    const readPdf = input.messages.some(message => typeof message.content === "string" && message.content.includes("阅读PDF"));
+    const readPdf = input.messages.some(message => modelText(message).includes("阅读PDF"));
     const evidence = input.messages.findLast(message => message.role === "tool" && typeof message.content === "string" && message.content.includes("EVIDENCE-SENTENCE-42"));
     if (readPdf && !evidence) {
       response.end(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "read_pdf", function: { name: "read_document", arguments: JSON.stringify({ file: reference.id }) } }] }, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`); return;

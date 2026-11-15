@@ -1,3 +1,4 @@
+import { modelText } from './fixtures/model-content.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
@@ -39,11 +40,11 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
   const model = createServer(async (request, response) => {
     let raw = ''; for await (const chunk of request) raw += chunk;
     const input = JSON.parse(raw);
-    const index = input.messages.findLastIndex(message => message.role === 'user' && /你去分析一下|文字分析测试/.test(message.content));
-    assert.ok(index >= 0); const task = input.messages[index].content;
-    const kind = task.includes('文字分析测试') ? 'text' : 'voice';
+    const index = input.messages.findLastIndex(message => message.role === 'user' && /你去分析一下|文字分析测试/.test(modelText(message)));
+    assert.ok(index >= 0); const task = modelText(input.messages[index]);
+    const kind = task.lastIndexOf('文字分析测试') > task.lastIndexOf('你去分析一下') ? 'text' : 'voice';
     const turn = input.messages.slice(index + 1);
-    assert.ok(!turn.some(message => typeof message.content === 'string' && message.content.includes('梳理了吗')),'Live progress must not replace the running research goal');
+    assert.ok(!turn.some(message => modelText(message).includes('梳理了吗')), 'Live progress must not replace the running research goal');
     const source = turn.find(message => message.role === 'tool' && message.content.includes('RESEARCH-EVIDENCE-42'));
     const written = turn.find(message => message.role === 'tool' && /notes\/research.md/.test(message.content));
     response.writeHead(200, { 'content-type': 'text/event-stream' });

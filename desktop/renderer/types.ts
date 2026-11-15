@@ -39,7 +39,9 @@ declare global {
       cancelJob: (id: string) => Promise<void>;
       retryJob: (id: string) => Promise<TaskJob>;
       stageAck: (slug: string, requestId: string, receipt: StageReceipt & { error?: string }) => Promise<boolean>;
-      stagePosition: (slug: string, position: { path: string; page: number; totalPages: number; mode: "canvas" | "file" }) => Promise<void>;
+      stageHide: (slug: string) => Promise<void>;
+      stageVisual: (slug: string, frame: { refId: string; page: number; revision: number; data: string; callId?: string }) => Promise<boolean>;
+      stagePosition: (slug: string, position: { path: string; page: number; totalPages: number; mode: "canvas" | "file" }) => Promise<number>;
       saveSettings: (patch: SettingsPatch) => Promise<SettingsView>;
       settingsDirty: (dirty: boolean) => Promise<void>;
       finishSettingsClose: (intent: "window" | "quit") => Promise<void>;
@@ -159,7 +161,8 @@ export interface SettingsPatch {
 export interface CallNote {
   callId?: string;
   slug: string;
-  phase: "connecting" | "live" | "closed" | "audio" | "interrupt" | "line" | "saved" | "state";
+  phase: "connecting" | "live" | "closed" | "audio" | "interrupt" | "line" | "saved" | "state" | "visual";
+  visual?: import("../../src/shared-context.ts").VisualShare;
   state?: VoiceState;
   identity?: AudioIdentity;
   interruption?: PlaybackInterruption;

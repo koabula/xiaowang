@@ -37,6 +37,8 @@ import { MossVoiceCatalog } from "./moss-voices.ts";
 import { GeminiCall } from "./gemini-call.ts";
 import { geminiSession } from "../../src/gemini-session.ts";
 
+import { SharedContexts, contextDescription, type WorkspaceContext, type VisualInput } from "../../src/shared-context.ts";
+
 protocol.registerSchemesAsPrivileged([
   {
     scheme: "xwlib",
@@ -257,6 +259,32 @@ let live: LiveCall | MossCall | GeminiCall | null = null;
 let liveSlug = "";
 let liveState: VoiceState | null = null;
 const stages = new StageRequests(note => send("stage", note));
+const shared = new SharedContexts();
+const jobFrames = new Map<string, VisualInput>();
+const viewFrames = new Map<string, VisualInput>();
+function contextChanged(botId: string, state: WorkspaceContext): void {
+  runtime.store.append(botId, { type: "workspace_context", state });
+  if (live && liveSlug === runtime.store.requireBot(botId).slug) live.updateContext("workspace", contextDescription(state));
+}
+function visualCall(slug: string): LiveCall | GeminiCall | null { return liveSlug === slug && (live instanceof LiveCall || live instanceof GeminiCall) ? live : null; }
+function jpegFrame(bytes: Buffer): string {
+  let image = nativeImage.createFromBuffer(bytes);
+  if (image.isEmpty()) throw new Error("无法读取共享画面。");
+  const size = image.getSize(); const scale = Math.min(1, 1600 / Math.max(size.width, size.height));
+  if (scale < 1) image = image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) });
+  return image.toJPEG(85).toString("base64");
+}
+function shareMessageImages(slug: string, state: WorkspaceContext): void {
+  const call = visualCall(slug); if (!call) return;
+  const bot = runtime.store.requireBot(slug);
+  const images: VisualInput[] = [];
+  for (const attachment of state.imageAttachments ?? state.message?.attachments ?? []) {
+    if (!attachment.mimeType.startsWith("image/")) continue;
+    try { const ref = runtime.store.resolveLibraryRef(bot.id, attachment.refId); images.push({ key: `message:${attachment.refId}`, refId: ref.id, filename: ref.filename, page: 1, revision: state.revision, mimeType: "image/jpeg", data: jpegFrame(readFileSync(ref.storedPath)) }); }
+    catch { send("call", { slug, callId: call.id, phase: "visual", visual: { phase: "error", source: attachment.filename, detail: "图片已不可用，未共享画面。" } }); }
+  }
+  if (images.length) void call.shareVisual(images);
+}
 const focusedFiles = new Map<string, string>();
 
 async function ask(job: TaskJob, signal: AbortSignal, activity: (text: string) => void): Promise<JobOutput> {
@@ -265,7 +293,7 @@ async function ask(job: TaskJob, signal: AbortSignal, activity: (text: string) =
   const provider = createProvider(configFromEnv(envFromSecrets()));
   let resultEventId: number | undefined;
   const result = await runTurn(runtime, {
-    botId: bot.id, input: job.task, messageText: job.messageText, attachments: job.attachments, channel: job.channel, provider,
+    botId: bot.id, input: job.task, messageText: job.messageText, attachments: job.attachments, sharedContext: job.sharedContext, sharedImages: jobFrames.has(job.id) ? [{ mimeType: "image/jpeg", data: jobFrames.get(job.id)!.data }] : undefined, channel: job.channel, provider,
     jobId: job.id,
     onInput: id => jobs.linkInput(job.id, id),
     env: envFromSecrets(), locale: localeOf(secrets.locale), signal,
@@ -287,6 +315,12 @@ async function ask(job: TaskJob, signal: AbortSignal, activity: (text: string) =
 
 function jobChanged(job: TaskJob): void {
   const bot = runtime.store.requireBot(job.botId);
+  if (job.status === "queued") {
+    const frame = viewFrames.get(bot.slug), view = job.sharedContext?.view;
+    if (frame && view?.visible && view.path === frame.refId && view.page === frame.page && job.sharedContext?.viewRevision === frame.revision) jobFrames.set(job.id, frame);
+  }
+  if (["succeeded", "failed", "cancelled", "interrupted"].includes(job.status)) jobFrames.delete(job.id);
+  contextChanged(bot.id, shared.job(bot.id, job));
   const busy = jobs?.busy(job.botId) ?? job.status === "running";
   const shown = job.display && job.title ? job : presentJob(job, runtime.store.getEvents(bot.id));
   send("job", { ...shown, slug: bot.slug });
@@ -406,7 +440,7 @@ function registerIpc(): void {
     await browser.clearBot(slug);
     runtime.store.deleteBot(bot.id);
     jobs.forgetBot(bot.id);
-    focusedFiles.delete(slug);
+    focusedFiles.delete(slug); viewFrames.delete(slug); shared.forget(bot.id);
     publish();
   });
   ipcMain.handle("bot:avatar", (_event, slug: string, patch: { seed?: string; ink?: string }) => {
@@ -416,6 +450,8 @@ function registerIpc(): void {
   ipcMain.handle("library:forget", (_event, slug: string, id: string) => {
     const bot = runtime.store.requireBot(slug);
     runtime.store.forgetLibraryRef(bot.id, id);
+    if (shared.get(bot.id).view?.path === id) { viewFrames.delete(slug); visualCall(slug)?.clearVisual(); }
+    visualCall(slug)?.forgetVisual(id); contextChanged(bot.id, shared.revoke(bot.id, id));
     publish();
   });
   ipcMain.handle("chat:events", (_event, slug: string) => chatItems(slug));
@@ -507,7 +543,9 @@ function registerIpc(): void {
     if (typeof text !== "string") throw new Error("消息格式无效。");
     const attachments = resolveAttachments(runtime.store, bot.id, ids);
     const task = text.trim() || (attachments.length ? "请查看这些附件。" : "");
-    const job = jobs.enqueue({ botId: bot.id, task, messageText: text.trim(), attachments, channel: "text" });
+    const snapshot = shared.message(bot.id, text.trim(), attachments);
+    contextChanged(bot.id, snapshot); shareMessageImages(slug, snapshot);
+    const job = jobs.enqueue({ botId: bot.id, task, messageText: text.trim(), attachments, sharedContext: snapshot, channel: "text" });
     const result = await jobs.wait(job.id);
     if (result.status === "failed") throw new Error(result.error);
     return chatItems(slug);
@@ -520,11 +558,42 @@ function registerIpc(): void {
   ipcMain.handle("job:retry", (_event, id: string) => jobs.retry(id));
   ipcMain.handle("stage:ack", (_event, slug: string, requestId: string, receipt: { page: number; totalPages: number; title?: string; error?: string }) => stages.acknowledge(slug, requestId, receipt));
   ipcMain.handle("stage:position", (_event, slug: string, position: { path: string; page: number; totalPages: number; mode: "canvas" | "file" }) => {
-    runtime.store.requireBot(slug);
-    if (Number.isSafeInteger(position.page) && Number.isSafeInteger(position.totalPages) && position.page > 0 && position.page <= position.totalPages) {
-      if (position.mode === "file") focusedFiles.set(slug, position.path);
-      if (liveSlug === slug) live?.locate(position.path, position.page, position.totalPages, position.mode);
+    const bot = runtime.store.getBot(slug);
+    if (!bot || runtime.activeBot().id !== bot.id) return -1;
+    if (!["canvas", "file"].includes(position.mode) || typeof position.path !== "string") return -1;
+    if (!Number.isSafeInteger(position.page) || !Number.isSafeInteger(position.totalPages) || position.page < 1 || position.page > position.totalPages) return -1;
+    const ref = position.mode === "file" ? runtime.store.resolveLibraryRef(bot.id, position.path) : null;
+    const before = shared.get(bot.id);
+    const snapshot = shared.view(bot.id, { ...position, filename: ref?.filename ?? position.path, visible: true });
+    if (snapshot.revision !== before.revision) {
+      viewFrames.delete(slug); visualCall(slug)?.clearVisual(); contextChanged(bot.id, snapshot);
     }
+    if (ref) focusedFiles.set(slug, ref.id);
+    if (liveSlug === slug) live?.locate(position.path, position.page, position.totalPages, position.mode);
+    if (ref && /\.(png|jpe?g|webp|gif)$/i.test(ref.filename)) {
+      const image: VisualInput = { key: `view:${ref.id}:1:${snapshot.viewRevision}`, refId: ref.id, filename: ref.filename, page: 1, revision: snapshot.viewRevision, mimeType: "image/jpeg", data: jpegFrame(readFileSync(ref.storedPath)) };
+      viewFrames.set(slug, image); void visualCall(slug)?.shareVisual([image]);
+    }
+    return snapshot.viewRevision;
+  });
+  ipcMain.handle("stage:hide", (_event, slug: string) => {
+    const bot = runtime.store.getBot(slug); if (!bot) return; const snapshot = shared.get(bot.id);
+    if (!snapshot.view?.visible) return;
+    contextChanged(bot.id, shared.view(bot.id, { ...snapshot.view, visible: false }));
+    viewFrames.delete(slug); visualCall(slug)?.clearVisual();
+  });
+  ipcMain.handle("stage:visual", (_event, slug: string, frame: { refId: string; page: number; revision: number; data: string; callId?: string }) => {
+    const bot = runtime.store.getBot(slug), call = visualCall(slug);
+    if (!bot) return false;
+    if ((frame.callId && (liveSlug !== slug || live?.id !== frame.callId)) || runtime.activeBot().id !== bot.id || !shared.matches(bot.id, frame.refId, frame.page, frame.revision)) return false;
+    if (frame.data === "") { if (call) send("call", { slug, callId: call.id, phase: "visual", visual: { phase: "error", source: shared.get(bot.id).view?.filename, detail: "当前页图像未能生成，请重新打开文档。" } }); return false; }
+    const ref = runtime.store.resolveLibraryRef(bot.id, frame.refId);
+    if (!/\.pdf$/i.test(ref.filename) || typeof frame.data !== "string" || frame.data.length > 4_000_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(frame.data)) return false;
+    const image: VisualInput = { key: `view:${ref.id}:${frame.page}:${frame.revision}`, refId: ref.id, filename: ref.filename, page: frame.page, revision: frame.revision, mimeType: "image/jpeg", data: jpegFrame(Buffer.from(frame.data, "base64")) };
+    viewFrames.set(slug, image);
+    const delivered = call?.shareVisual([image]);
+    // Display receipts confirm local rendering even when this provider has no visual protocol.
+    return !call || call instanceof LiveCall && !call.supportsVision() ? true : delivered;
   });
   ipcMain.handle("settings:models", async (_event, patch: SecretPatch) => {
     const draft = draftSecrets(patch);
@@ -717,7 +786,7 @@ function startCall(slug: string): void {
     try { if (focus) reference = runtime.store.resolveLibraryRef(bot.id, focus); } catch { focusedFiles.delete(slug); }
     return handoffText(task, live?.transcript() ?? [], bot.name, locale)
       + (reference ? `\n\n当前阅读的原文（上下文资料）：${JSON.stringify({ id: reference.id, filename: reference.filename })}。用户明确提到另一份资料时以用户要求为准。` : "");
-  }, () => live?.id);
+  }, () => live?.id, () => shared.get(bot.id));
   const tools = voiceTools(toolSchemas(), locale);
   const session = endpoint.family === "gemini" ? geminiSession(instructions, tools, choice.voice, choice.model) : endpoint.family === "moss" ? mossSession(brief, tools, choice.voice) : endpoint.family === "doubao"
     ? doubaoSession({ instructions, tools, voice: choice.voice })
@@ -744,7 +813,7 @@ function startCall(slug: string): void {
       return jobs.enqueue({ botId: bot.id, task: handoffText(task.objective, live?.transcript() ?? [], bot.name, locale)
         + `\n\n委派上下文（仅作资料）：${JSON.stringify(task.context ?? [])}`
         + (reference ? `\n当前原文：${JSON.stringify({ id: reference.id, filename: reference.filename })}` : ""),
-        channel: "voice", notify: "silent", title: task.objective, sourceCallId: `moss:${task.sessionId}:${task.id}`, originCallId: live?.id });
+        sharedContext: shared.get(bot.id), channel: "voice", notify: "silent", title: task.objective, sourceCallId: `moss:${task.sessionId}:${task.id}`, originCallId: live?.id });
     },
     cancelDelegation(id) { jobs.cancel(id); },
     async runTool(name, args, callId, signal) {
@@ -815,6 +884,7 @@ function openCall(
   let previousPresentation = "";
   let call: LiveCall | MossCall | GeminiCall;
   const handlers: MossHandlers = {
+    onVisual(visual) { if (!preview) send("call", { slug, callId: call.id, phase: "visual", visual }); },
     onState(state) {
       liveState = state;
       send("call", { slug, callId: call.id, phase: "state", state, preview });
@@ -835,6 +905,12 @@ function openCall(
         }
       }
       send("call", { slug, callId: call.id, phase, detail: detail ?? "", preview, inputRate, outputRate });
+      if (phase === "live" && slug && !preview) {
+        const bot = runtime.store.requireBot(slug), snapshot = shared.get(bot.id);
+        call.updateContext("workspace", contextDescription(snapshot)); shareMessageImages(slug, snapshot);
+        const frame = viewFrames.get(slug); if (frame && visualCall(slug)) void visualCall(slug)!.shareVisual([frame]);
+        if (call instanceof MossCall || call instanceof LiveCall && !call.supportsVision()) handlers.onVisual?.({ phase: "unavailable", detail: "当前语音服务暂未开放视觉输入，可交给后台分析。" });
+      }
       if (phase === "closed" && live === call) { live = null; liveSlug = ""; liveState = null; }
     },
     onAudio(pcm, serial, identity) {
@@ -869,6 +945,11 @@ function openCall(
 
 app.whenReady().then(async () => {
   runtime = Runtime.open(resolveHome());
+  for (const bot of runtime.store.listBots()) {
+    const events = runtime.store.getEvents(bot.id), saved = events.findLast(item => item.event.type === "workspace_context")?.event;
+    if (saved?.type === "workspace_context") shared.restore(bot.id, saved.state);
+    else { const message = events.findLast(item => item.event.type === "user_text" && item.event.channel === "text")?.event; if (message?.type === "user_text") shared.message(bot.id, message.text, message.attachments ?? []); }
+  }
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permission === "media");
   });

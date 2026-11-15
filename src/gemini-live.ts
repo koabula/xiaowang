@@ -114,6 +114,14 @@ export class GeminiLive {
     this.internalInterruption = true;
     this.send({ clientContent: { turns: [{ role: "user", parts: [{ text: value }] }], turnComplete: true } });
   }
+  sendContext(value: string): void {
+    this.requireReady();
+    this.send({ clientContent: { turns: [{ role: "user", parts: [{ text: value }] }], turnComplete: false } });
+  }
+  sendImage(data: string): void {
+    this.requireReady();
+    this.send({ realtimeInput: { video: { mimeType: "image/jpeg", data } } });
+  }
   sendAudio(pcm: Buffer): void {
     this.requireReady();
     if (pcm.length % 2) throw new Error("Gemini 输入需要 16 kHz 单声道 PCM16 音频。");

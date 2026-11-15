@@ -1,6 +1,7 @@
 import type { Locale } from "./locale.ts";
 import { projectLlmContext } from "./project.ts";
 import { hydrateImages } from "./attachments.ts";
+import { contextDescription, type WorkspaceContext } from "./shared-context.ts";
 import type { Runtime } from "./runtime.ts";
 import type { BrowserDriver, StageDriver } from "./stage.ts";
 import { executeTool, toolSchemas } from "./tools.ts";
@@ -29,6 +30,8 @@ export interface TurnResult {
 }
 
 export interface RunTurnOptions {
+  sharedContext?: WorkspaceContext;
+  sharedImages?: Array<{ mimeType: string; data: string }>;
   messageText?: string;
   attachments?: import("./types.ts").Attachment[];
   botId: string;
@@ -69,6 +72,7 @@ export async function runTurn(runtime: Runtime, options: RunTurnOptions): Promis
         input: job.task,
         attachments: undefined,
         messageText: undefined,
+        sharedContext: undefined, sharedImages: undefined,
         channel: "system",
       }),
     );
@@ -104,6 +108,11 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
     const library = runtime.store.listLibrary(bot.id).map((ref) => ({ id: ref.id, filename: ref.filename }));
     const personName = runtime.ensureSteward().name;
     const projected = projectLlmContext(current, context, { library, personName, locale: options.locale });
+    if (options.sharedContext) {
+      const present = new Set(projected.messages.flatMap(message => message.attachments?.map(a => a.refId) ?? []));
+      const attachments = (options.sharedContext.imageAttachments ?? options.sharedContext.message?.attachments ?? []).filter(a => !present.has(a.refId));
+      projected.messages.splice(Math.max(0, projected.messages.findLastIndex(message => message.role === "user")), 0, { role: "user", content: contextDescription(options.sharedContext), attachments, images: options.sharedImages });
+    }
     const result = await options.provider.complete({
       system: projected.system,
       messages: hydrateImages(runtime.store, bot.id, projected.messages),

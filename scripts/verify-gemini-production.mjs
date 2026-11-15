@@ -134,6 +134,49 @@ try { acceptance: {
   });
   await page.evaluate(baseUrl => window.xiaowang.saveSettings({ baseUrl, model: 'fixture', apiKey: 'local', realtimeService: 'gemini', realtimeKey: 'relay-local-key', realtimeModel: 'gemini-3.8-live', realtimeVoice: 'Kore' }), `http://127.0.0.1:${model.address().port}/v1`);
   assert.equal((await page.evaluate(() => window.xiaowang.getState())).settings.realtimeService, 'gemini');
+  if (process.env.GEMINI_CHECK_VISION_ONLY === '1') {
+    releaseWork(); report.stage = 'visual input';
+    const image = await page.evaluate(async () => {
+      const canvas = document.createElement('canvas'); canvas.width = 1000; canvas.height = 450;
+      const c = canvas.getContext('2d'); c.fillStyle = '#ffffff'; c.fillRect(0, 0, 1000, 450);
+      c.fillStyle = '#143e99'; c.font = 'bold 96px sans-serif'; c.fillText('RAVEN 5873', 100, 240);
+      const bytes = new Uint8Array(await (await new Promise(resolve => canvas.toBlob(resolve, 'image/png'))).arrayBuffer());
+      return window.xiaowang.attach('xiaowang', 'picture.png', bytes);
+    });
+    await page.evaluate(id => window.xiaowang.ask('xiaowang', '请保存这张图片，等我在通话中提问。', [id]), image.refId);
+    await page.evaluate(() => window.xiaowang.callStart('xiaowang'));
+    await until(async () => (await page.evaluate(() => window.geminiCallNotes)).some(n => n.phase === 'visual' && n.visual?.phase === 'shared'), 'Image not shared');
+    await sleep(1800); assert.equal(output, '', 'Passive image/context must not trigger speech'); checked('Image and context updates remain silent');
+    await feed(await voice('请直接读出我刚发的图片里的英文单词和四位数字，不要调用后台助手。', 'vision-image'));
+    await until(() => /raven/i.test(output) && /5873/.test(output.replace(/\s/g, '')), `Gemini did not read actual image: ${output}`);
+    await drained(); checked('Gemini reads actual sent image pixels');
+    const pdf = (() => {
+      const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'], kids = [];
+      for (const label of ['FALCON 2468', 'OTTER 9137']) { const id = objects.length + 1; kids.push(`${id} 0 R`); const content = `0.08 0.2 0.7 rg BT /F1 56 Tf 60 400 Td (${label}) Tj ET`; objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${id + 1} 0 R /Resources << /Font << /F1 3 0 R >> >> >>`, `<< /Length ${content.length} >>\nstream\n${content}\nendstream`); }
+      objects[1] = `<< /Type /Pages /Kids [${kids.join(' ')}] /Count 2 >>`;
+      let data = '%PDF-1.4\n'; const offsets = [0]; objects.forEach((o, i) => { offsets.push(Buffer.byteLength(data)); data += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+      const xref = Buffer.byteLength(data); data += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`; offsets.slice(1).forEach(o => data += `${String(o).padStart(10, '0')} 00000 n \n`);
+      return Buffer.from(data + `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`);
+    })();
+    const doc = await page.evaluate(bytes => window.xiaowang.attach('xiaowang', 'pages.pdf', new Uint8Array(bytes)), [...pdf]);
+    for (const [index, expected] of [[1, /falcon/i], [2, /otter/i]]) {
+      const mark = output.length, notes = (await page.evaluate(() => window.geminiCallNotes)).length;
+      await page.evaluate(({ id, index }) => window.xiaowang.openReference('xiaowang', id, index), { id: doc.refId, index });
+      await until(async () => (await page.evaluate(() => window.geminiCallNotes)).slice(notes).some(n => n.phase === 'visual' && n.visual?.phase === 'shared' && n.visual.source === 'pages.pdf' && n.visual.page === index), 'PDF page frame missing');
+      await sleep(1800); assert.equal(output.length, mark, 'Page changes cannot trigger unsolicited speech');
+      await feed(await voice('请只读出当前打开的PDF页面上最大的英文单词和四位数字。直接看画面，不要调用工具，也不要读之前图片。', `vision-page-${index}`));
+      await until(() => expected.test(output.slice(mark)), `Gemini did not read PDF page ${index}`); await drained();
+      checked(`Gemini reads actual PDF page ${index}, page navigation remains silent`);
+    }
+    const before = connections, notesBefore = (await page.evaluate(() => window.geminiCallNotes)).length; peer.terminate(); upstream.terminate(); await until(async () => connections > before && resumed > 0 && (await page.evaluate(() => window.geminiCallNotes)).slice(notesBefore).some(note => note.phase === 'state' && note.state.detail.includes('已恢复连接')), 'Visual call resumption failed');
+    await sleep(2000); const mark = output.length;
+    await feed(await voice('重连后，请再读一次当前PDF页上的英文单词和数字。不要调用工具。', 'vision-reconnect'));
+    await until(() => /otter/i.test(output.slice(mark)), 'Current page lost after reconnect'); await drained(); checked('Reconnect restores current visual context');
+    await page.evaluate(() => window.xiaowang.callStop());
+    const records = await page.evaluate(() => window.xiaowang.events('xiaowang'));
+    assert.ok(records.some(item => item.kind === 'call' && item.lines?.some(line => /otter/i.test(line.text))));
+    checked('Visual questions and answers persist in the call transcript'); report.status = 'passed'; report.stage = 'complete'; break acceptance;
+  }
   if (process.env.GEMINI_CHECK_HANGUP_ONLY === '1') {
     for (const [index, sentence] of ['现在要把它挂了。', '没有，你可以挂了。'].entries()) {
       const before = (await page.evaluate(() => window.geminiCallNotes)).length;
@@ -224,7 +267,7 @@ try { acceptance: {
 } } catch (error) {
   report.status = 'failed'; report.error = String(error.message).replaceAll(key, '[redacted]'); console.error(`Acceptance failed at ${report.stage}: ${report.error}`); process.exitCode = 1;
   report.syntheticTranscript = { input, output }; report.connections = connections; report.resumptions = resumed; report.tools = toolNames;
-  report.diagnostic = diagnostic;
+  report.diagnostic = diagnostic; report.closed = page ? await page.evaluate(() => (window.geminiCallNotes || []).filter(note => note.phase === 'closed')).catch(() => []) : [];
 } finally {
   shutdown = true; releaseWork(); if (app) await closeTestApp(app);
   for (const client of relay.clients) client.terminate(); upstream?.terminate();

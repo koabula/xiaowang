@@ -35,6 +35,8 @@ contextBridge.exposeInMainWorld("xiaowang", {
   cancelJob: (id) => ipcRenderer.invoke("job:cancel", id),
   retryJob: (id) => ipcRenderer.invoke("job:retry", id),
   stageAck: (slug, requestId, receipt) => ipcRenderer.invoke("stage:ack", slug, requestId, receipt),
+  stageHide: slug => ipcRenderer.invoke("stage:hide", slug),
+  stageVisual: (slug, frame) => ipcRenderer.invoke("stage:visual", slug, frame),
   stagePosition: (slug, position) => ipcRenderer.invoke("stage:position", slug, position),
   saveSettings: (patch) => ipcRenderer.invoke("settings:save", patch),
   settingsDirty: (dirty) => ipcRenderer.invoke("settings:dirty", dirty),

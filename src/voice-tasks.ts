@@ -22,10 +22,11 @@ export class VoiceTasks {
   private readonly botId: string;
   private readonly sessionId: string;
   private readonly handoff: (text: string) => string;
+  private readonly snapshot?: () => TaskJob["sharedContext"];
   private readonly callId?: () => string | undefined;
-  constructor(queue: JobQueue, botId: string, sessionId: string, handoff: (text: string) => string, callId?: () => string | undefined) {
+  constructor(queue: JobQueue, botId: string, sessionId: string, handoff: (text: string) => string, callId?: () => string | undefined, snapshot?: () => TaskJob["sharedContext"]) {
     this.queue = queue; this.botId = botId; this.sessionId = sessionId; this.handoff = handoff;
-    this.callId = callId;
+    this.callId = callId; this.snapshot = snapshot;
   }
 
   userText(text: string, startWork = true): TaskJob | null {
@@ -36,7 +37,7 @@ export class VoiceTasks {
       if (isVoiceProgressRequest(text)) this.accepted = this.latest()?.id ?? null;
       return null;
     }
-    const job = this.queue.enqueue({ botId: this.botId, task: this.handoff(text), channel: "voice", notify: "when_idle", sourceCallId: `${this.sessionId}:user:${this.turn}`, originCallId: this.callId?.() });
+    const job = this.queue.enqueue({ botId: this.botId, task: this.handoff(text), sharedContext: this.snapshot?.(), channel: "voice", notify: "when_idle", sourceCallId: `${this.sessionId}:user:${this.turn}`, originCallId: this.callId?.() });
     this.accepted = job.id;
     return job;
   }
@@ -44,7 +45,7 @@ export class VoiceTasks {
   delegate(task: string, callId: string | undefined, notify: TaskJob["notify"]): TaskJob {
     const accepted = this.current();
     if (accepted) return accepted;
-    const job = this.queue.enqueue({ botId: this.botId, task: this.handoff(task), channel: "voice", notify, sourceCallId: callId, originCallId: this.callId?.() });
+    const job = this.queue.enqueue({ botId: this.botId, task: this.handoff(task), sharedContext: this.snapshot?.(), channel: "voice", notify, sourceCallId: callId, originCallId: this.callId?.() });
     this.accepted = job.id;
     return job;
   }

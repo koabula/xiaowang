@@ -37,16 +37,16 @@ test("Gemini walkthrough waits for actual playback, pauses, resumes and never ac
   speech(socket, "逐页讲解", "第一页内容");
   socket.message({ serverContent: { turnComplete: true } });
   assert.equal(socket.sent[0]?.setup.tools[0].functionDeclarations.some((item: Packet) => item.name === "continue_speaking"), false);
-  await sleep(400); assert.equal(socket.sent.filter(item => item.clientContent).length, 0);
+  await sleep(400); assert.equal(socket.sent.filter(item => item.clientContent?.turnComplete === true).length, 0);
   call.control("pause"); call.noteSpeakerIdle(1, call.id); await sleep(400);
-  assert.equal(socket.sent.filter(item => item.clientContent).length, 1, "Only the deliberate pause control was sent");
+  assert.equal(socket.sent.filter(item => item.clientContent?.turnComplete === true).length, 1, "Only the deliberate pause control was sent");
   call.control("resume"); call.noteSpeakerIdle(0, call.id); await sleep(400);
   assert.match(socket.sent.at(-1)?.clientContent.turns[0].parts[0].text, /应用已确认的讲解位置/);
   assert.equal(call.presentation.snapshot().segments, 0, "An interrupted segment must not count as fully played");
   tool(socket, "finish", "manage_presentation", { action: "complete" }); await sleep();
   speech(socket, "", "讲解完成"); socket.message({ serverContent: { turnComplete: true } }); call.noteSpeakerIdle(2, call.id); await sleep(400);
   assert.equal(call.presentation.snapshot().status, "completed");
-  assert.equal(socket.sent.filter(item => item.clientContent).length, 2, "Only pause and one resumed segment are sent; completion stops continuation");
+  assert.equal(socket.sent.filter(item => item.clientContent?.turnComplete === true).length, 2, "Only pause and one resumed segment are sent; completion stops continuation");
 });
 
 test("Gemini resumes the same session, captures only one live phase and never reexecutes replayed tools", async t => {
@@ -94,8 +94,8 @@ test("the application owns page progression even when Gemini requests later page
   speech(socket, "", "第一页"); socket.message({ serverContent: { turnComplete: true } }); await sleep(400); assert.deepEqual(pages, [1]);
   call.noteSpeakerIdle(1, call.id); await sleep(400); assert.deepEqual(pages, [1, 2]);
   speech(socket, "", "第二页开头"); socket.message({ serverContent: { interrupted: true, turnComplete: true } });
-  const cues = socket.sent.filter(item => item.clientContent).length;
-  await sleep(450); assert.equal(socket.sent.filter(item => item.clientContent).length, cues, "An interrupted old turn cannot restart narration while the user is speaking");
+  const cues = socket.sent.filter(item => item.clientContent?.turnComplete === true).length;
+  await sleep(450); assert.equal(socket.sent.filter(item => item.clientContent?.turnComplete === true).length, cues, "An interrupted old turn cannot restart narration while the user is speaking");
   speech(socket, "为什么？", "这是问题的回答"); socket.message({ serverContent: { turnComplete: true } }); call.noteSpeakerIdle(3, call.id); await sleep(400);
   assert.deepEqual(pages, [1, 2], "Answering an interruption must resume the same page, without skipping its unfinished content");
   speech(socket, "", "第二页剩余内容"); socket.message({ serverContent: { turnComplete: true } }); call.noteSpeakerIdle(4, call.id); await sleep(400);
@@ -113,7 +113,7 @@ test("silent Gemini jobs do not trigger speech, and accepted jobs survive hangup
   tool(socket, "silent", "delegate_task", { task: "research", notify: "silent" }); await sleep();
   call.jobChanged(completedJob("silent")); await sleep();
   assert.equal(socket.result("silent")?.response.scheduling, "SILENT");
-  await sleep(400); assert.equal(socket.sent.some(item => item.clientContent), false);
+  await sleep(400); assert.equal(socket.sent.some(item => item.clientContent?.turnComplete === true), false);
   tool(socket, "ongoing", "delegate_task", { task: "another research" }); await sleep(); call.hangup();
   assert.equal(signal?.aborted, false, "A durable job is independent of a closed voice response channel");
 });
@@ -169,7 +169,7 @@ test("Gemini ends colloquial Chinese requests after goodbye playback and ignores
     socket.message({ serverContent: { turnComplete: true } }); await sleep(400);
     assert.equal(phases.includes("closed"), false, "Goodbye is still playing");
     call.noteSpeakerIdle(1, call.id); await sleep(400);
-    assert.equal(phases.at(-1), "closed"); assert.equal(socket.sent.some(p => p.clientContent), false);
+    assert.equal(phases.at(-1), "closed"); assert.equal(socket.sent.some(p => p.clientContent?.turnComplete === true), false);
   }
 });
 test("Gemini waits for late and fragmented ASR, blocks negated/quoted requests, and closes instead of reconnecting while ending", async t => {
@@ -199,4 +199,21 @@ test("ending call has a bounded fallback when playback receipts or turn completi
   await Promise.resolve(); await Promise.resolve();
   assert.equal(phases.includes("closed"), false); t.mock.timers.tick(8001);
   assert.equal(phases.at(-1), "closed");
+});
+
+test("Gemini shares JPEG frames passively, defers context during playback, and restores visuals on the same resumed session", async t => {
+  const { call, socket, sockets } = fixture(); t.after(() => call.hangup());
+  socket.message({ sessionResumptionUpdate: { resumable: true, newHandle: "visual-resume" } });
+  const image = { key: "view:pdf:1", refId: "pdf", filename: "paper.pdf", page: 1, revision: 1, mimeType: "image/jpeg" as const, data: "JPEG-PIXELS" };
+  await call.shareVisual([image]); assert.deepEqual(socket.sent.at(-1)?.realtimeInput.video, { mimeType: "image/jpeg", data: "JPEG-PIXELS" });
+  speech(socket, "question", "answer"); const before = socket.sent.length;
+  call.updateContext("workspace", "current page 2"); assert.equal(socket.sent.length, before, "Passive text must not interrupt generation");
+  socket.message({ serverContent: { turnComplete: true } }); assert.equal(socket.sent.length, before, "Wait for speaker drain too");
+  call.noteSpeakerIdle(1, call.id);
+  const passive = socket.sent.find(p => p.clientContent?.turnComplete === false); assert.match(passive!.clientContent.turns[0].parts[0].text, /current page 2/);
+  assert.equal(socket.sent.some(p => p.clientContent?.turnComplete === true), false);
+  socket.emit("close", { code: 1006 }); await sleep(350); const resumed = sockets[1]!; resumed.emit("open"); resumed.message({ setupComplete: {} }); await sleep(750);
+  assert.deepEqual(resumed.sent[0]!.setup.sessionResumption, { handle: "visual-resume" });
+  assert.equal(resumed.sent.filter(p => p.realtimeInput?.video?.data === "JPEG-PIXELS").length, 1);
+  assert.equal(resumed.sent.some(p => p.clientContent?.turnComplete === false), true);
 });

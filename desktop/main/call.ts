@@ -4,6 +4,9 @@ import { audioAppend, functionOutput, foldTranscript, mergeUtterance, parseRealt
 import { Presentation, type PresentationState } from "../../src/presentation.ts";
 import { DoubaoRealtime } from "../../src/doubao-realtime.ts";
 
+import { VisualQueue } from "../../src/visual-queue.ts";
+import type { VisualInput, VisualShare } from "../../src/shared-context.ts";
+
 const BREATH_MS = 350;
 export interface PlaybackPosition { serial: number; callId?: string; itemId?: string; chunkId?: string; responseId?: string; contentIndex?: number; playedMs: number }
 export interface AudioIdentity { callId?: string; itemId?: string; chunkId?: string; responseId?: string; contentIndex?: number; playbackEpoch?: number }
@@ -17,6 +20,7 @@ export interface VoiceState {
 export interface CallHandlers {
   onPhase: (phase: "connecting" | "live" | "closed", detail?: string) => void;
   onState?: (state: VoiceState) => void;
+  onVisual?: (state: VisualShare) => void;
   onAudio: (pcm: Buffer, serial: number, identity?: AudioIdentity) => void;
   onInterrupt: (interruption: PlaybackInterruption) => void;
   onLine: (who: "user" | "assistant", text: string, partial: boolean, itemId?: string, order?: number) => void;
@@ -93,6 +97,8 @@ export class LiveCall {
   private lastState = "";
   private errorDetail = "";
   private readonly family: RealtimeFamily;
+  private readonly visuals: VisualQueue;
+  private inputSent = false;
   private doubao = new DoubaoRealtime();
   private nativeInputItem = "";
   private muted = false;
@@ -108,6 +114,10 @@ export class LiveCall {
     this.url = url; this.key = key; this.session = session; this.handlers = handlers; this.connect = connect; this.previewText = previewText;
     this.family = session.type === "session.create" ? "doubao" : realtimeFamily(url);
     this.presentation = new Presentation(initialPresentation);
+    this.visuals = new VisualQueue(() => this.configured && this.open && !this.ending && (this.family !== "qwen" || this.inputSent), image => {
+      if (this.family === "qwen") this.send({ type: "input_image_buffer.append", image: image.data });
+      else this.send({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: `视觉资料：${image.filename}，第 ${image.page} 页。仅更新上下文，等待用户提问。` }, { type: "input_image", image_url: `data:image/jpeg;base64,${image.data}` }] } });
+    }, state => handlers.onVisual?.(state));
     this.instructions = String((session.session as Record<string, unknown> | undefined)?.instructions ?? "");
   }
 
@@ -119,7 +129,16 @@ export class LiveCall {
     if (!this.configured || !this.open || this.closed || this.muted || !pcm.length) return;
     const size = this.family === "doubao" ? 640 : pcm.length;
     for (let i = 0; i < pcm.length; i += size) this.send(audioAppend(pcm.subarray(i, i + size).toString("base64")));
+    this.inputSent = true;
   }
+
+  supportsVision(): boolean { return this.family !== "doubao"; }
+  shareVisual(images: VisualInput[]): Promise<boolean> {
+    if (this.family === "doubao") { this.handlers.onVisual?.({ phase: "unavailable", detail: "豆包当前直连接口未确认支持视觉，请交给后台分析。" }); return Promise.resolve(false); }
+    return this.visuals.add(images);
+  }
+  clearVisual(): void { this.visuals.clearView(); this.handlers.onVisual?.({ phase: "idle" }); }
+  forgetVisual(refId: string): void { this.visuals.forget(refId); }
 
   setMuted(muted: boolean): void {
     this.muted = muted;
@@ -156,7 +175,7 @@ export class LiveCall {
   }
 
   updateContext(key: string, text: string): void {
-    this.context.set(key, text.slice(0, 8_000));
+    this.context.set(key, text.slice(0, key === "workspace" ? 24_000 : 8_000));
     if (this.context.size > 32) {
       const oldestJob = [...this.context.keys()].find(item => item.startsWith("job:"));
       if (oldestJob) this.context.delete(oldestJob);
@@ -185,6 +204,7 @@ export class LiveCall {
     if (this.closed) return;
     if (this.family === "doubao" && this.open) this.send({ type: "session.close" });
     this.closed = true;
+    this.visuals.close();
     this.clearTimers();
     for (const pending of this.truncations.values()) clearTimeout(pending.timer);
     this.truncations.clear();
@@ -196,7 +216,7 @@ export class LiveCall {
 
   private openSocket(): void {
     const epoch = ++this.epoch;
-    this.open = false; this.configured = false;
+    this.open = false; this.configured = false; this.inputSent = false;
     this.doubao = new DoubaoRealtime();
     const headers: Record<string, string> = this.family === "doubao" ? { "X-Api-Key": this.key } : { Authorization: `Bearer ${this.key}` };
     let socket: SocketLike;
@@ -534,7 +554,7 @@ export class LiveCall {
     if (this.family === "doubao" && (this.muted || this.previewText)) this.send({ type: "input_audio_mute.commit" });
     if (this.previewText) { for (const event of previewCue(this.family, this.previewText)) this.send(event); return; }
     if (this.reconnects) this.context.set("recoveredConversation", JSON.stringify(this.lines.slice(-12)));
-    this.syncContext(); this.schedule();
+    this.syncContext(); this.visuals.replay(); this.schedule();
   }
 
   private remember(who: "user" | "assistant", text: string, partial: boolean, itemId?: string): void {

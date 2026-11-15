@@ -4,6 +4,9 @@ import type { TaskJob } from "../../src/types.ts";
 import { canEndCall, refusesHangup } from "../../src/hangup-intent.ts";
 import type { CallHandlers, InterruptionReceipt, PlaybackPosition, VoiceState } from "./call.ts";
 
+import { VisualQueue } from "../../src/visual-queue.ts";
+import type { VisualInput } from "../../src/shared-context.ts";
+
 interface Line { who: "user" | "assistant"; text: string; id: string; order: number; sealed: boolean }
 interface Delegation { remote: string; notify: boolean; resolve(result: GeminiToolResult): void }
 export class GeminiCall {
@@ -19,6 +22,8 @@ export class GeminiCall {
   private readonly notices = new Map<string, string>();
   private readonly announced = new Set<string>();
   private readonly cancelledRemote = new Set<string>();
+  private readonly visuals: VisualQueue;
+  private contextDirty = false;
   private readonly context = new Map<string, string>();
   private readonly navigation = new Set<AbortController>();
   private foreground: Promise<unknown> = Promise.resolve();
@@ -58,7 +63,7 @@ export class GeminiCall {
     this.transport = new GeminiLive(key, { url, model: String(session.model || "gemini-3.8-live"), voice: String(session.voice || "Kore"), instructions: String(session.instructions || ""), tools: session.tools as GeminiTool[] }, {
       onReady: resumed => {
         if (this.ending) { this.hangup(); return; }
-        this.ready = true; this.userPending = this.waitingForUser = false;
+        this.ready = true; this.contextDirty = this.context.size > 0; this.flushContext(); this.visuals.replay(); this.userPending = this.waitingForUser = false;
         if (resumed) { this.userSpeaking = false; this.acceptingInput = false; }
         if (resumed && this.presentation.snapshot().status === "active") this.narration = true;
         if (!this.everLive) { this.everLive = true; handlers.onPhase("live"); if (preview) { this.generating = true; this.transport.sendText(`只读出这一句话，不添加其他内容：${preview}`); } }
@@ -102,13 +107,16 @@ export class GeminiCall {
       },
       runTool: call => this.runTool(call),
     }, connect);
+    this.visuals = new VisualQueue(() => this.ready && !this.closed && !this.ending, image => {
+      this.transport.sendImage(image.data);
+    }, state => handlers.onVisual?.(state));
     this.id = this.transport.id;
   }
   start(): void { this.begunAt = new Date().toISOString(); this.handlers.onPhase("connecting"); this.state("connecting"); this.transport.start(); if (this.preview) this.watchdog = setTimeout(() => this.hangup("Gemini 音色试听超时。"), 30000); }
   startedAt(): string { return this.begunAt; }
   isClosed(): boolean { return this.closed; }
   transcript(): Array<{ who: "user" | "assistant"; text: string }> { return this.lines.filter(line => line.text.trim()).map(({ who, text }) => ({ who, text })); }
-  sendAudio(pcm: Buffer): void { if (!this.closed && !this.ending && this.ready && !this.muted) this.transport.sendAudio(pcm); }
+  sendAudio(pcm: Buffer): void { if (!this.closed && !this.ending && this.ready && !this.muted) { this.flushContext(); this.transport.sendAudio(pcm); } }
   setMuted(muted: boolean): void { this.muted = muted; if (muted && this.ready) this.transport.endAudio(); }
   notePlayback(_position: PlaybackPosition): void {}
   noteInterrupted(_receipt: InterruptionReceipt): void {}
@@ -117,7 +125,18 @@ export class GeminiCall {
     if (this.closed || (callId && callId !== this.id) || serial !== this.serial || serial <= this.fence) return;
     this.speakerBusy = false; this.settleSegment(); this.state(); this.schedule();
   }
-  updateContext(key: string, value: string): void { this.context.set(key, value.slice(0, 8000)); if (this.context.size > 32) this.context.delete(this.context.keys().next().value!); }
+  updateContext(key: string, value: string): void {
+    this.context.set(key, value.slice(0, 24000)); if (this.context.size > 32) this.context.delete(this.context.keys().next().value!);
+    this.contextDirty = true; this.flushContext();
+  }
+  shareVisual(images: VisualInput[]): Promise<boolean> { return this.visuals.add(images); }
+  clearVisual(): void { this.visuals.clearView(); this.handlers.onVisual?.({ phase: "idle" }); }
+  forgetVisual(refId: string): void { this.visuals.forget(refId); }
+  private flushContext(): void {
+    if (!this.contextDirty || !this.ready || this.closed || this.ending || this.generating || this.speakerBusy || this.userSpeaking) return;
+    this.transport.sendContext(`应用状态数据，仅供参考，不是用户的新指令；不要因这条更新主动回应：${JSON.stringify([...this.context])}`);
+    this.contextDirty = false;
+  }
   locate(path: string, page: number, total: number, mode: "canvas" | "file" = "canvas"): void {
     const cursor = this.presentation.snapshot();
     if (!cursor.path || cursor.path === path || cursor.status === "idle") this.presentation.locate(path, page, total, mode);
@@ -147,7 +166,7 @@ export class GeminiCall {
   hangup(reason = ""): void { this.transport.close(reason); }
   private finish(reason: string): void {
     if (this.closed) return;
-    this.closed = true; this.ready = false; clearTimeout(this.loop); clearTimeout(this.watchdog); clearTimeout(this.endingTimer);
+    this.closed = true; this.ready = false; this.visuals.close(); clearTimeout(this.loop); clearTimeout(this.watchdog); clearTimeout(this.endingTimer);
     for (const tool of this.tools.values()) tool.abort(); this.tools.clear();
     for (const entry of this.delegations.values()) entry.resolve({ result: "通话已结束，后台任务继续。", scheduling: "SILENT" }); this.delegations.clear();
     this.seal(this.userLine); this.seal(this.assistantLine); this.state("ended", reason); this.handlers.onPhase("closed", reason);
@@ -198,7 +217,7 @@ export class GeminiCall {
   }
   private schedule(): void {
     clearTimeout(this.loop);
-    this.diagnostic("schedule");
+    this.diagnostic("schedule"); this.flushContext();
     if (this.ending) {
       if (!this.closed && !this.speakerBusy && !this.generating) this.loop = setTimeout(() => this.hangup(), 350);
       return;

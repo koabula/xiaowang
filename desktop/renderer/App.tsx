@@ -96,6 +96,10 @@ export function App() {
   const file = stage.file;
   const canvas = stage.canvas;
   const stageOpen = stage.open;
+  useEffect(() => {
+    if (active && (!stageOpen || mode !== "file" && mode !== "canvas" || mode === "file" && !file || mode === "canvas" && !canvas)) void window.xiaowang.stageHide(active);
+    return () => { if (active) void window.xiaowang.stageHide(active); };
+  }, [active, stageOpen, mode, file?.id, canvas?.title]);
   const copy = copyFor(localeOf(state?.settings.locale));
   const busy = Boolean(busyBySlug[active]) || Boolean(state?.jobs?.some(job => job.botId === state.bots.find(bot => bot.slug === active)?.id && (job.status === "running" || job.status === "queued")));
   const draft = draftBySlug[active] ?? "";
@@ -328,12 +332,13 @@ export function App() {
     if (note.callId && note.phase === "connecting") liveCallId.current = note.callId;
     if (note.callId && liveCallId.current && note.callId !== liveCallId.current) return;
     if (note.callId) liveCallId.current = note.callId;
+    if (note.phase === "visual") { setCall(prev => prev ? { ...prev, visual: note.visual } : prev); return; }
     if (note.phase === "state" && note.state) {
       setCall(prev => prev ? { ...prev, callId: note.callId || prev.callId, state: note.state } : note.state?.phase !== "ended" ? { slug: note.slug, callId: note.callId, phase: "connecting", captions: [], muted: false, audioReady: false, state: note.state } : null);
       return;
     }
     if (note.phase === "live") {
-      setCall(prev => ({ slug: note.slug, callId: note.callId || prev?.callId, phase: "live", captions: prev?.captions ?? [], muted: false, audioReady: false, state: prev?.state }));
+      setCall(prev => ({ slug: note.slug, callId: note.callId || prev?.callId, phase: "live", captions: prev?.captions ?? [], muted: false, audioReady: false, state: prev?.state, visual: prev?.visual }));
       try {
         await audioRef.current.start(note.inputRate || 16_000, note.outputRate || 24_000);
         setCall(prev => prev ? { ...prev, audioReady: true } : null);
@@ -525,6 +530,7 @@ export function App() {
         ) : null}
         {mode === "file" ? (
           <FileStage
+            visualCallId={call?.slug === active && call.phase === "live" ? call.callId : undefined}
             slug={active}
             library={library}
             onBrowse={() => setFileBrowser({ slug: active, mode: "file" })}
@@ -726,6 +732,7 @@ function OpenStrip({ openItems, activeKey, addLabel, closeLabel, onOpen, onClose
 }
 
 function FileStage({
+  visualCallId,
   locale,
   slug,
   library,
@@ -744,6 +751,7 @@ function FileStage({
   menu: boolean;
   copy: Copy;
   locale: Locale;
+  visualCallId?: string;
   onPick: (file: LibraryItem) => void;
   onBrowse: () => void;
   onClose: (id: string) => void;
@@ -768,7 +776,7 @@ function FileStage({
         onClose={onClose}
       />
       ) : null}
-      {file && slug ? <Suspense fallback={<p className="empty">Loading…</p>}><DocumentReader slug={slug} file={file} locale={locale} /></Suspense> : <p className="empty">{copy.pickFile}</p>}
+      {file && slug ? <Suspense fallback={<p className="empty">Loading…</p>}><DocumentReader slug={slug} file={file} locale={locale} visualCallId={visualCallId} /></Suspense> : <p className="empty">{copy.pickFile}</p>}
     </div>
   );
 }

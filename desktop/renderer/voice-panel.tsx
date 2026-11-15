@@ -7,7 +7,7 @@ import { CallTasks } from "./task-panel.tsx";
 import type { Locale } from "./copy.ts";
 
 export interface LiveCaption { who: "user" | "assistant"; text: string; live: boolean; itemId?: string; order?: number }
-export interface LiveCallView { callId?: string; slug: string; phase: "connecting" | "live"; captions: LiveCaption[]; muted: boolean; state?: VoiceState; audioReady: boolean }
+export interface LiveCallView { callId?: string; slug: string; phase: "connecting" | "live"; captions: LiveCaption[]; muted: boolean; state?: VoiceState; audioReady: boolean; visual?: import("../../src/shared-context.ts").VisualShare }
 
 export function VoicePanel({ call, audio, jobs, onError, name, seed, ink, locale, onMute, onEnd }: { call: LiveCallView; audio: CallAudio; jobs: TaskJob[]; onError: (error: string) => void; name: string; seed?: string; ink: string; locale: Locale; onMute: () => void; onEnd: () => void }) {
   const en = locale === "en";
@@ -56,6 +56,7 @@ export function VoicePanel({ call, audio, jobs, onError, name, seed, ink, locale
       <canvas ref={canvasRef} className="voice-wave" role="img" aria-label={en ? "Live microphone and speaker audio levels" : "实际麦克风输入与扬声器输出音量"} />
       <div className="voice-caption" aria-live="polite" aria-atomic="true"><span>{last?.who === "user" ? en ? "You" : "你" : name}</span><p>{last?.text || (en ? "Say something to get started." : "说说你想做什么。")}</p></div>
       {presentation && presentation.status !== "idle" ? <div className="voice-progress"><AudioLines size={13} /><span>{paused ? en ? "Paused" : "已暂停" : presentation.status === "completed" ? en ? "Completed" : "已讲完" : en ? "Continuous walkthrough" : "连续讲解"}{presentation.path ? ` · ${en ? "Page" : "第"} ${presentation.page}${presentation.totalPages ? ` / ${presentation.totalPages}` : ""}${en ? "" : " 页"}` : ""}</span></div> : null}
+      {call.visual && call.visual.phase !== "idle" ? <p className="voice-sharing" role="status" title={call.visual.detail}>{call.visual.phase === "shared" ? en ? "Visual context sent" : "画面已共享" : call.visual.phase === "pending" ? en ? "Sharing visual context…" : "正在共享画面…" : call.visual.phase === "unavailable" ? en ? "Visual analysis uses the background assistant" : "视觉分析由后台助手处理" : en ? "Could not share visual context" : "画面共享失败"}{call.visual.source ? ` · ${call.visual.source}${call.visual.page ? ` · ${call.visual.page}` : ""}` : ""}</p> : null}
       <CallTasks jobs={jobs} slug={call.slug} locale={locale} onError={onError} />
       <div className="voice-actions">
         {presentation && (presentation.status === "active" || paused) ? <button type="button" onClick={() => void window.xiaowang.callControl(paused ? "resume" : "pause")}><span>{paused ? <Play size={15} /> : <Pause size={15} />}</span>{paused ? en ? "Resume" : "继续" : en ? "Pause" : "暂停"}</button> : null}

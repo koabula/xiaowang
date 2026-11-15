@@ -6,6 +6,7 @@ export interface ModelImage { mimeType: string; data: string }
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
 export interface TaskJob {
+  sharedContext?: import("./shared-context.ts").WorkspaceContext;
   messageText?: string;
   attachments?: Attachment[];
   id: string;
@@ -69,7 +70,8 @@ export type SessionEvent =
   | { type: "job"; job: TaskJob }
   | { type: "voice_line"; callId: string; who: "user" | "assistant"; text: string; itemId?: string }
   | { type: "voice_tool_output"; callId: string; toolCallId: string }
-  | { type: "presentation"; state: import("./presentation.ts").PresentationState };
+  | { type: "presentation"; state: import("./presentation.ts").PresentationState }
+  | { type: "workspace_context"; state: import("./shared-context.ts").WorkspaceContext };
 
 export interface StoredEvent {
   id: number;

@@ -165,3 +165,21 @@ GEMINI_CHECK_HANGUP_ONLY=1 GEMINI_TEST_REPORT=/tmp/xiaowang-gemini-hangup.json n
 ```
 
 This uses synthetic Chinese speech through the production audio IPC and Google API, waits for closure and stopped playback, and checks that ended calls do not reconnect. The key stays in the upstream relay and is not logged.
+
+### Shared context and realtime vision (v0.1.11)
+
+`SharedContexts` owns a scoped snapshot per bot: visible source/page, sent message attachment references, and recent job results. A separate `viewRevision` rejects late frames without invalidating a page whenever a job progresses. Snapshots persist references and bounded metadata only; image bytes and PDF frames never enter events. Restored views are hidden until the renderer confirms them. Jobs freeze their snapshot when accepted, retain the matching current-page frame in memory, and hydrate image references for the backend model. Context is inserted before the actual question, preserving the tool loop's message order. The narration cursor remains separate from the inspected view.
+
+PDF.js renders the settled current page to an independent JPEG canvas (long side up to 1600 px), avoiding recycled viewer canvases and zoom-dependent screenshots. Capture is cancelled on source/page changes; main validates bot, source, page, revision and optional call ID. A display-tool receipt waits for capture, with a bounded failure rather than claiming unseen page content. Rendering still succeeds with providers without vision. `VisualQueue` limits wire frames to 1 fps, replaces queued old pages, deduplicates repeated receipts, replays the latest view on reconnect, and cancels pending sends at hangup. Imported drafts are not transmitted until sent or deliberately opened as a visible source.
+
+Wire formats: Gemini `realtimeInput.video` JPEG frames and silent `clientContent.turnComplete=false` context, deferred during generation/playback; OpenAI passive `conversation.item.create` / `input_image`; Qwen `input_image_buffer.append` after the first audio append. Passive updates never call `response.create`. Qwen's audio/video buffers commit at its normal speech boundary. Sources: [Gemini capabilities](https://aistudio.google.com/docs/live-api/capabilities), [OpenAI conversations](https://developers.openai.com/api/docs/guides/realtime-conversations), [Qwen realtime](https://help.aliyun.com/en/model-studio/realtime).
+
+2026-11-15 verification: real Gemini 3.8 Live read an image-only word/number, two distinct PDF page images, and the current page after same-session resumption; passive navigation remained silent, and visual answers persisted in the call record. OpenAI/Qwen wire behavior, actual rendered pixels, backend sharing and workspace isolation are covered by deterministic desktop fixtures; no real OpenAI/Qwen credentials were available for this verification. A real Doubao direct session accepted setup but did not acknowledge the image-input probe. This is not proof of visual support, so its visual capability remains off; the separate RTC product is not treated as equivalent to the direct WebSocket protocol.
+
+```sh
+GEMINI_CHECK_VISION_ONLY=1 node --env-file=.env.gemini.local scripts/verify-gemini-production.mjs
+node --test test/shared-context.test.ts test/gemini-call.test.ts test/realtime.test.ts
+node --test e2e/visual-context.test.mjs
+```
+
+The visual acceptance check uses an isolated profile, synthetic macOS speech and a local relay that holds the real key outside the renderer. It records only results and transcripts in a temporary report. `.env.*` files remain ignored.

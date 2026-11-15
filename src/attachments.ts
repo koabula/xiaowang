@@ -38,6 +38,6 @@ export function hydrateImages(store: Store, botId: string, messages: ModelMessag
         return [{ mimeType: attachmentMime(ref.filename, bytes), data: bytes.toString("base64") }];
       } catch { removed.push(a.filename); return []; } // Never expose another bot's file.
     });
-    return { ...message, images, content: message.content + (removed.length ? `\n这些图片已移除，当前无法查看，不要假装已看过：${removed.join("、")}` : "") };
+    return { ...message, images: [...(message.images ?? []), ...images], content: message.content + (removed.length ? `\n这些图片已移除，当前无法查看，不要假装已看过：${removed.join("、")}` : "") };
   });
 }
