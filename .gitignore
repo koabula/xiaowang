@@ -15,3 +15,4 @@ desktop/dist/
 .env
 .env.*
 .DS_Store
+.agents/
