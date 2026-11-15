@@ -1,9 +1,12 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, session, shell } from "electron";
 import { mkdirSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { LiveCall, type InterruptionReceipt, type PlaybackPosition, type VoiceState } from "./call.ts";
 import { JobQueue, type JobOutput } from "../../src/jobs.ts";
+import { VoiceTasks, voiceJobReceipt } from "../../src/voice-tasks.ts";
+import { backgroundTurnOwners, presentJob } from "../../src/task-presentation.ts";
 import { StageRequests } from "./stage.ts";
 import type { TaskJob } from "../../src/types.ts";
 import type { PresentationState } from "../../src/presentation.ts";
@@ -59,6 +62,8 @@ let secrets: SecretRecord = {
 };
 
 interface ChatItem {
+  jobId?: string;
+  callId?: string;
   id: number;
   kind: "user" | "assistant" | "tool" | "file" | "note" | "call";
   text: string;
@@ -106,26 +111,29 @@ function botRows(): BotRow[] {
 
 function chatItems(slug: string): ChatItem[] {
   const bot = runtime.store.requireBot(slug);
+  const events = runtime.store.getEvents(bot.id);
+  const owners = backgroundTurnOwners((jobs?.list(bot.id) ?? []).map(job => presentJob(job, events)), events);
   const items: ChatItem[] = [];
-  for (const stored of runtime.store.getEvents(bot.id)) {
+  for (const stored of events) {
     const item = present(stored.id, stored.event);
-    if (item) items.push(item);
+    if (item) items.push({ ...item, jobId: item.jobId ?? owners.get(stored.id) });
   }
   return items;
 }
 
 function present(id: number, event: SessionEvent): ChatItem | null {
   if (event.type === "user_text" && event.channel === "text") {
-    return { id, kind: "user", text: event.text };
+    return { id, kind: "user", text: event.text, jobId: event.jobId };
   }
   if (event.type === "assistant_turn" && event.text.trim()) {
-    return { id, kind: "assistant", text: event.text };
+    return { id, kind: "assistant", text: event.text, jobId: event.jobId };
   }
   if (event.type === "call" && event.lines.some((line) => line.text.trim())) {
     const elapsed = Math.round((Date.parse(event.endedAt) - Date.parse(event.startedAt)) / 1000);
     return {
       id,
       kind: "call",
+      callId: event.callId || `legacy-call:${id}`,
       text: event.lines.map((line) => line.text).join("\n"),
       lines: event.lines,
       seconds: Number.isFinite(elapsed) ? Math.max(1, elapsed) : 1,
@@ -147,7 +155,16 @@ function present(id: number, event: SessionEvent): ChatItem | null {
 
 function publish(): void {
   const active = runtime.activeBot();
-  send("state", { bots: botRows(), activeSlug: active.slug, settings: publicSettings(secrets), jobs: jobs?.list() ?? [] });
+  send("state", { bots: botRows(), activeSlug: active.slug, settings: publicSettings(secrets), jobs: publicJobs() });
+}
+
+function publicJobs(): TaskJob[] {
+  const events = new Map<string, ReturnType<typeof runtime.store.getEvents>>();
+  return (jobs?.list() ?? []).map(job => {
+    if (job.display && job.title) return job;
+    if (!events.has(job.botId)) events.set(job.botId, runtime.store.getEvents(job.botId));
+    return presentJob(job, events.get(job.botId)!);
+  });
 }
 
 function envFromSecrets(): NodeJS.ProcessEnv {
@@ -187,19 +204,24 @@ let live: LiveCall | null = null;
 let liveSlug = "";
 let liveState: VoiceState | null = null;
 const stages = new StageRequests(note => send("stage", note));
+const focusedFiles = new Map<string, string>();
 
 async function ask(job: TaskJob, signal: AbortSignal, activity: (text: string) => void): Promise<JobOutput> {
   const bot = runtime.store.requireBot(job.botId);
   const before = runtime.store.getEvents(bot.id).at(-1)?.id ?? 0;
   const provider = createProvider(configFromEnv(envFromSecrets()));
+  let resultEventId: number | undefined;
   const result = await runTurn(runtime, {
     botId: bot.id, input: job.task, channel: job.channel, provider,
+    jobId: job.id,
+    onInput: id => jobs.linkInput(job.id, id),
     env: envFromSecrets(), locale: localeOf(secrets.locale), signal,
     browser: browserFor(bot.slug),
     stage: { show: view => stages.show(bot.slug, view) },
     onKickoff: kickoff => { jobs.enqueue({ botId: kickoff.botId, task: kickoff.task, channel: "system" }); },
     onTextDelta(current, text) { send("delta", { slug: current.slug, jobId: job.id, text }); },
     onStep(step) {
+      if (step.final) resultEventId = step.eventId;
       if (step.activity) activity(step.activity);
       send("step", { slug: step.bot.slug, jobId: job.id, kind: step.kind, name: step.name ?? "", text: step.text, isError: Boolean(step.isError), activity: step.activity ?? "" });
     },
@@ -207,17 +229,20 @@ async function ask(job: TaskJob, signal: AbortSignal, activity: (text: string) =
   if (result.steps >= 40 && runtime.store.getEvents(bot.id).at(-1)?.event.type === "tool_result") throw new Error("本轮达到处理步数上限。已有结果已保存，可拆小任务后继续。");
   const artifacts = runtime.store.getEvents(bot.id, { afterId: before }).flatMap(({ event }) => event.type === "artifact" ? [event.path] : []);
   if (!result.finalText.trim() && !artifacts.length) throw new Error("模型没有返回可用结果，请重试。");
-  return { text: result.finalText, artifacts };
+  return { text: result.finalText, artifacts, resultEventId };
 }
 
 function jobChanged(job: TaskJob): void {
   const bot = runtime.store.requireBot(job.botId);
   const busy = jobs?.busy(job.botId) ?? job.status === "running";
-  send("job", { ...job, slug: bot.slug });
+  const shown = job.display && job.title ? job : presentJob(job, runtime.store.getEvents(bot.id));
+  send("job", { ...shown, slug: bot.slug });
   send("turn", { slug: bot.slug, busy, error: job.status === "failed" ? job.error : "" });
   publish();
   if (live && liveSlug === bot.slug) {
-    live.updateContext(`job:${job.id}`, JSON.stringify({ id: job.id, status: job.status, activity: job.activity, artifacts: job.artifacts }));
+    live.updateContext(`job:${job.id}`, JSON.stringify({ id: job.id, task: job.task.slice(0, 400), status: job.status, activity: job.activity, error: job.error, artifacts: job.artifacts }));
+    const latestVoice = jobs.list(bot.id).filter(item => item.channel === "voice").at(-1);
+    if (latestVoice) live.updateContext("currentVoiceTask", voiceJobReceipt(latestVoice));
     if (job.notify === "when_idle" && (job.status === "succeeded" || job.status === "failed")) {
       live.notify(`${job.id}:${job.attempts}:${job.status}`, JSON.stringify({ id: job.id, task: job.task.slice(0, 300), status: job.status, result: job.result.slice(0, 1800), error: job.error, artifacts: job.artifacts }));
     }
@@ -272,12 +297,18 @@ function browserFor(slug: string): BrowserDriver {
 }
 
 function registerIpc(): void {
-  ipcMain.handle("state:get", () => ({
+  ipcMain.handle("state:get", () => {
+    // Start only after a renderer is mounted, independently of the first
+    // navigation promise (a reload can abort that promise).
+    jobs.start();
+    return {
     bots: botRows(),
     activeSlug: runtime.activeBot().slug,
-    settings: publicSettings(secrets), jobs: jobs.list(),
+    settings: publicSettings(secrets), jobs: publicJobs(),
     call: live ? { slug: liveSlug, state: liveState } : null,
-  }));
+    browser: browser.viewState(),
+    };
+  });
   ipcMain.handle("bot:active", (_event, slug: string) => {
     runtime.store.setActiveBot(runtime.store.requireBot(slug).id);
     publish();
@@ -395,7 +426,10 @@ function registerIpc(): void {
   ipcMain.handle("stage:ack", (_event, slug: string, requestId: string, receipt: { page: number; totalPages: number; title?: string; error?: string }) => stages.acknowledge(slug, requestId, receipt));
   ipcMain.handle("stage:position", (_event, slug: string, position: { path: string; page: number; totalPages: number; mode: "canvas" | "file" }) => {
     runtime.store.requireBot(slug);
-    if (Number.isSafeInteger(position.page) && Number.isSafeInteger(position.totalPages) && position.page > 0 && position.page <= position.totalPages && liveSlug === slug) live?.locate(position.path, position.page, position.totalPages, position.mode);
+    if (Number.isSafeInteger(position.page) && Number.isSafeInteger(position.totalPages) && position.page > 0 && position.page <= position.totalPages) {
+      if (position.mode === "file") focusedFiles.set(slug, position.path);
+      if (liveSlug === slug) live?.locate(position.path, position.page, position.totalPages, position.mode);
+    }
   });
   ipcMain.handle("settings:models", async (_event, patch: SecretPatch) => {
     const draft = draftSecrets(patch);
@@ -463,13 +497,12 @@ function registerIpc(): void {
   });
   ipcMain.handle("browser:go", async (_event, url: string) => {
     browser.actingSlug = runtime.activeBot().slug;
-    return browser.driver.navigate(url);
+    return browser.userNavigate(url);
   });
-  ipcMain.handle("browser:back", () => browser.back());
-  ipcMain.handle("browser:forward", () => browser.forward());
+  ipcMain.handle("browser:back", () => browser.userBack());
+  ipcMain.handle("browser:forward", () => browser.userForward());
   ipcMain.handle("browser:holder", (_event, holder: "bot" | "user") => {
     browser.setHolder(holder);
-    send("browser", browser.viewState());
   });
 }
 
@@ -523,11 +556,15 @@ async function createWindow(): Promise<void> {
   window.on("close", event => {
     if (settingsDirty) { event.preventDefault(); send("settings:closeRequested", "window"); }
   });
-  if (devUrl) await window.loadURL(devUrl);
-  else await window.loadFile(path.join(here, "renderer/index.html"));
   window.on("closed", () => {
     window = null;
   });
+  try {
+    if (devUrl) await window.loadURL(devUrl);
+    else await window.loadFile(path.join(here, "renderer/index.html"));
+  } catch (error) {
+    if (!String(error).includes("ERR_ABORTED")) throw error;
+  }
 }
 
 function realtimeChoice() {
@@ -580,6 +617,13 @@ function startCall(slug: string): void {
   const locale = localeOf(secrets.locale);
   const brief = formatVoiceBrief(projectVoiceBrief(bot, runtime.store.getEvents(bot.id), { library }), person, locale);
   const instructions = realtimeInstructions(person, brief, locale);
+  const voiceTasks = new VoiceTasks(jobs, bot.id, randomUUID(), task => {
+    const focus = focusedFiles.get(slug);
+    let reference = null;
+    try { if (focus) reference = runtime.store.resolveLibraryRef(bot.id, focus); } catch { focusedFiles.delete(slug); }
+    return handoffText(task, live?.transcript() ?? [], bot.name, locale)
+      + (reference ? `\n\n当前阅读的原文（上下文资料）：${JSON.stringify({ id: reference.id, filename: reference.filename })}。用户明确提到另一份资料时以用户要求为准。` : "");
+  }, () => live?.id);
   const tools = voiceTools(toolSchemas(), locale);
   const session = endpoint.family === "doubao"
     ? doubaoSession({ instructions, tools, voice: choice.voice })
@@ -592,21 +636,33 @@ function startCall(slug: string): void {
       voice: choice.voice,
     });
   openCall(socketUrl(endpoint), key, session, endpoint.inputRate, endpoint.outputRate, slug, "", {
+    onTranscript(who, text) {
+      if (who !== "user") return;
+      const accepted = voiceTasks.userText(text);
+      const job = accepted || voiceTasks.latest();
+      live?.updateContext("currentVoiceTask", job ? voiceJobReceipt(job) : "没有已受理的后台任务。需要分析、梳理或调研时调用 delegate_task；口头承诺不代表已经开始。");
+    },
     async runTool(name, args, callId, signal) {
       if (name === "ask_text" || name === "delegate_task") {
         const task = taskArgument(args);
         if (!task) return askTextResult("missing", locale);
         let notify: TaskJob["notify"] = "when_idle";
         try { if (JSON.parse(args).notify === "silent") notify = "silent"; } catch { /* validated by taskArgument */ }
-        const job = jobs.enqueue({ botId: bot.id, task: handoffText(task, live?.transcript() ?? [], bot.name, locale), channel: "voice", notify, sourceCallId: callId });
-        return JSON.stringify({ id: job.id, status: job.status, notify, message: locale === "en" ? "Task saved and queued. Completion will be reported according to notify." : "任务已保存并排队，按通知设置反馈完成结果。" });
+        const job = voiceTasks.delegate(task, callId, notify);
+        live?.updateContext("currentVoiceTask", voiceJobReceipt(job));
+        return voiceJobReceipt(job);
       }
       if (name === "get_task") {
         const id = JSON.parse(args || "{}").id;
-        const job = jobs.get(typeof id === "string" ? id : "");
+        const job = typeof id === "string" && id.trim() ? jobs.get(id) : voiceTasks.latest();
+        if (!job) return JSON.stringify({ status: "not_started", message: "还没有开始后台任务，需要处理时调用 delegate_task。" });
         if (job.botId !== bot.id) throw new Error("这个任务属于其他工作区。");
         return JSON.stringify(job);
       }
+      // A research turn is already owned by the background LLM. Realtime can
+      // still locate/open sources, but must not run a second competing workflow.
+      const accepted = voiceTasks.current();
+      if (accepted && !["list_library", "list_files", "show_stage"].includes(name)) return voiceJobReceipt(accepted);
       let input: unknown = {};
       try {
         input = args.trim() ? JSON.parse(args) : {};
@@ -687,6 +743,9 @@ function openCall(
       if (slug && text.trim()) runtime.store.append(runtime.store.requireBot(slug).id, { type: "voice_line", callId: call.id, who, text });
       extra?.onTranscript?.(who, text);
     },
+    onToolOutput(toolCallId) {
+      if (!preview && slug) runtime.store.append(runtime.store.requireBot(slug).id, { type: "voice_tool_output", callId: call.id, toolCallId });
+    },
     runTool(name, args, callId, signal) {
       return extra?.runTool?.(name, args, callId, signal) ?? Promise.resolve("");
     },
@@ -737,7 +796,6 @@ app.whenReady().then(async () => {
   jobs = new JobQueue(runtime.store, ask, jobChanged);
   registerIpc();
   await createWindow();
-  jobs.start();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow();
   });

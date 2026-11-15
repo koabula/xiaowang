@@ -265,7 +265,7 @@ function capToolOutput(output: string): string {
 }
 
 function catalogLines(library: CatalogItem[]): string[] {
-  return library.slice(0, 40).map((item) => `${item.id} ${item.filename}`);
+  return library.slice(0, 40).map((item) => JSON.stringify({ id: item.id, filename: item.filename }));
 }
 
 function clip(text: string, max: number): string {

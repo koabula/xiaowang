@@ -7,7 +7,8 @@ import { Avatar, nextAvatarSeed } from "./avatar.tsx";
 import { INK_CHOICES, inkFor } from "./ink.ts";
 import { createCallAudio } from "./call-audio.ts";
 import { VoicePanel, type LiveCallView, type LiveCaption } from "./voice-panel.tsx";
-import { TaskPanel } from "./task-panel.tsx";
+import { CallTasks, ConversationIssue } from "./task-panel.tsx";
+import { taskLayout } from "./task-view.ts";
 import { RichText } from "./rich-text.tsx";
 import { FileBrowser, rememberOpenedFile } from "./file-browser.tsx";
 import { ModalDialog } from "./modal-dialog.tsx";
@@ -17,7 +18,7 @@ import { withCanvasPager } from "./canvas-pager.ts";
 import { copyFor, localeOf, type Copy, type Locale } from "./copy.ts";
 import { REALTIME_SERVICES, modelsFor, resolveRealtime, voicesFor, type RealtimeRegion, type RealtimeServiceId } from "../../src/realtime-catalog.ts";
 import { mergeUtterance } from "../../src/realtime.ts";
-import type { AppState, BotRow, BrowserNote, CallNote, CanvasPage, ChatItem, LibraryItem, SettingsPatch, StageNote, TurnNote } from "./types.ts";
+import type { AppState, BotRow, BrowserNote, CallNote, CanvasPage, ChatItem, TaskJob, LibraryItem, SettingsPatch, StageNote, TurnNote } from "./types.ts";
 
 type StageSnap = {
   mode: "file" | "browser" | "canvas" | "profile";
@@ -48,6 +49,7 @@ function saveTabs(tabs: Record<string, OpenTabs>): void {
 export function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [items, setItems] = useState<ChatItem[]>([]);
+  const [itemsSlug, setItemsSlug] = useState("");
   const [library, setLibrary] = useState<LibraryItem[]>([]);
   const [pages, setPages] = useState<CanvasPage[]>([]);
   const [openTabs, setOpenTabs] = useState<Record<string, OpenTabs>>(loadTabs);
@@ -61,7 +63,6 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [fileBrowser, setFileBrowser] = useState<{ slug: string; mode: "file" | "canvas" } | null>(null);
   const [call, setCall] = useState<LiveCallView | null>(null);
-  const [streamBySlug, setStreamBySlug] = useState<Record<string, { jobId: string; text: string }>>({});
   const audioRef = useRef(createCallAudio(
     (audio) => window.xiaowang.callAudio(audio),
     (serial, callId) => window.xiaowang.callIdle(serial, callId),
@@ -76,9 +77,9 @@ export function App() {
   const [address, setAddress] = useState("");
   const holeRef = useRef<HTMLDivElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
+  const followThread = useRef(true);
   const activeRef = useRef("");
   const liveCallId = useRef("");
-  const finishedJobs = useRef(new Set<string>());
   const active = state?.activeSlug ?? "";
   activeRef.current = active;
   const stage = stageBySlug[active] ?? EMPTY_STAGE;
@@ -91,9 +92,21 @@ export function App() {
   const draft = draftBySlug[active] ?? "";
   const activity = activityBySlug[active] ?? "";
   const current = state?.bots.find((bot) => bot.slug === active);
+  const currentJobs = (state?.jobs ?? []).filter(job => job.botId === current?.id);
+  const workingJob = currentJobs.find(job => job.status === "running") ?? currentJobs.find(job => job.status === "queued");
+  const visibleItems = itemsSlug === active ? items : [];
+  const taskView = taskLayout(currentJobs, visibleItems);
+  const conversationItems = visibleItems.filter(item => isConversation(item) && !taskView.hidden.has(item.id));
+  const backgroundRunning = taskView.background.some(job => job.status === "running");
   const steward = state?.bots.find((bot) => bot.slug === "xiaowang");
   const ink = current?.avatarInk || inkFor(active || "xiaowang");
   const covered = Boolean(fileBrowser) || settingsOpen || (state !== null && !state.settings.ready);
+
+  function receiveItems(slug: string, next: ChatItem[]) {
+    if (activeRef.current !== slug) return;
+    setItems(next);
+    setItemsSlug(slug);
+  }
 
   function patchStage(slug: string, patch: Partial<StageSnap>) {
     if (!slug) return;
@@ -101,15 +114,13 @@ export function App() {
   }
 
   useEffect(() => {
-    void window.xiaowang.getState().then(setState);
+    void window.xiaowang.getState().then(initial => { setState(initial); if (initial.browser) { setBrowser(initial.browser); setAddress(initial.browser.url); } });
     const stops = [
-      window.xiaowang.onDelta(note => { if (!finishedJobs.current.has(note.jobId)) setStreamBySlug(prev => ({ ...prev, [note.slug]: { jobId: note.jobId, text: (prev[note.slug]?.jobId === note.jobId ? prev[note.slug]?.text || "" : "") + note.text } })); }),
       window.xiaowang.onJob(job => {
-        if (["succeeded", "cancelled", "failed", "interrupted"].includes(job.status)) {
-          finishedJobs.current.add(job.id);
-          setStreamBySlug(prev => prev[job.slug]?.jobId === job.id ? { ...prev, [job.slug]: { jobId: job.id, text: "" } } : prev);
-        } else finishedJobs.current.delete(job.id);
         setState(prev => prev ? { ...prev, jobs: [...(prev.jobs ?? []).filter(item => item.id !== job.id), job] } : prev);
+        if (["succeeded", "cancelled", "failed", "interrupted"].includes(job.status) && job.slug === activeRef.current) {
+          void window.xiaowang.events(job.slug).then(items => receiveItems(job.slug, items));
+        }
       }),
       window.xiaowang.onState(setState),
       window.xiaowang.onBrowser((next) => {
@@ -125,10 +136,6 @@ export function App() {
         void hearCall(note);
       }),
       window.xiaowang.onStep((step) => {
-        if (step.kind === "assistant") {
-          if (step.slug === activeRef.current) void window.xiaowang.events(step.slug).then(items => { if (activeRef.current === step.slug) setItems(items); });
-          setStreamBySlug(prev => ({ ...prev, [step.slug]: { jobId: step.jobId || "", text: "" } }));
-        }
         if (!step.activity?.trim()) return;
         setActivityBySlug((prev) => ({ ...prev, [step.slug]: step.activity!.trim() }));
       }),
@@ -140,7 +147,6 @@ export function App() {
         }
         if (note.error) setToast(note.error.length > 160 ? `${note.error.slice(0, 160)}…` : note.error);
         if (activeRef.current !== note.slug) return;
-        void window.xiaowang.events(note.slug).then(items => { if (activeRef.current === note.slug) setItems(items); });
         void window.xiaowang.library(note.slug).then(refs => { if (activeRef.current === note.slug) setLibrary(refs); });
       }),
     ];
@@ -149,9 +155,10 @@ export function App() {
 
   useEffect(() => {
     if (!active) return;
+    followThread.current = true;
     let cancelled = false;
     void Promise.all([window.xiaowang.events(active), window.xiaowang.library(active), window.xiaowang.pages(active)]).then(([events, refs, pages]) => {
-      if (!cancelled && activeRef.current === active) { setItems(events); setLibrary(refs); setPages(pages); }
+      if (!cancelled && activeRef.current === active) { receiveItems(active, events); setLibrary(refs); setPages(pages); }
     }).catch(error => { if (!cancelled) setToast(plainError(error)); });
     return () => { cancelled = true; };
   }, [active]);
@@ -162,8 +169,8 @@ export function App() {
   }, [active, mode, canvas?.title]);
 
   useEffect(() => {
-    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
-  }, [items, busy]);
+    if (followThread.current) threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
+  }, [items, busy, activity]);
 
   useEffect(() => {
     if (mode !== "browser" || covered || !stageOpen) {
@@ -236,14 +243,16 @@ export function App() {
     const slug = activeRef.current;
     const text = (draftBySlug[slug] ?? "").trim();
     if (!text || !slug) return;
+    followThread.current = true;
     setDraftBySlug((prev) => ({ ...prev, [slug]: "" }));
     setBusyBySlug((prev) => ({ ...prev, [slug]: true }));
     setActivityBySlug((prev) => ({ ...prev, [slug]: "" }));
-    setItems((currentItems) => [...currentItems, { id: -Date.now(), kind: "user", text }]);
+    setItems((currentItems) => [...(itemsSlug === slug ? currentItems : []), { id: -Date.now(), kind: "user", text }]);
+    setItemsSlug(slug);
     try {
       const next = await window.xiaowang.ask(slug, text);
       if (activeRef.current === slug) {
-        setItems(next);
+        receiveItems(slug, next);
         setLibrary(await window.xiaowang.library(slug));
       }
     } catch (error) {
@@ -283,11 +292,11 @@ export function App() {
     if (note.callId && liveCallId.current && note.callId !== liveCallId.current) return;
     if (note.callId) liveCallId.current = note.callId;
     if (note.phase === "state" && note.state) {
-      setCall(prev => prev ? { ...prev, state: note.state } : note.state?.phase !== "ended" ? { slug: note.slug, phase: "connecting", captions: [], muted: false, audioReady: false, state: note.state } : null);
+      setCall(prev => prev ? { ...prev, callId: note.callId || prev.callId, state: note.state } : note.state?.phase !== "ended" ? { slug: note.slug, callId: note.callId, phase: "connecting", captions: [], muted: false, audioReady: false, state: note.state } : null);
       return;
     }
     if (note.phase === "live") {
-      setCall(prev => ({ slug: note.slug, phase: "live", captions: prev?.captions ?? [], muted: false, audioReady: false, state: prev?.state }));
+      setCall(prev => ({ slug: note.slug, callId: note.callId || prev?.callId, phase: "live", captions: prev?.captions ?? [], muted: false, audioReady: false, state: prev?.state }));
       try {
         await audioRef.current.start(note.inputRate || 16_000, note.outputRate || 24_000);
         setCall(prev => prev ? { ...prev, audioReady: true } : null);
@@ -316,7 +325,7 @@ export function App() {
       return;
     }
     if (note.phase === "saved" && note.slug === activeRef.current) {
-      setItems(await window.xiaowang.events(note.slug));
+      receiveItems(note.slug, await window.xiaowang.events(note.slug));
       return;
     }
     if (note.phase === "closed") {
@@ -420,19 +429,21 @@ export function App() {
             <PanelRight size={16} />
           </button>
         </header>
-        <div className="messages" ref={threadRef}>
-          {items.filter(isConversation).length === 0 && !busy ? <div className="welcome"><Avatar slug={active || "xiaowang"} seed={current?.avatarSeed} ink={ink} size={56} /><h1>{localeOf(state?.settings.locale) === "en" ? "What shall we explore?" : "今天一起研究什么？"}</h1><p>{localeOf(state?.settings.locale) === "en" ? "Bring a paper, ask a question, or start a voice conversation." : "放入一篇论文，提出一个问题，或直接与小王聊聊。"}</p></div> : null}
-          <TaskPanel slug={active} jobs={(state?.jobs ?? []).filter(job => job.botId === state?.bots.find(bot => bot.slug === active)?.id)} locale={localeOf(state?.settings.locale)} onError={setToast} />
-          {items.filter(isConversation).map((item) => <Message key={item.id} slug={active} item={item} ink={ink} name={current?.name || "小王同学"} copy={copy} />)}
-          {streamBySlug[active]?.text ? <article className="bubble assistant streaming"><RichText slug={active} text={streamBySlug[active]?.text || ""} /><span className="stream-caret" /></article> : null}
-          {busy && !streamBySlug[active]?.text ? (
-            <div className="thinking">
+        <div className="messages" ref={threadRef} onScroll={event => { const node = event.currentTarget; followThread.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80; }}>
+          {conversationItems.length === 0 && !busy ? <div className="welcome"><Avatar slug={active || "xiaowang"} seed={current?.avatarSeed} ink={ink} size={56} /><h1>{localeOf(state?.settings.locale) === "en" ? "What shall we explore?" : "今天一起研究什么？"}</h1><p>{localeOf(state?.settings.locale) === "en" ? "Bring a paper, ask a question, or start a voice conversation." : "放入一篇论文，提出一个问题，或直接与小王聊聊。"}</p></div> : null}
+          {conversationItems.map(item => <div key={item.id} id={`message-${item.id}`} className="conversation-entry">
+            <Message slug={active} item={item} ink={ink} name={current?.name || "小王同学"} copy={copy} jobs={taskView.byCall.get(item.callId ?? "") ?? []} locale={localeOf(state?.settings.locale)} onError={setToast} />
+            {(taskView.chatIssues.get(item.id) ?? []).map(job => <ConversationIssue key={job.id} job={job} locale={localeOf(state?.settings.locale)} onError={setToast} />)}
+          </div>)}
+          {taskView.pendingChatIssues.map(job => <ConversationIssue key={job.id} job={job} locale={localeOf(state?.settings.locale)} onError={setToast} />)}
+          {busy && !backgroundRunning ? (
+            <div className="thinking" role="status" aria-label={localeOf(state?.settings.locale) === "en" ? "Working" : "正在处理任务"}>
               <Avatar slug={active || "xiaowang"} seed={current?.avatarSeed} ink={current?.avatarInk} size={28} mood="think" />
-              {activity ? <em key={activity}>{activity}</em> : <span className="dots" aria-hidden="true"><i /><i /><i /></span>}
+              {activity || workingJob?.activity ? <em key={activity || workingJob?.activity}>{activity || workingJob?.activity}</em> : <span className="dots" aria-hidden="true"><i /><i /><i /></span>}
             </div>
           ) : null}
         </div>
-        {call && call.slug === active ? <VoicePanel call={call} audio={audioRef.current} name={current?.name || "小王"} seed={current?.avatarSeed} ink={ink} locale={localeOf(state?.settings.locale)} onMute={toggleMute} onEnd={() => void endCall()} /> : call ? <button className="call-away" type="button" onClick={() => void window.xiaowang.setActive(call.slug)}><Phone size={14} />{localeOf(state?.settings.locale) === "en" ? "Return to your call" : "返回正在进行的通话"}</button> : null}
+        {call && call.slug === active ? <VoicePanel call={call} audio={audioRef.current} jobs={taskView.byCall.get(call.callId ?? "") ?? []} onError={setToast} name={current?.name || "小王"} seed={current?.avatarSeed} ink={ink} locale={localeOf(state?.settings.locale)} onMute={toggleMute} onEnd={() => void endCall()} /> : call ? <button className="call-away" type="button" onClick={() => void window.xiaowang.setActive(call.slug)}><Phone size={14} />{localeOf(state?.settings.locale) === "en" ? "Return to your call" : "返回正在进行的通话"}</button> : null}
         <form className="composer" onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
           <button className="icon" type="button" title={copy.addToLibrary} onClick={() => void window.xiaowang.addFiles().then(async () => { if (active) setLibrary(await window.xiaowang.library(active)); })}><Plus size={18} /></button>
           <textarea
@@ -595,8 +606,10 @@ function plainError(error: unknown): string {
   return message.length > 160 ? `${message.slice(0, 160)}…` : message;
 }
 
-function Message({ item, ink, name, copy, slug }: { item: ChatItem; ink: string; name: string; copy: Copy; slug: string }) {
-  if (item.kind === "call") return <CallCard item={item} name={name} ink={ink} copy={copy} />;
+type MessageProps = { item: ChatItem; ink: string; name: string; copy: Copy; slug: string; jobs: TaskJob[]; locale: Locale; onError: (error: string) => void };
+
+function Message({ item, ink, name, copy, slug, jobs, locale, onError }: MessageProps) {
+  if (item.kind === "call") return <CallCard item={item} name={name} ink={ink} copy={copy} slug={slug} jobs={jobs} locale={locale} onError={onError} />;
   if (item.kind === "user") return <div className="bubble user" style={{ background: ink }}>{item.text}</div>;
   return (
     <div className="bubble assistant">
@@ -605,19 +618,19 @@ function Message({ item, ink, name, copy, slug }: { item: ChatItem; ink: string;
   );
 }
 
-function CallCard({ item, name, ink, copy }: { item: ChatItem; name: string; ink: string; copy: Copy }) {
+function CallCard({ item, name, ink, copy, slug, jobs, locale, onError }: MessageProps) {
   const [open, setOpen] = useState(false);
   const seconds = item.seconds ?? 0;
   const clock = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
   return (
-    <article className="call-card">
-      <button type="button" title={open ? copy.collapseCall : copy.expandCall} onClick={() => setOpen((value) => !value)}>
+    <article className={`call-card${open ? " expanded" : ""}`} data-call-id={item.callId}>
+      <button type="button" title={open ? copy.collapseCall : copy.expandCall} aria-expanded={open} onClick={() => setOpen((value) => !value)}>
         <Phone size={14} />
         <span>{name}</span>
         <span>{clock}</span>
         <ChevronDown size={14} />
       </button>
-      {open ? <CallLines lines={item.lines ?? []} ink={ink} /> : null}
+      {open ? <><CallLines lines={item.lines ?? []} ink={ink} /><CallTasks jobs={jobs} slug={slug} locale={locale} onError={onError} /></> : null}
     </article>
   );
 }

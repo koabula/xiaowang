@@ -35,10 +35,13 @@ test("Doubao native first reply and later turns play anonymous deltas without re
 });
 
 test("Doubao cancellation acknowledgement fences anonymous old audio and permits the next stream", t => {
-  const f=fixture(t);f.start("old");f.packet();f.asr("q2","等一下");
+  const f=fixture(t);f.start("old");f.packet();
+  f.emit({type:"conversation.item.input_audio_transcription.started",item_id:"q2"});
+  f.emit({type:"conversation.item.input_audio_transcription.delta",item_id:"q2",delta:"等一下"});
   assert.ok(f.sent.some(event=>event.type==="response.cancel"));
   f.packet();f.start("premature","q2");f.packet();assert.equal(f.audio.length,1);
   f.emit({type:"response.canceled"});f.packet();f.start("old");f.packet();assert.equal(f.audio.length,1);
+  f.emit({type:"conversation.item.input_audio_transcription.completed",item_id:"q2",text:"等一下"});
   f.start("new","q2");f.packet();f.usage();f.packet();assert.equal(f.audio.length,3);
   assert.ok(f.audio[1]!.identity!.playbackEpoch!>f.audio[0]!.identity!.playbackEpoch!);
   f.emit({type:"response.canceled"});f.packet();assert.equal(f.audio.length,4,"A duplicate cancel ACK cannot close the new stream");
@@ -75,6 +78,41 @@ test("Doubao presentation continuation waits for playback before returning its r
   f.emit({type:"response.function_call_arguments.done",question_id:"q1",items:[{call_id:"continue1",name:"continue_speaking",arguments:{}}]});f.end("segment");
   await delay();assert.equal(f.sent.some(event=>event.items?.[0]?.call_id==="continue1"),false);
   f.call.noteSpeakerIdle(1);await delay(400);assert.ok(f.sent.some(event=>event.items?.[0]?.call_id==="continue1"));
+});
+
+test("native tool results return before text/TTS ends in either provider event order", async t => {
+  for (const order of ["text-first", "tool-first", "audio-first"]) {
+    let finish!: (value: string) => void;
+    const f = fixture(t, () => new Promise(resolve => { finish = resolve; }));
+    const text = () => {
+      f.emit({ type: "response.output_text.delta", question_id: "q1", response_id: "preface", delta: "我先查看资料" });
+      f.emit({ type: "response.output_text.done", question_id: "q1", response_id: "preface", text: "我先查看资料" });
+    };
+    const tool = () => f.emit({ type: "response.function_call_arguments.done", question_id: "q1", items: [{ call_id: order, name: "read_document", arguments: { file: "paper" } }] });
+    if (order === "text-first") { text(); tool(); }
+    else if (order === "tool-first") { tool(); text(); }
+    else { f.start("preface"); f.packet(); tool(); }
+    finish("原文内容"); await delay();
+    const outputs = f.sent.filter(event => event.items?.[0]?.role === "tool");
+    assert.equal(outputs.length, 1, order);
+    assert.equal(outputs[0]?.items[0].content[0].text, "原文内容");
+    f.call.hangup();
+  }
+});
+
+test("a finalized fresh native input permits new tools without a cancel acknowledgement", async t => {
+  const f = fixture(t);
+  f.asr("q1", "分析论文"); f.start("old", "q1"); f.packet();
+  f.asr("q2", "梳理了吗？现在打开这篇论文。");
+  assert.ok(f.sent.some(event => event.type === "response.cancel"));
+  f.emit({ type: "response.output_audio.delta", delta: Buffer.alloc(960).toString("base64") });
+  f.start("late-old", "q1"); f.packet();
+  assert.equal(f.audio.length, 1, "Cancelled audio stays fenced without an ack");
+  f.emit({ type: "response.function_call_arguments.done", items: [{ call_id: "open-new", name: "show_stage", arguments: { mode: "file", file: "paper" } }] });
+  await delay(); assert.ok(f.sent.some(event => event.items?.[0]?.call_id === "open-new"));
+  f.emit({ type: "response.canceled" }); // A late old acknowledgement cannot close the new output.
+  f.start("new", "q2"); f.packet();
+  assert.equal(f.audio.length, 2); assert.equal(f.audio.at(-1)?.identity?.responseId, "new");
 });
 
 test("pausing a native walkthrough holds its continuation until an explicit resume", async t => {

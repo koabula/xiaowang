@@ -179,3 +179,16 @@ test("a task can rename its display name and drop a library reference", async ()
     close();
   }
 });
+
+test("legacy library labels resolve only the exact id and filename of this workspace", () => {
+  const { runtime, close } = openRuntime();
+  try {
+    const bot = runtime.activeBot();
+    const other = runtime.store.createBot({ name: "other", systemPrompt: "" });
+    const { ref } = runtime.store.addLibraryBytes(bot.id, "论文 with spaces.pdf", tinyPdf("SOURCE"));
+    assert.equal(runtime.store.resolveLibraryRef(bot.id, `${ref.id} ${ref.filename}`).id, ref.id);
+    assert.equal(runtime.store.resolveLibraryRef(bot.id, `${ref.id}\t${ref.filename}`).id, ref.id);
+    assert.throws(() => runtime.store.resolveLibraryRef(bot.id, `${ref.id} wrong.pdf`), /没有这份/);
+    assert.throws(() => runtime.store.resolveLibraryRef(other.id, `${ref.id} ${ref.filename}`), /没有这份/);
+  } finally { close(); }
+});

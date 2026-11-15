@@ -51,3 +51,24 @@ test("restart recovers queued work but never replays an interrupted mutation aut
   assert.deepEqual(ran, ["pending"]);
   queue.retry("in-flight"); await queue.wait("in-flight"); assert.deepEqual(ran, ["pending", "in-flight"]);
 });
+
+test('display metadata and canonical reply links survive progress and restart', async t => {
+  const root = home(t); let runtime = Runtime.open(root);
+  const botId = runtime.activeBot().id; let queue: JobQueue;
+  queue = new JobQueue(runtime.store, async current => {
+    queue.linkInput(current.id, 100);
+    return { text: 'canonical reply', resultEventId: 101, artifacts: ['notes/result.md'] };
+  });
+  queue.start();
+  const chat = queue.enqueue({ botId, task: 'hi' });
+  const background = queue.enqueue({ botId, task: '整理备忘录，包含环境与步骤', channel: 'voice', originCallId: 'phone' });
+  await queue.wait(chat.id); const completed = await queue.wait(background.id);
+  assert.equal(queue.get(chat.id).display, 'conversation');
+  assert.equal(completed.display, 'background'); assert.equal(completed.title, '整理备忘录');
+  assert.equal(completed.originEventId, 100); assert.equal(completed.resultEventId, 101); assert.equal(completed.originCallId, 'phone');
+  queue.shutdown(); runtime.close(); runtime = Runtime.open(root);
+  const restored = new JobQueue(runtime.store, async () => ({ text: 'never' }));
+  t.after(() => { restored.shutdown(); runtime.close(); });
+  assert.equal(restored.get(background.id).resultEventId, 101);
+  assert.equal(restored.get(background.id).display, 'background');
+});

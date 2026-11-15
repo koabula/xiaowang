@@ -64,6 +64,7 @@ declare global {
 }
 
 export interface AppState {
+  browser?: BrowserNote;
   bots: BotRow[];
   activeSlug: string;
   settings: SettingsView;
@@ -81,6 +82,8 @@ export interface BotRow {
 }
 
 export interface ChatItem {
+  jobId?: string;
+  callId?: string;
   id: number;
   kind: "user" | "assistant" | "tool" | "file" | "note" | "call";
   text: string;

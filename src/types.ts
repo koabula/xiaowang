@@ -9,12 +9,18 @@ export interface TaskJob {
   notify: "silent" | "when_idle";
   status: JobStatus;
   createdAt: string;
+  queuedAt?: string;
   updatedAt: string;
   activity: string;
   result: string;
   error: string;
   attempts: number;
   sourceCallId?: string;
+  display?: "conversation" | "background";
+  title?: string;
+  originEventId?: number;
+  originCallId?: string;
+  resultEventId?: number;
   artifacts: string[];
 }
 
@@ -48,14 +54,15 @@ export interface ToolCall {
  * 模型看到的 messages 只是这些事件的投影，不是记忆本身。
  */
 export type SessionEvent =
-  | { type: "user_text"; channel: Channel; text: string }
-  | { type: "assistant_turn"; channel: Channel; text: string; toolCalls: ToolCall[] }
+  | { type: "user_text"; channel: Channel; text: string; jobId?: string }
+  | { type: "assistant_turn"; channel: Channel; text: string; toolCalls: ToolCall[]; jobId?: string }
   | { type: "call"; callId?: string; startedAt: string; endedAt: string; lines: Array<{ who: "user" | "assistant"; text: string }> }
   | { type: "tool_result"; callId: string; name: string; output: string; isError: boolean }
   | { type: "baseline"; text: string; fromBotId?: string }
   | { type: "artifact"; path: string; bytes: number }
   | { type: "job"; job: TaskJob }
   | { type: "voice_line"; callId: string; who: "user" | "assistant"; text: string }
+  | { type: "voice_tool_output"; callId: string; toolCallId: string }
   | { type: "presentation"; state: import("./presentation.ts").PresentationState };
 
 export interface StoredEvent {

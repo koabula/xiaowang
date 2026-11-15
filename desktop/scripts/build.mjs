@@ -11,6 +11,7 @@ export async function buildMain() {
     banner: { js: 'import { createRequire as __xwCreateRequire } from "node:module"; const require = __xwCreateRequire(import.meta.url);' },
   });
   cpSync("desktop/main/preload.cjs", "desktop/dist/preload.cjs");
+  cpSync("desktop/main/browser-preload.cjs", "desktop/dist/browser-preload.cjs");
   cpSync("desktop/icon.png", "desktop/dist/icon.png");
 }
 if (process.argv[1]?.replaceAll("\\", "/").endsWith("desktop/scripts/build.mjs")) {

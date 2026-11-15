@@ -400,8 +400,7 @@ const TOOLS: Tool[] = [
       if (refs.length === 0) {
         return { isError: false, output: "当前任务的资料库还没有引用。用户放入的 PDF 会出现在这里。" };
       }
-      const lines = refs.map((ref) => `${ref.id}\t${ref.filename}\t${formatBytes(ref.byteSize)}`);
-      return { isError: false, output: lines.join("\n") };
+      return { isError: false, output: JSON.stringify({ files: refs.map(ref => ({ id: ref.id, filename: ref.filename, size: formatBytes(ref.byteSize) })), hint: "read_document.file 和 show_stage.file 只填写 id 字段，不要把 id 与 filename 拼接。" }) };
     },
   },
   {

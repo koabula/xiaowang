@@ -287,3 +287,29 @@ test("arxiv atom entries become compact citations", () => {
   assert.equal(papers[0]?.authors[0], "Ashish Vaswani");
   assert.match(papers[0]?.summary ?? "", /Transformer & discard/);
 });
+
+test("a running LLM turn keeps its task when live voice progress and tools arrive", async () => {
+  const { runtime, close } = openRuntime();
+  try {
+    const bot = runtime.activeBot(); let step = 0;
+    runtime.store.append(bot.id, { type: "user_text", channel: "text", text: "历史研究背景" });
+    const provider: LlmProvider = { model: "fixture", async complete(request) {
+      step += 1;
+      if (step === 1) {
+        runtime.store.append(bot.id, { type: "voice_line", callId: "live", who: "user", text: "梳理了吗-PROGRESS" });
+        runtime.store.append(bot.id, { type: "assistant_turn", channel: "voice", text: "", toolCalls: [{ id: "foreground", name: "list_library", input: {} }] });
+        runtime.store.append(bot.id, { type: "tool_result", callId: "foreground", name: "list_library", output: "FOREGROUND-TOOL", isError: false });
+        return { text: "正在查阅", toolCalls: [{ id: "own", name: "list_files", arguments: "{}" }] };
+      }
+      const contents = request.messages.map(message => message.content).join("\n");
+      assert.match(contents, /历史研究背景/); assert.match(contents, /分析论文-PRIMARY/);
+      assert.doesNotMatch(contents, /PROGRESS|FOREGROUND-TOOL/);
+      assert.ok(request.messages.some(message => message.role === "tool" && message.toolCallId === "own"));
+      return { text: "分析完成", toolCalls: [] };
+    } };
+    const result = await runTurn(runtime, { botId: bot.id, input: "分析论文-PRIMARY", provider });
+    assert.equal(result.finalText, "分析完成");
+    const log = JSON.stringify(runtime.store.getEvents(bot.id));
+    assert.match(log, /PROGRESS/); assert.match(log, /FOREGROUND-TOOL/);
+  } finally { close(); }
+});

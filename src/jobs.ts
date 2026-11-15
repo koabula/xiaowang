@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { Store } from "./store.ts";
 import type { Channel, TaskJob } from "./types.ts";
+import { taskTitle } from "./task-presentation.ts";
 
-export interface JobOutput { text: string; artifacts?: string[] }
+export interface JobOutput { text: string; artifacts?: string[]; resultEventId?: number }
 export interface JobRunner {
   (job: TaskJob, signal: AbortSignal, activity: (text: string) => void): Promise<JobOutput>;
 }
@@ -30,9 +31,9 @@ export class JobQueue {
     }
   }
 
-  start(): void { this.enabled = true; this.pump(); }
+  start(): void { if (this.enabled) return; this.enabled = true; this.pump(); }
 
-  enqueue(input: { botId: string; task: string; channel?: Channel; notify?: TaskJob["notify"]; sourceCallId?: string }): TaskJob {
+  enqueue(input: { botId: string; task: string; channel?: Channel; notify?: TaskJob["notify"]; sourceCallId?: string; display?: TaskJob["display"]; title?: string; originCallId?: string }): TaskJob {
     if (this.stopped) throw new Error("任务队列正在关闭。");
     this.store.requireBot(input.botId);
     const task = input.task.trim();
@@ -42,7 +43,8 @@ export class JobQueue {
       if (existing) return { ...existing };
     }
     const now = new Date().toISOString();
-    const job: TaskJob = { id: randomUUID(), botId: input.botId, task, channel: input.channel ?? "text", notify: input.notify ?? "silent", sourceCallId: input.sourceCallId, status: "queued", createdAt: now, updatedAt: now, activity: "", result: "", error: "", attempts: 0, artifacts: [] };
+    const job: TaskJob = { id: randomUUID(), botId: input.botId, task, channel: input.channel ?? "text", notify: input.notify ?? "silent", sourceCallId: input.sourceCallId, display: input.display ?? (input.channel && input.channel !== "text" ? "background" : "conversation"), title: taskTitle(input.title || task), originCallId: input.originCallId, status: "queued", createdAt: now, updatedAt: now, activity: "", result: "", error: "", attempts: 0, artifacts: [] };
+    job.queuedAt = now;
     this.change(job, {});
     // Dispatch in a microtask so the caller can retain the durable job ID first.
     queueMicrotask(() => this.pump());
@@ -57,6 +59,12 @@ export class JobQueue {
     const job = this.records.get(id);
     if (!job) throw new Error("找不到这个任务。");
     return { ...job, artifacts: [...job.artifacts] };
+  }
+
+  linkInput(id: string, eventId: number): void {
+    const job = this.records.get(id);
+    if (!job) throw new Error("找不到这个任务。");
+    if (job.originEventId !== eventId) this.change(job, { originEventId: eventId });
   }
 
   busy(botId: string): boolean { return this.list(botId).some(job => job.status === "queued" || job.status === "running"); }
@@ -79,7 +87,7 @@ export class JobQueue {
     const job = this.get(id);
     if (!terminal.has(job.status) || job.status === "succeeded") throw new Error("只能重试未完成的任务。");
     this.records.delete(id);
-    this.change(job, { status: "queued", error: "", activity: "", result: "" });
+    this.change(job, { status: "queued", error: "", activity: "", result: "", resultEventId: undefined, queuedAt: new Date().toISOString() });
     this.pump();
     return this.get(id);
   }
@@ -116,7 +124,7 @@ export class JobQueue {
       void this.run({ ...job }, controller.signal, activity => {
         if (!controller.signal.aborted && !this.stopped && activity !== job.activity) this.change(job, { activity: activity.slice(0, 240) });
       }).then(result => {
-        if (!controller.signal.aborted && !this.stopped) this.change(job, { status: "succeeded", result: result.text, artifacts: result.artifacts ?? [], activity: "" });
+        if (!controller.signal.aborted && !this.stopped) this.change(job, { status: "succeeded", result: result.text, resultEventId: result.resultEventId, artifacts: result.artifacts ?? [], activity: "" });
       }).catch((error: unknown) => {
         if (!controller.signal.aborted && !this.stopped) this.change(job, { status: "failed", error: error instanceof Error ? error.message : String(error), activity: "" });
       }).finally(() => { this.running.delete(job.id); this.pump(); });

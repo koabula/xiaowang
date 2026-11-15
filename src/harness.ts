@@ -15,6 +15,8 @@ export interface StepEvent {
   name?: string;
   isError?: boolean;
   activity?: string;
+  eventId?: number;
+  final?: boolean;
 }
 
 export interface TurnResult {
@@ -40,6 +42,8 @@ export interface RunTurnOptions {
   onStep?: (step: StepEvent) => void;
   onTextDelta?: (bot: Bot, text: string) => void;
   onKickoff?: (job: import("./types.ts").Kickoff) => void;
+  jobId?: string;
+  onInput?: (eventId: number) => void;
 }
 
 /**
@@ -74,11 +78,16 @@ export async function runTurn(runtime: Runtime, options: RunTurnOptions): Promis
 async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<TurnResult> {
   const bot = runtime.store.requireBot(options.botId);
   const maxSteps = options.maxSteps ?? QUIET_STEP_CAP;
-  runtime.store.append(bot.id, {
+  // A running turn owns its input and tool loop. New voice utterances and
+  // foreground tools remain in the log for the next turn, not this job's plan.
+  const context = runtime.store.getEvents(bot.id);
+  context.push(runtime.store.append(bot.id, {
     type: "user_text",
     channel: options.channel ?? "text",
     text: options.input,
-  });
+    jobId: options.jobId,
+  }));
+  options.onInput?.(context.at(-1)!.id);
 
   let lastText = "";
   for (let step = 1; step <= maxSteps; step += 1) {
@@ -88,7 +97,7 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
     const current = runtime.store.requireBot(bot.id);
     const library = runtime.store.listLibrary(bot.id).map((ref) => ({ id: ref.id, filename: ref.filename }));
     const personName = runtime.ensureSteward().name;
-    const projected = projectLlmContext(current, runtime.store.getEvents(bot.id), { library, personName, locale: options.locale });
+    const projected = projectLlmContext(current, context, { library, personName, locale: options.locale });
     const result = await options.provider.complete({
       system: projected.system,
       messages: projected.messages,
@@ -108,17 +117,20 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
         skippedKickoffs: 0,
       };
     }
-    runtime.store.append(bot.id, {
+    context.push(runtime.store.append(bot.id, {
       type: "assistant_turn",
       channel: "text",
       text: result.text,
       toolCalls,
-    });
+      jobId: options.jobId,
+    }));
     options.onStep?.({
       bot: current,
       kind: "assistant",
       text: result.text,
       activity: toolCalls.length > 0 ? result.text.trim() || undefined : undefined,
+      eventId: context.at(-1)!.id,
+      final: toolCalls.length === 0,
     });
 
     if (options.signal?.aborted || toolCalls.length === 0) {
@@ -151,15 +163,15 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
         stage: options.stage,
         signal: options.signal,
       });
-      runtime.store.append(bot.id, {
+      context.push(runtime.store.append(bot.id, {
         type: "tool_result",
         callId: call.id,
         name: call.name,
         output: outcome.output,
         isError: outcome.isError,
-      });
+      }));
       if (outcome.artifact) {
-        runtime.store.append(bot.id, { type: "artifact", ...outcome.artifact });
+        context.push(runtime.store.append(bot.id, { type: "artifact", ...outcome.artifact }));
       }
       options.onStep?.({
         bot: runtime.store.requireBot(bot.id),

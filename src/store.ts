@@ -298,6 +298,10 @@ export class Store {
     const refs = this.listLibrary(botId);
     const byId = refs.find((item) => item.id === name);
     if (byId) return byId;
+    // Accept the exact legacy catalog label, without accepting arbitrary suffixes
+    // or a reference belonging to another workspace.
+    const byLabel = refs.find(item => name === `${item.id} ${item.filename}` || name === `${item.id}\t${item.filename}`);
+    if (byLabel) return byLabel;
     const matches = refs.filter((item) => item.filename === name || item.filename.toLowerCase() === name.toLowerCase());
     if (matches.length === 1) return matches[0] as LibraryRef;
     if (matches.length > 1) {

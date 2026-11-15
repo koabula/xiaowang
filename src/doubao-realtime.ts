@@ -8,6 +8,7 @@ export class DoubaoRealtime {
   private pendingOutput = false;
   private inputItem = "";
   private readonly spokenInputs = new Set<string>();
+  private readonly finalInputs = new Set<string>();
   private readonly cancelled = new Set<string>();
   private readonly cancelledQuestions = new Set<string>();
   private readonly finished = new Set<string>();
@@ -15,6 +16,21 @@ export class DoubaoRealtime {
   isCancelling(): boolean { return this.cancelling; }
   hasOutput(): boolean { return this.pendingOutput || this.audio !== null; }
   isAudioOpen(): boolean { return this.audio !== null; }
+  finishInput(itemId?: string): boolean {
+    if (itemId && this.inputItem && itemId !== this.inputItem) return false;
+    const input = itemId || this.inputItem;
+    if (!input || this.finalInputs.has(input)) return false;
+    this.finalInputs.add(input);
+    // A fresh, finalized ASR turn is also an ordered cancellation boundary.
+    // The native service can start its next tool call without sending a cancel ack.
+    // Old audio remains fenced by response/question IDs and anonymous deltas still
+    // require a new audio.started before they can be played.
+    const superseded = this.cancelling;
+    this.cancelling = false;
+    if (superseded) { this.audio = null; this.pendingOutput = false; }
+    this.outputQuestion = input;
+    return superseded;
+  }
   resumeContinuation(): void { this.cancelledQuestions.delete(this.outputQuestion); }
   interrupt(): void {
     if (this.audio) this.cancelled.add(this.audio.responseId);

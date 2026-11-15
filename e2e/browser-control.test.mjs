@@ -1,0 +1,139 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { createServer } from 'node:http';
+import { mkdtemp, mkdir, copyFile, writeFile, rm } from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { build } from 'esbuild';
+import { _electron as electron } from 'playwright';
+import { launchPackaged } from './launch.mjs';
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function until(check, timeout = 10000) {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) { const value = await check(); if (value) return value; await sleep(30); }
+  throw new Error('Browser control condition did not become true');
+}
+async function listen(server) { await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); return `http://127.0.0.1:${server.address().port}`; }
+async function closeServer(server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+function fixtureHtml(extra = '') {
+  return `<!doctype html><style>body{margin:0;height:2400px}#normal{position:absolute;left:40px;top:40px;width:180px;height:60px}#entry{position:absolute;left:40px;top:130px}dialog{width:400px;height:200px}dialog button{margin:30px}iframe{position:absolute;left:350px;top:40px;width:300px;height:180px}</style><button id="normal" onclick="window.hits++">Normal action</button><input id="entry" aria-label="entry"><dialog id="modal"><button id="modalButton" onclick="window.dialogHits++">Dialog action</button></dialog>${extra}<script>window.hits=0;window.dialogHits=0;window.globalHits=0;window.wheels=0;window.contexts=0;window.drops=0;window.addEventListener('click',()=>window.globalHits++);window.addEventListener('wheel',()=>window.wheels++);window.addEventListener('contextmenu',e=>{e.preventDefault();window.contexts++});window.addEventListener('drop',e=>{e.preventDefault();window.drops++});</script>`;
+}
+
+test('native browser: ownership gates mouse, wheel, keyboard, IME, modals, frames and loading', { timeout: 60000 }, async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'xw-browser-control-'));
+  let releaseSlow = () => {};
+  const frames = createServer((_request, response) => { response.writeHead(200, { 'content-type': 'text/html' }); response.end('<style>body{height:2000px}</style><button style="margin:10px" onclick="window.hits++">Frame action</button><input id="frameEntry"><script>window.hits=0</script>'); });
+  const frameUrl = await listen(frames);
+  const server = createServer((request, response) => {
+    if (request.url === '/slow.png') { releaseSlow = () => { if (!response.writableEnded) { response.writeHead(200, { 'content-type': 'image/png' }); response.end(); } }; return; }
+    response.writeHead(200, { 'content-type': 'text/html' });
+    response.end(fixtureHtml(request.url === '/loading' ? '<img src="/slow.png">' : `<iframe id="child" src="${frameUrl}/frame"></iframe>`));
+  });
+  const base = await listen(server);
+  const main = path.join(root, 'main.mjs');
+  await copyFile('desktop/main/browser-preload.cjs', path.join(root, 'browser-preload.cjs'));
+  await build({ stdin: { contents: `import {app,BrowserWindow} from 'electron';import {BrowserPane} from './desktop/main/browser.ts';app.setPath('userData',${JSON.stringify(path.join(root, 'profile'))});app.whenReady().then(async()=>{const win=new BrowserWindow({width:900,height:740,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}});globalThis.pane=new BrowserPane(()=>"fixture",()=>{},()=>({id:"unused",filename:"unused.pdf"}));globalThis.pane.attach(win);globalThis.pane.setBounds({x:0,y:0,width:800,height:600});await win.loadURL('data:text/html,<input id="host" placeholder="chat">');});`, resolveDir: process.cwd() }, bundle: true, format: 'esm', platform: 'node', external: ['electron'], outfile: main, logLevel: 'silent' });
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await electron.launch({ args: ['--no-sandbox', main], env });
+  t.after(async () => { releaseSlow(); await app.close().catch(() => {}); await closeServer(server); await closeServer(frames); await rm(root, { recursive: true, force: true }); });
+  const host = await app.firstWindow();
+  const run = script => app.evaluate(async (_, script) => globalThis.pane.view.webContents.executeJavaScript(script), script);
+  const action = (name, ...args) => app.evaluate(async (_, { name, args }) => globalThis.pane[name](...args), { name, args });
+  const bot = (name, ...args) => app.evaluate(async (_, { name, args }) => globalThis.pane.driver[name](...args), { name, args });
+  const input = async (...events) => { await app.evaluate((_, events) => { const wc = globalThis.pane.view.webContents; wc.focus(); for (const event of events) wc.sendInputEvent(event); }, events); await sleep(80); };
+  const click = (x, y, button = 'left') => input({ type: 'mouseMove', x, y }, { type: 'mouseDown', x, y, button, clickCount: 1 }, { type: 'mouseUp', x, y, button, clickCount: 1 });
+  const key = () => input({ type: 'keyDown', keyCode: 'A' }, { type: 'char', keyCode: 'a' }, { type: 'keyUp', keyCode: 'A' });
+  const wheel = () => input({ type: 'mouseWheel', x: 250, y: 250, deltaY: -300, deltaX: 0 });
+  const read = () => run('({hits,dialogHits,globalHits,wheels,contexts,drops,value:document.getElementById("entry").value,scrollY})');
+  await bot('navigate', `${base}/normal`);
+  assert.deepEqual(await app.evaluate(() => { const p = globalThis.pane.view.webContents.getLastWebPreferences(); return { sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration }; }), { sandbox: true, contextIsolation: true, nodeIntegration: false });
+  assert.equal(await run('typeof require'), 'undefined');
+  assert.equal(await app.evaluate(async () => globalThis.pane.view.webContents.mainFrame.frames[0].executeJavaScript('typeof require')), 'undefined');
+  assert.equal((await action('viewState')).holder, 'bot');
+  await assert.rejects(action('userNavigate', `${base}/forbidden`), /取得浏览器控制权/);
+  await assert.rejects(action('userBack'), /取得浏览器控制权/);
+  await assert.rejects(action('userForward'), /取得浏览器控制权/);
+  await click(100, 70); await click(100, 70, 'right'); await wheel();
+  await bot('type', 'entry', 'agent'); await key();
+  await app.evaluate(async () => { await globalThis.pane.view.webContents.insertText('IME'); });
+  const locked = await read();
+  assert.equal(locked.hits, 0); assert.equal(locked.globalHits, 0); assert.equal(locked.wheels, 0); assert.equal(locked.contexts, 0); assert.equal(locked.scrollY, 0); assert.equal(locked.value, 'agent');
+  await run('document.getElementById("modal").showModal()');
+  const modal = await run('(()=>{const r=document.getElementById("modalButton").getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()');
+  await click(modal.x, modal.y); assert.equal((await read()).dialogHits, 0);
+  await bot('click', 'Dialog action'); assert.equal((await read()).dialogHits, 1, 'Agent DOM actions still work while user input is locked');
+  await run('document.getElementById("modal").close();window.globalHits=0');
+  await click(400, 70);
+  assert.equal(await app.evaluate(async () => { const frame = globalThis.pane.view.webContents.mainFrame.frames[0]; return frame.executeJavaScript('window.hits'); }), 0, 'Native input is blocked inside a cross-origin frame');
+  await input({ type: 'mouseWheel', x: 400, y: 70, deltaY: -300, deltaX: 0 });
+  assert.equal(await app.evaluate(async () => globalThis.pane.view.webContents.mainFrame.frames[0].executeJavaScript('window.scrollY')), 0, 'Wheel input is blocked inside a cross-origin frame');
+  await app.evaluate(async () => { const wc = globalThis.pane.view.webContents; await wc.mainFrame.frames[0].executeJavaScript('document.getElementById("frameEntry").focus()'); await wc.insertText('BLOCKED'); });
+  assert.equal(await app.evaluate(async () => globalThis.pane.view.webContents.mainFrame.frames[0].executeJavaScript('document.getElementById("frameEntry").value')), '', 'Text insertion is blocked inside a cross-origin frame');
+
+  await action('setHolder', 'user'); await click(100, 70); assert.equal((await read()).hits, 1);
+  await click(400, 70);
+  assert.equal(await app.evaluate(async () => globalThis.pane.view.webContents.mainFrame.frames[0].executeJavaScript('window.hits')), 1);
+  await click(100, 140); await key();
+  await app.evaluate(async () => { await globalThis.pane.view.webContents.insertText('IME'); });
+  assert.match((await read()).value, /aIME/);
+  await wheel(); await until(async () => (await read()).scrollY > 0);
+  await sleep(200); // Let the wheel action that was accepted while owned settle.
+  for (const [name, args] of [['navigate', [`${base}/bot-forbidden`]], ['click', ['Normal action']], ['type', ['entry', 'bad']], ['scroll', ['down']], ['back', []]]) await assert.rejects(bot(name, ...args), /用户正在控制浏览器/);
+  assert.match(await bot('snapshot'), /Normal action/);
+
+  await action('setHolder', 'bot');
+  const before = await read(); await click(100, 70); await wheel(); await key();
+  await app.evaluate(async () => { await globalThis.pane.view.webContents.insertText('BLOCKED'); });
+  assert.deepEqual(await read(), before, 'Revocation takes effect immediately without a page reload');
+  await assert.rejects(action('setHolder', 'invalid'), /无效/);
+  assert.equal((await action('viewState')).holder, 'bot');
+  await host.locator('#host').fill('Chat still works'); assert.equal(await host.locator('#host').inputValue(), 'Chat still works');
+
+  await app.evaluate((_, url) => { void globalThis.pane.driver.navigate(url); }, `${base}/loading`);
+  await until(() => app.evaluate(() => globalThis.pane.viewState().loading)); await sleep(150);
+  await app.evaluate(() => { globalThis.pendingClick = globalThis.pane.driver.click('Normal action').then(() => 'unexpected success', error => error.message); });
+  await click(100, 70); // The document is visible but its resource has not finished loading.
+  await action('setHolder', 'user'); await click(100, 70);
+  await action('setHolder', 'bot'); await click(100, 70);
+  releaseSlow(); await until(async () => !(await action('viewState')).loading);
+  assert.equal((await read()).hits, 1, 'Only the click made after takeover was accepted during loading');
+  assert.match(await app.evaluate(() => globalThis.pendingClick), /控制权已切换/, 'An old queued Agent action cannot run after a takeover/release cycle');
+  console.log('Verified native input lock, wheel/keyboard/IME, page handlers, modal and cross-origin frame clicks, loading-time takeover/revocation, agent actions and main-window chat.');
+});
+
+test('desktop browser: IPC ownership, takeover UI, reload hydration and navigation', { timeout: 60000 }, async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'xw-browser-ui-')); const profile = path.join(root, 'profile'); await mkdir(profile);
+  const web = createServer((_request, response) => { response.writeHead(200, { 'content-type': 'text/html' }); response.end(fixtureHtml()); }); const url = await listen(web);
+  const model = createServer(async (request, response) => {
+    let raw = ''; for await (const chunk of request) raw += chunk; const input = JSON.parse(raw);
+    const navigated = input.messages.some(message => message.role === 'tool');
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ choices: [{ message: navigated ? { content: '浏览器已就绪。' } : { content: '打开测试网页。', tool_calls: [{ id: 'browse', type: 'function', function: { name: 'browser_navigate', arguments: JSON.stringify({ url: `${url}/one` }) } }] } }] }));
+  }); const modelUrl = await listen(model);
+  await writeFile(path.join(profile, 'secrets.bin'), JSON.stringify({ model: 'fixture', baseUrl: `${modelUrl}/v1`, apiKey: 'local', locale: 'zh' }));
+  const env = { ...process.env, XIAOWANG_HOME: path.join(root, 'home'), XIAOWANG_USER_DATA: profile }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = process.env.XIAOWANG_E2E_EXECUTABLE ? await launchPackaged(process.env.XIAOWANG_E2E_EXECUTABLE, ['--no-sandbox'], env) : await electron.launch({ args: ['--no-sandbox', 'desktop/dist/main.js'], env });
+  t.after(async () => { await app.close().catch(() => {}); await closeServer(web); await closeServer(model); await rm(root, { recursive: true, force: true }); });
+  const page = await app.firstWindow(); await page.waitForSelector('.composer');
+  await page.evaluate(() => window.xiaowang.ask('xiaowang', '打开测试网页'));
+  await page.getByRole('button', { name: '取得控制权', exact: true }).waitFor();
+  for (const method of ['browserGo', 'browserBack', 'browserForward']) await assert.rejects(page.evaluate(({ method, url }) => window.xiaowang[method](url), { method, url: `${url}/blocked` }), /取得浏览器控制权/);
+  await page.getByRole('button', { name: '取得控制权', exact: true }).click();
+  await page.locator('.capsule').filter({ hasText: '你正在控制' }).waitFor();
+  await page.evaluate(url => window.xiaowang.browserGo(url), `${url}/two`);
+  await page.reload(); await page.waitForSelector('.composer');
+  await page.getByRole('button', { name: '浏览器', exact: true }).click();
+  await page.locator('.capsule').filter({ hasText: '你正在控制' }).waitFor();
+  assert.equal((await page.evaluate(() => window.xiaowang.getState())).browser.holder, 'user');
+  await page.evaluate(() => window.xiaowang.browserBack());
+  await until(async () => (await page.evaluate(() => window.xiaowang.getState())).browser.url.endsWith('/one'));
+  await page.evaluate(() => window.xiaowang.browserForward());
+  await until(async () => (await page.evaluate(() => window.xiaowang.getState())).browser.url.endsWith('/two'));
+  await page.getByRole('button', { name: '停止', exact: true }).click();
+  await page.getByRole('button', { name: '取得控制权', exact: true }).waitFor();
+  await assert.rejects(page.evaluate(url => window.xiaowang.browserGo(url), `${url}/blocked-again`), /取得浏览器控制权/);
+  await assert.rejects(page.evaluate(() => window.xiaowang.browserHolder('invalid')), /无效/);
+  assert.equal((await page.evaluate(() => window.xiaowang.getState())).browser.holder, 'bot');
+  console.log('Verified actual desktop IPC guards, takeover/release controls, allowed back/forward navigation and ownership hydration after renderer reload.');
+});

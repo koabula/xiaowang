@@ -1,6 +1,7 @@
-import { BrowserWindow, net, session, WebContentsView } from "electron";
+import { BrowserWindow, ipcMain, session, WebContentsView } from "electron";
+import { fileURLToPath } from "node:url";
 import type { BrowserDriver } from "../../src/stage.ts";
-import { assertHttpUrl } from "../../src/stage.ts";
+import { assertHttpUrl, USER_HAS_BROWSER } from "../../src/stage.ts";
 
 export interface BrowserViewState {
   url: string;
@@ -14,44 +15,21 @@ export interface SavedPdf {
   filename: string;
 }
 
-const SHIELD_ON = `(() => {
-  let shield = document.getElementById("xw-shield");
-  if (shield) return true;
-  shield = document.createElement("div");
-  shield.id = "xw-shield";
-  shield.style.cssText = "position:fixed;inset:0;z-index:2147483646;background:transparent;cursor:default;";
-  shield.addEventListener("wheel", (event) => {
-    const node = shield;
-    node.style.pointerEvents = "none";
-    const under = document.elementFromPoint(event.clientX, event.clientY);
-    node.style.pointerEvents = "auto";
-    if (under && under !== node) {
-      under.dispatchEvent(new WheelEvent("wheel", {
-        bubbles: true,
-        cancelable: true,
-        deltaX: event.deltaX,
-        deltaY: event.deltaY,
-        clientX: event.clientX,
-        clientY: event.clientY,
-      }));
-    }
-    window.scrollBy(event.deltaX, event.deltaY);
-  }, { passive: true });
-  document.documentElement.appendChild(shield);
-  return true;
-})()`;
-
-const SHIELD_OFF = `(() => {
-  document.getElementById("xw-shield")?.remove();
-  return true;
-})()`;
+// The isolated preload checks exceptional input paths (IME, paste, drop and
+// touch) against the same synchronous policy as native mouse/keyboard input.
+const inputOwners = new Map<number, () => boolean>();
+ipcMain.on("browser:input-allowed", event => {
+  event.returnValue = inputOwners.get(event.sender.id)?.() ?? false;
+});
 
 export class BrowserPane {
   readonly driver: BrowserDriver;
   ownerSlug = "";
   actingSlug = "";
   private view: WebContentsView | null = null;
+  private window: BrowserWindow | null = null;
   private holder: "bot" | "user" = "bot";
+  private controlEpoch = 0;
   private state: BrowserViewState = { url: "", title: "", holder: "bot", loading: false };
 
   private frameType = "";
@@ -63,18 +41,27 @@ export class BrowserPane {
     this.currentSlug = currentSlug; this.onState = onState; this.onPdf = onPdf;
     this.driver = {
       holder: () => this.holder,
-      navigate: (url) => this.navigate(url),
+      navigate: (url) => this.navigate(url, "bot"),
       snapshot: () => this.snapshot(),
       click: (target) => this.click(target),
       type: (target, text) => this.type(target, text),
       scroll: (direction) => this.scroll(direction),
-      back: () => this.back(),
+      back: () => this.back("bot"),
     };
   }
 
   attach(window: BrowserWindow): void {
+    this.window = window;
+    this.holder = "bot";
+    this.controlEpoch += 1;
+    this.state = { url: "", title: "", holder: "bot", loading: false };
+    const partition = session.fromPartition("persist:xiaowang");
     this.view = new WebContentsView({
       webPreferences: {
+        preload: fileURLToPath(new URL("./browser-preload.cjs", import.meta.url)),
+        // Run the isolated input guard in iframes too. sandbox keeps their
+        // preload API restricted; Node remains unavailable to page scripts.
+        nodeIntegrationInSubFrames: true,
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
@@ -83,25 +70,28 @@ export class BrowserPane {
     });
     window.contentView.addChildView(this.view);
     this.view.setVisible(false);
-    const partition = session.fromPartition("persist:xiaowang");
     partition.webRequest.onHeadersReceived((details, callback) => {
       if (details.resourceType === "mainFrame") this.frameType = headerValue(details.responseHeaders, "content-type");
       callback({ responseHeaders: details.responseHeaders });
     });
     const contents = this.view.webContents;
     contents.setWindowOpenHandler(({ url }) => {
-      void this.navigate(url);
+      void this.navigate(url, this.holder).catch(() => {});
       return { action: "deny" };
     });
     contents.on("did-start-loading", () => this.patch({ loading: true }));
     contents.on("did-stop-loading", () => {
       this.patch({ loading: false, url: contents.getURL(), title: contents.getTitle() });
-      void this.applyShield();
     });
     contents.on("page-title-updated", (_event, title) => this.patch({ title }));
     contents.on("before-input-event", (event) => {
       if (this.holder === "bot") event.preventDefault();
     });
+    contents.on("before-mouse-event", event => {
+      if (this.holder === "bot") event.preventDefault();
+    });
+    inputOwners.set(contents.id, () => this.holder === "user");
+    contents.once("destroyed", () => inputOwners.delete(contents.id));
   }
 
   setBounds(bounds: { x: number; y: number; width: number; height: number } | null): void {
@@ -120,20 +110,31 @@ export class BrowserPane {
   }
 
   setHolder(holder: "bot" | "user"): void {
+    if (holder !== "bot" && holder !== "user") throw new Error("无效的浏览器控制权。");
+    if (holder !== this.holder) this.controlEpoch += 1;
     this.holder = holder;
     this.ownerSlug = this.currentSlug();
+    if (holder === "bot") this.window?.webContents.focus();
     this.patch({ holder });
-    void this.applyShield();
   }
 
   viewState(): BrowserViewState {
     return this.state;
   }
 
-  async navigate(raw: string): Promise<string> {
+  userNavigate(raw: string): Promise<string> { return this.navigate(raw, "user"); }
+  userBack(): Promise<string> { return this.back("user"); }
+  userForward(): void {
+    this.requireHolder("user");
+    const contents = this.contents();
+    if (contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
+  }
+
+  private async navigate(raw: string, actor: "bot" | "user"): Promise<string> {
+    this.requireHolder(actor);
     const url = assertHttpUrl(raw);
     if (typeof url !== "string") return url.error;
-    this.ownerSlug = this.actingSlug || this.currentSlug();
+    this.ownerSlug = actor === "user" ? this.currentSlug() : this.actingSlug || this.currentSlug();
     this.patch({ url, loading: true });
     await this.contents().loadURL(url);
     const saved = await this.capturePdf(this.contents().getURL());
@@ -143,15 +144,11 @@ export class BrowserPane {
     return this.snapshot();
   }
 
-  async back(): Promise<string> {
+  private async back(actor: "bot" | "user"): Promise<string> {
+    this.requireHolder(actor);
     const contents = this.contents();
     if (contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
     return "已后退。";
-  }
-
-  forward(): void {
-    const contents = this.contents();
-    if (contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
   }
 
   private async snapshot(): Promise<string> {
@@ -166,7 +163,7 @@ export class BrowserPane {
   }
 
   private async click(target: string): Promise<string> {
-    const found = await this.contents().executeJavaScript(findAndClick(target), true);
+    const found = await this.agentScript(findAndClick(target));
     if (!found || typeof found !== "object" || !("ok" in found) || !found.ok) {
       return `页面上没有找到「${target}」。可以先 browser_snapshot。`;
     }
@@ -175,7 +172,7 @@ export class BrowserPane {
   }
 
   private async type(target: string, text: string): Promise<string> {
-    const found = await this.contents().executeJavaScript(findAndType(target, text), true);
+    const found = await this.agentScript(findAndType(target, text));
     if (!found || typeof found !== "object" || !("ok" in found) || !found.ok) {
       return `没有找到输入框「${target}」。`;
     }
@@ -184,7 +181,7 @@ export class BrowserPane {
 
   private async scroll(direction: "up" | "down"): Promise<string> {
     const delta = direction === "up" ? -560 : 560;
-    await this.contents().executeJavaScript(`window.scrollBy(0, ${delta})`, true);
+    await this.agentScript(`window.scrollBy(0, ${delta})`);
     return direction === "up" ? "已向上滚动。" : "已向下滚动。";
   }
 
@@ -204,18 +201,31 @@ export class BrowserPane {
     return this.view.webContents;
   }
 
+  private async agentScript(script: string): Promise<unknown> {
+    this.requireHolder("bot");
+    const epoch = this.controlEpoch;
+    const contents = this.contents();
+    // executeJavaScript itself waits for loading. Wait here first so a takeover
+    // can revoke work that has not yet been dispatched to the page.
+    if (contents.isLoading()) await new Promise<void>((resolve, reject) => {
+      const clear = () => { contents.removeListener("did-stop-loading", loaded); contents.removeListener("destroyed", destroyed); };
+      const loaded = () => { clear(); resolve(); };
+      const destroyed = () => { clear(); reject(new Error("浏览器窗口已关闭。")); };
+      contents.once("did-stop-loading", loaded);
+      contents.once("destroyed", destroyed);
+    });
+    this.requireHolder("bot");
+    if (epoch !== this.controlEpoch) throw new Error("浏览器控制权已切换，请重新操作。");
+    return contents.executeJavaScript(script, true);
+  }
+
   private patch(partial: Partial<BrowserViewState>): void {
     this.state = { ...this.state, ...partial };
     this.onState(this.state);
   }
 
-  private async applyShield(): Promise<void> {
-    if (!this.view) return;
-    try {
-      await this.view.webContents.executeJavaScript(this.holder === "bot" ? SHIELD_ON : SHIELD_OFF, true);
-    } catch {
-      // 页面还没就绪时，下一次加载会补上遮罩。
-    }
+  private requireHolder(actor: "bot" | "user"): void {
+    if (this.holder !== actor) throw new Error(actor === "user" ? "请先取得浏览器控制权。" : USER_HAS_BROWSER);
   }
 }
 

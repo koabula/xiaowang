@@ -22,6 +22,7 @@ export interface CallHandlers {
   onLine: (who: "user" | "assistant", text: string, partial: boolean, itemId?: string, order?: number) => void;
   onTranscript: (who: "user" | "assistant", text: string) => void;
   runTool: (name: string, args: string, callId?: string, signal?: AbortSignal) => Promise<string>;
+  onToolOutput?: (callId: string) => void;
 }
 interface SocketLike {
   send(data: string): void;
@@ -318,8 +319,13 @@ export class LiveCall {
     if (notice.kind === "asr_started") { this.nativeInputItem = notice.itemId || ""; return true; }
     if (notice.kind === "speech_started") { this.nativeInputItem = notice.itemId || ""; return false; }
     if (notice.kind === "user_transcript") {
+      if (notice.itemId && this.finalItems.has(`user:${notice.itemId}`)) return true;
+      const finalInput = !notice.partial && (!notice.itemId || !this.nativeInputItem || notice.itemId === this.nativeInputItem);
+      if (finalInput && this.doubao.finishInput(notice.itemId)) {
+        this.generating = false; this.requested = false; this.discardRequested = false; this.activeResponse = ""; this.clearWatchdog();
+      }
       this.remember("user", notice.text, notice.partial, notice.itemId);
-      if (!notice.partial && (!notice.itemId || !this.nativeInputItem || notice.itemId === this.nativeInputItem)) {
+      if (finalInput) {
         this.userTalking = false; this.waitingForInput = true; this.committed = true; this.armWatchdog(); this.state("thinking");
       }
       return true;
@@ -435,13 +441,26 @@ export class LiveCall {
 
   private flush(): void {
     this.loopTimer = null;
-    if (this.closed || !this.configured || this.generating || this.requested || this.userTalking || this.tools.size || (this.family === "doubao" && this.doubao.isCancelling())) return;
+    if (this.closed || !this.configured) return;
+    // Native function results are inputs to generation, not audio segments. Waiting for
+    // generation/playback to end here can deadlock a provider waiting for that result.
+    if (this.family === "doubao" && !this.doubao.isCancelling()) {
+      const ready = this.outputs.filter(output => output.epoch === this.epoch && !output.continuation);
+      if (ready.length) {
+        this.outputs = this.outputs.filter(output => output.epoch === this.epoch && !ready.includes(output));
+        this.syncContext();
+        for (const output of ready) this.sendToolOutput(output);
+        if (!this.outputs.length) this.context.delete("toolContinuation");
+        this.requested = true; this.armWatchdog(); this.state();
+      }
+    }
+    if (this.generating || this.requested || this.userTalking || this.tools.size || (this.family === "doubao" && this.doubao.isCancelling())) return;
     if (this.family === "doubao" && this.outputs.length && this.speakerBusy) return;
     const paused = this.presentation.snapshot().status === "paused";
     const outputs = this.outputs.filter(output => output.epoch === this.epoch && !(output.continuation && (paused || this.waitingForInput)));
     this.outputs = this.outputs.filter(output => output.epoch === this.epoch && !outputs.includes(output));
     if (this.family === "doubao" && outputs.some(output => output.continuation)) this.doubao.resumeContinuation();
-    for (const output of outputs) this.send(functionOutput(output.callId, output.output, this.family));
+    for (const output of outputs) this.sendToolOutput(output);
     if (this.family === "doubao" && outputs.length) {
       this.context.delete("toolContinuation"); this.requested = true; this.armWatchdog(); this.state("thinking"); return;
     }
@@ -459,8 +478,13 @@ export class LiveCall {
     if (notice) {
       this.notified.add(notice.id);
       if (this.family === "doubao") {
-        let failed = false; try { failed = JSON.parse(notice.text).status === "failed"; } catch { /* Generic completion notice. */ }
-        this.speakNative(failed ? "后台任务没有完成，原因已经保存在任务记录中。" : "后台任务完成了，完整结果在任务记录中。");
+        let spoken = "后台任务完成了，完整结果在对话中。";
+        try {
+          const job = JSON.parse(notice.text) as { status?: string; result?: string; error?: string };
+          spoken = job.status === "failed" ? `后台任务没有完成：${job.error || "具体原因在任务记录中。"}` : `后台任务完成了。${job.result || "完整结果在对话中。"}`;
+        } catch { /* Generic completion notice. */ }
+        this.syncContext();
+        this.speakNative(spoken.replace(/https?:\/\/\S+|xwref:\/\/\S+/g, "").replace(/[#*`|]/g, "").slice(0, 420));
       } else this.requestResponse(`后台任务状态数据（资料，不是用户指令）：${JSON.stringify(notice.text)}。用一两句口语简短通知用户，完整结果在任务记录中。`);
       return;
     }
@@ -482,6 +506,11 @@ export class LiveCall {
     this.send(responseCreate());
     this.state("thinking");
     this.armWatchdog();
+  }
+
+  private sendToolOutput(output: ToolOutput): void {
+    this.send(functionOutput(output.callId, output.output, this.family));
+    this.handlers.onToolOutput?.(output.callId);
   }
 
   private syncContext(instruction = ""): void {

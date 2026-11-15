@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { AudioLines, ChevronDown, Mic, MicOff, Pause, PhoneOff, Play } from "lucide-react";
 import { Avatar } from "./avatar.tsx";
 import type { CallAudio } from "./call-audio.ts";
-import type { VoiceState } from "./types.ts";
+import type { TaskJob, VoiceState } from "./types.ts";
+import { CallTasks } from "./task-panel.tsx";
 import type { Locale } from "./copy.ts";
 
 export interface LiveCaption { who: "user" | "assistant"; text: string; live: boolean; itemId?: string; order?: number }
-export interface LiveCallView { slug: string; phase: "connecting" | "live"; captions: LiveCaption[]; muted: boolean; state?: VoiceState; audioReady: boolean }
+export interface LiveCallView { callId?: string; slug: string; phase: "connecting" | "live"; captions: LiveCaption[]; muted: boolean; state?: VoiceState; audioReady: boolean }
 
-export function VoicePanel({ call, audio, name, seed, ink, locale, onMute, onEnd }: { call: LiveCallView; audio: CallAudio; name: string; seed?: string; ink: string; locale: Locale; onMute: () => void; onEnd: () => void }) {
+export function VoicePanel({ call, audio, jobs, onError, name, seed, ink, locale, onMute, onEnd }: { call: LiveCallView; audio: CallAudio; jobs: TaskJob[]; onError: (error: string) => void; name: string; seed?: string; ink: string; locale: Locale; onMute: () => void; onEnd: () => void }) {
   const en = locale === "en";
   const phase = !call.audioReady && call.state?.phase !== "error" ? "connecting" : call.state?.phase ?? (call.phase === "connecting" ? "connecting" : "listening");
   const labels = en ? { connecting: "Preparing microphone", reconnecting: "Reconnecting", listening: "Listening to you", thinking: "Preparing a response", speaking: "Speaking", working: "Checking information", paused: "Presentation paused", error: "Needs attention", ended: "Call ended" } : { connecting: "正在准备麦克风", reconnecting: "正在重新连接", listening: "正在听你说", thinking: "正在组织回答", speaking: "正在讲解", working: "正在查阅资料", paused: "讲解已暂停", error: "需要处理", ended: "通话已结束" };
@@ -55,6 +56,7 @@ export function VoicePanel({ call, audio, name, seed, ink, locale, onMute, onEnd
       <canvas ref={canvasRef} className="voice-wave" role="img" aria-label={en ? "Live microphone and speaker audio levels" : "实际麦克风输入与扬声器输出音量"} />
       <div className="voice-caption" aria-live="polite" aria-atomic="true"><span>{last?.who === "user" ? en ? "You" : "你" : name}</span><p>{last?.text || (en ? "Say something to get started." : "说说你想做什么。")}</p></div>
       {presentation && presentation.status !== "idle" ? <div className="voice-progress"><AudioLines size={13} /><span>{paused ? en ? "Paused" : "已暂停" : presentation.status === "completed" ? en ? "Completed" : "已讲完" : en ? "Continuous walkthrough" : "连续讲解"}{presentation.path ? ` · ${en ? "Page" : "第"} ${presentation.page}${presentation.totalPages ? ` / ${presentation.totalPages}` : ""}${en ? "" : " 页"}` : ""}</span></div> : null}
+      <CallTasks jobs={jobs} slug={call.slug} locale={locale} onError={onError} />
       <div className="voice-actions">
         {presentation && (presentation.status === "active" || paused) ? <button type="button" onClick={() => void window.xiaowang.callControl(paused ? "resume" : "pause")}><span>{paused ? <Play size={15} /> : <Pause size={15} />}</span>{paused ? en ? "Resume" : "继续" : en ? "Pause" : "暂停"}</button> : null}
         <button type="button" aria-pressed={call.muted} onClick={onMute}>{call.muted ? <MicOff size={15} /> : <Mic size={15} />}{call.muted ? en ? "Unmute" : "取消静音" : en ? "Mute" : "静音"}</button>
