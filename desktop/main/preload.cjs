@@ -30,7 +30,7 @@ contextBridge.exposeInMainWorld("xiaowang", {
   attach: (slug, filename, bytes) => ipcRenderer.invoke("chat:attach", slug, filename, bytes),
   pasteImage: slug => ipcRenderer.invoke("chat:pasteImage", slug),
   onPasteShortcut: callback => listeners("clipboard:pasteShortcut", callback),
-  ask: (slug, text, attachments) => ipcRenderer.invoke("chat:ask", slug, text, attachments),
+  ask: (slug, text, attachments, queueNew) => ipcRenderer.invoke("chat:ask", slug, text, attachments, queueNew),
   stop: (slug) => ipcRenderer.invoke("chat:stop", slug),
   cancelJob: (id) => ipcRenderer.invoke("job:cancel", id),
   retryJob: (id) => ipcRenderer.invoke("job:retry", id),

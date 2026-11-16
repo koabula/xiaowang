@@ -36,3 +36,29 @@ test("one research request owns one durable job across duplicate tool choices an
   const next = session.userText("梳理了吗？对比另一篇论文");
   assert.ok(next); assert.notEqual(next.id, accepted.id);
 });
+
+test("voice supplements text work, explicit queue creates another task, and progress never adds an input", async t => {
+  const root = mkdtempSync(path.join(tmpdir(), "xw-voice-supplement-"));
+  const runtime = Runtime.open(root);
+  const queue = new JobQueue(runtime.store, async () => ({ text: "unused" }));
+  t.after(() => { queue.shutdown(); runtime.close(); rmSync(root, { recursive: true, force: true }); });
+  const botId = runtime.activeBot().id;
+  const original = queue.enqueue({ botId, task: "Analyze", channel: "text" });
+  const session = new VoiceTasks(queue, botId, "call", text => text);
+  session.userText("补充，重点看实验", false);
+  assert.equal(queue.list().length, 1);
+  assert.equal(queue.updates(original.id).events.length, 1);
+  assert.equal(session.delegate("重点看实验", "tool-1", "when_idle").id, original.id);
+  assert.equal(queue.updates(original.id).events.length, 1);
+  session.userText("进度怎么样？");
+  assert.equal(queue.updates(original.id).events.length, 1);
+  session.userText("还有一个要求", false);
+  const appended = session.delegate("只要摘要，不用笔记", "tool-2", "when_idle");
+  assert.equal(appended.id, original.id);
+  session.delegate("重复工具", "tool-3", "when_idle");
+  assert.equal(queue.updates(original.id).events.length, 2);
+  session.userText("做完再帮我查另一篇", false);
+  const separate = session.delegate("Find another paper", "tool-4", "when_idle", true);
+  assert.notEqual(separate.id, original.id);
+  assert.equal(queue.list().length, 2);
+});

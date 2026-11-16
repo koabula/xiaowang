@@ -294,7 +294,7 @@ export class GeminiCall {
         controller.signal.throwIfAborted();
         return this.handlers.runTool(call.name, JSON.stringify(call.args), call.id, controller.signal);
       };
-      const background = ["delegate_task", "ask_text", "get_task"].includes(call.name);
+      const background = ["delegate_task", "ask_text", "get_task", "cancel_task"].includes(call.name);
       const operation = background ? execute() : this.foreground.then(execute);
       if (!background) this.foreground = operation.catch(() => {});
       const output = await operation;

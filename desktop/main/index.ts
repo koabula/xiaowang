@@ -294,7 +294,12 @@ async function ask(job: TaskJob, signal: AbortSignal, activity: (text: string) =
   let resultEventId: number | undefined;
   const result = await runTurn(runtime, {
     botId: bot.id, input: job.task, messageText: job.messageText, attachments: job.attachments, sharedContext: job.sharedContext, sharedImages: jobFrames.has(job.id) ? [{ mimeType: "image/jpeg", data: jobFrames.get(job.id)!.data }] : undefined, channel: job.channel, provider,
-    jobId: job.id,
+    jobId: job.id, inputEventId: job.originEventId,
+    excludeJobIds: jobs.list(bot.id).filter(other => other.id !== job.id && other.status === "queued").map(other => other.id),
+    readUpdates: () => ({
+      ...jobs.updates(job.id),
+      sharedImages: jobFrames.has(job.id) ? [{ mimeType: "image/jpeg", data: jobFrames.get(job.id)!.data }] : undefined,
+    }),
     onInput: id => jobs.linkInput(job.id, id),
     env: envFromSecrets(), locale: localeOf(secrets.locale), signal,
     browser: browserFor(bot.slug),
@@ -315,9 +320,10 @@ async function ask(job: TaskJob, signal: AbortSignal, activity: (text: string) =
 
 function jobChanged(job: TaskJob): void {
   const bot = runtime.store.requireBot(job.botId);
-  if (job.status === "queued") {
+  if (job.status === "queued" || job.supplementEventIds?.length) {
     const frame = viewFrames.get(bot.slug), view = job.sharedContext?.view;
     if (frame && view?.visible && view.path === frame.refId && view.page === frame.page && job.sharedContext?.viewRevision === frame.revision) jobFrames.set(job.id, frame);
+    else jobFrames.delete(job.id);
   }
   if (["succeeded", "failed", "cancelled", "interrupted"].includes(job.status)) jobFrames.delete(job.id);
   contextChanged(bot.id, shared.job(bot.id, job));
@@ -528,14 +534,16 @@ function registerIpc(): void {
     }
     return null;
   });
-  ipcMain.handle("chat:ask", async (_event, slug: string, text: string, ids: string[] = []) => {
+  ipcMain.handle("chat:ask", async (_event, slug: string, text: string, ids: string[] = [], queueNew = false) => {
     const bot = runtime.store.requireBot(slug);
     if (typeof text !== "string") throw new Error("消息格式无效。");
     const attachments = resolveAttachments(runtime.store, bot.id, ids);
     const task = text.trim() || (attachments.length ? "请查看这些附件。" : "");
     const snapshot = shared.message(bot.id, text.trim(), attachments);
     contextChanged(bot.id, snapshot); shareMessageImages(slug, snapshot);
-    const job = jobs.enqueue({ botId: bot.id, task, messageText: text.trim(), attachments, sharedContext: snapshot, channel: "text" });
+    const ongoing = queueNew ? undefined : jobs.active(bot.id);
+    const job = jobs.submit({ botId: bot.id, task, messageText: text.trim(), attachments, sharedContext: snapshot, channel: "text" }, queueNew === true);
+    if (ongoing?.id === job.id) return chatItems(slug);
     const result = await jobs.wait(job.id);
     if (result.status === "failed") throw new Error(result.error);
     return chatItems(slug);
@@ -813,9 +821,17 @@ function startCall(slug: string): void {
         if (!task) return askTextResult("missing", locale);
         let notify: TaskJob["notify"] = "when_idle";
         try { if (JSON.parse(args).notify === "silent") notify = "silent"; } catch { /* validated by taskArgument */ }
-        const job = voiceTasks.delegate(task, callId, notify);
+        const job = voiceTasks.delegate(task, callId, notify, JSON.parse(args).mode === "queue");
         live?.updateContext("currentVoiceTask", voiceJobReceipt(job));
         return voiceJobReceipt(job);
+      }
+      if (name === "cancel_task") {
+        const id = JSON.parse(args || "{}").id;
+        const job = typeof id === "string" ? jobs.get(id) : jobs.active(bot.id);
+        if (!job) return JSON.stringify({ status: "idle" });
+        if (job.botId !== bot.id) throw new Error("这个任务属于其他工作区。");
+        jobs.cancel(job.id);
+        return JSON.stringify({ id: job.id, status: "cancelled" });
       }
       if (name === "get_task") {
         const id = JSON.parse(args || "{}").id;

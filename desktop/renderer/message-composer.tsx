@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, LoaderCircle, Plus, Square } from "lucide-react";
+import { ArrowUp, ListPlus, LoaderCircle, Plus, Square } from "lucide-react";
 import type { Attachment } from "../../src/types.ts";
 import { ATTACHMENT_ACCEPT, ATTACHMENT_BYTES, ATTACHMENT_COUNT, ATTACHMENT_TOTAL_BYTES } from "../../src/attachment-limits.ts";
 import { AttachmentChip } from "./message-attachments.tsx";
@@ -7,7 +7,7 @@ import { AttachmentChip } from "./message-attachments.tsx";
 interface Pending { id: number; name: string; bytes: number; attachment?: Attachment; error?: string }
 export function MessageComposer({ slug, draft, placeholder, busy, inCall, ink, en, onDraft, onSend, onStop, onCall, onError }: {
   slug: string; draft: string; placeholder: string; busy: boolean; inCall: boolean; ink: string; en: boolean;
-  onDraft: (text: string) => void; onSend: (attachments: Attachment[]) => Promise<boolean>; onStop: () => void; onCall: () => void; onError: (message: string) => void;
+  onDraft: (text: string) => void; onSend: (attachments: Attachment[], queueNew?: boolean) => Promise<boolean>; onStop: () => void; onCall: () => void; onError: (message: string) => void;
 }) {
   const textarea = useRef<HTMLTextAreaElement>(null), picker = useRef<HTMLInputElement>(null);
   const [byBot, setByBot] = useState<Record<string, Pending[]>>({});
@@ -59,14 +59,14 @@ export function MessageComposer({ slug, draft, placeholder, busy, inCall, ink, e
     clearTimeout(pasteTimer.current);
     const owner = slug; pasteTimer.current = setTimeout(() => pasteNative(owner), 200);
   }), [slug, en]);
-  async function send() {
+  async function send(queueNew = false) {
     const owner = slug;
     if (uploading || files.some(f => f.error) || (!draft.trim() && !ready.length) || sending.current.has(owner)) return;
     sending.current.add(owner);
     const sent = files;
     change(owner, () => []);
     try {
-      const operation = onSend(ready);
+      const operation = onSend(ready, queueNew);
       queueMicrotask(() => sending.current.delete(owner));
       if (!await operation) change(owner, value => [...sent, ...value]);
     }
@@ -86,6 +86,7 @@ export function MessageComposer({ slug, draft, placeholder, busy, inCall, ink, e
         if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
       }} />
       {busy ? <button className="call stop" type="button" title={en ? "Stop" : "停止"} onClick={onStop}><Square size={14} /></button> : null}
+      {busy && (draft.trim() || files.length) ? <button className="icon" type="button" aria-label={en ? "Queue new task" : "排队新任务"} title={en ? "Queue new task" : "排队新任务"} disabled={uploading || files.some(file => file.error)} onClick={() => void send(true)}><ListPlus size={18} /></button> : null}
       {draft.trim() || files.length ? <button className="call send-message" type="submit" aria-label={en ? "Send message" : "发送消息"} title={en ? "Send message" : "发送消息"} disabled={uploading || files.some(f => f.error)} style={{ background: ink }}><ArrowUp size={18} /></button> : !inCall ? <button className="call" style={{ background: ink }} type="button" title={en ? "Call" : "通话"} aria-label={en ? "Call" : "通话"} onClick={onCall}><span /><span /><span /><span /></button> : null}
     </div>
   </form>;

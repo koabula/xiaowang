@@ -18,9 +18,10 @@ test('Gemini production call: native tools, playback continuation, reconnect, du
   const other = seed.store.createBot({ name: 'Other', systemPrompt: 'test' });
   await writeFile(path.join(bot.workspaceDir, 'lesson.html'), '<!doctype html><section data-xw-slide="1">First page</section><section data-xw-slide="2">Second page</section>'); seed.close();
   let release; const gate = new Promise(resolve => { release = resolve; });
+  const modelRequests = [];
   const model = createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
-    const body = JSON.parse(raw); res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const body = JSON.parse(raw); modelRequests.push(body); res.writeHead(200, { 'content-type': 'text/event-stream' });
     if (body.messages.some(item => item.role === 'tool' && item.content.includes('notes/native.md'))) res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'GEMINI-NATIVE-RESULT' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
     else { await gate; res.end(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'write', function: { name: 'write_file', arguments: JSON.stringify({ path: 'notes/native.md', content: 'GEMINI-NATIVE-RESULT' }) } }] }, finish_reason: 'tool_calls' }] })}\n\ndata: [DONE]\n\n`); }
   }); await new Promise(resolve => model.listen(0, '127.0.0.1', resolve));
@@ -68,12 +69,19 @@ test('Gemini production call: native tools, playback continuation, reconnect, du
   speak('后台开始处理，你可以接着问。');
   await page.locator(`.voice-panel [data-job-id="${job.id}"]`).waitFor();
   emit({ serverContent: { interrupted: true, turnComplete: true } });
+  emit({ serverContent: { inputTranscription: { text: '补充，重点看实验 GEMINI-SUPPLEMENT。' } } });
+  tool('supplement', 'delegate_task', { task: '重点看实验 GEMINI-SUPPLEMENT' });
+  await until(async () => (await page.evaluate(() => window.xiaowang.getState())).jobs.find(item => item.id === job.id)?.supplementEventIds?.length === 1);
+  await result('supplement');
+  speak('好，我们重点看实验。');
   emit({ serverContent: { inputTranscription: { text: '进度怎么样？' } } }); tool('status', 'get_task');
   assert.match(String((await result('status')).response.result), /running/); speak('后台仍在处理。');
   socket.terminate(); await until(() => connections === 2); await until(() => setups.length === 2);
   assert.deepEqual(setups[1].sessionResumption, { handle: 'resume-fixture' });
   tool('delegate', 'delegate_task', { task: 'same request after resume' });
   release(); const completed = await result('delegate');
+  assert.match(JSON.stringify(modelRequests.at(-1).messages), /GEMINI-SUPPLEMENT/);
+  assert.equal((await page.evaluate(() => window.xiaowang.getState())).jobs.find(item => item.id === job.id).supplementEventIds.length, 1);
   assert.equal(completed.response.result.status, 'succeeded'); assert.match(completed.response.result.result, /GEMINI-NATIVE-RESULT/);
   assert.equal((await page.evaluate(() => window.xiaowang.getState())).jobs.filter(item => item.channel === 'voice').length, 1);
   assert.equal(await readFile(path.join(bot.workspaceDir, 'notes/native.md'), 'utf8'), 'GEMINI-NATIVE-RESULT');

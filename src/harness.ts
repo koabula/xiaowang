@@ -5,7 +5,7 @@ import { contextDescription, type WorkspaceContext } from "./shared-context.ts";
 import type { Runtime } from "./runtime.ts";
 import type { BrowserDriver, StageDriver } from "./stage.ts";
 import { executeTool, toolSchemas } from "./tools.ts";
-import type { Bot, Channel, CompletionResult, LlmProvider, ToolCall } from "./types.ts";
+import type { Bot, Channel, CompletionResult, LlmProvider, StoredEvent, ToolCall } from "./types.ts";
 
 const QUIET_STEP_CAP = 40;
 const MAX_KICKOFFS = 5;
@@ -49,6 +49,9 @@ export interface RunTurnOptions {
   onTextDelta?: (bot: Bot, text: string) => void;
   onKickoff?: (job: import("./types.ts").Kickoff) => void;
   jobId?: string;
+  inputEventId?: number;
+  excludeJobIds?: string[];
+  readUpdates?: () => { events: StoredEvent[]; sharedContext?: WorkspaceContext; sharedImages?: Array<{ mimeType: string; data: string }> };
   onInput?: (eventId: number) => void;
 }
 
@@ -97,10 +100,28 @@ export async function runTurn(runtime: Runtime, options: RunTurnOptions): Promis
 async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<TurnResult> {
   const bot = runtime.store.requireBot(options.botId);
   const maxSteps = options.maxSteps ?? QUIET_STEP_CAP;
-  // A running turn owns its input and tool loop. New voice utterances and
-  // foreground tools remain in the log for the next turn, not this job's plan.
-  const context = runtime.store.getEvents(bot.id);
-  context.push(runtime.store.append(bot.id, {
+  // Only explicitly addressed supplements enter this turn. Other calls and jobs stay isolated.
+  const initialUpdates = options.readUpdates?.();
+  const supplementIds = new Set(initialUpdates?.events.map(event => event.id));
+  const history = runtime.store.getEvents(bot.id);
+  const excluded = new Set(options.excludeJobIds);
+  const context = history.filter(stored => !supplementIds.has(stored.id) && stored.id !== options.inputEventId
+    && !(("jobId" in stored.event) && stored.event.jobId && excluded.has(stored.event.jobId)));
+  let sharedContext = initialUpdates?.sharedContext ?? options.sharedContext;
+  let sharedImages = initialUpdates?.sharedImages ?? options.sharedImages;
+  function receiveUpdates(): number {
+    const updates = options.readUpdates?.();
+    const known = new Set(context.map(event => event.id));
+    const incoming = updates?.events.filter(event => !known.has(event.id)) ?? [];
+    context.push(...incoming);
+    if (incoming.length) {
+      sharedContext = updates?.sharedContext;
+      sharedImages = updates?.sharedImages;
+    }
+    return incoming.length;
+  }
+  const inputEvent = history.find(event => event.id === options.inputEventId);
+  context.push(inputEvent ?? runtime.store.append(bot.id, {
     type: "user_text",
     channel: options.channel ?? "text",
     text: options.messageText ?? options.input,
@@ -114,14 +135,15 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
     if (options.signal?.aborted) {
       return { bot: runtime.store.requireBot(bot.id), finalText: lastText, steps: step - 1, kickoffs: [], skippedKickoffs: 0 };
     }
+    receiveUpdates();
     const current = runtime.store.requireBot(bot.id);
     const library = runtime.store.listLibrary(bot.id).map((ref) => ({ id: ref.id, filename: ref.filename }));
     const personName = runtime.ensureSteward().name;
     const projected = projectLlmContext(current, context, { library, personName, locale: options.locale });
-    if (options.sharedContext) {
+    if (sharedContext) {
       const present = new Set(projected.messages.flatMap(message => message.attachments?.map(a => a.refId) ?? []));
-      const attachments = (options.sharedContext.imageAttachments ?? options.sharedContext.message?.attachments ?? []).filter(a => !present.has(a.refId));
-      projected.messages.splice(Math.max(0, projected.messages.findLastIndex(message => message.role === "user")), 0, { role: "user", content: contextDescription(options.sharedContext), attachments, images: options.sharedImages });
+      const attachments = (sharedContext.imageAttachments ?? sharedContext.message?.attachments ?? []).filter(a => !present.has(a.refId));
+      projected.messages.splice(Math.max(0, projected.messages.findLastIndex(message => message.role === "user")), 0, { role: "user", content: contextDescription(sharedContext), attachments, images: sharedImages });
     }
     const result = await options.provider.complete({
       system: projected.system,
@@ -133,7 +155,9 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
     options.signal?.throwIfAborted();
     lastText = result.text;
     const toolCalls = normalizeToolCalls(result, step);
-    if (!result.text.trim() && toolCalls.length === 0) {
+    const knownIds = new Set(context.map(event => event.id));
+    const hasUpdates = toolCalls.length === 0 && Boolean(options.readUpdates?.().events.some(event => !knownIds.has(event.id)));
+    if (!result.text.trim() && toolCalls.length === 0 && !hasUpdates) {
       return {
         bot: runtime.store.requireBot(bot.id),
         finalText: lastText,
@@ -155,10 +179,10 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
       text: result.text,
       activity: toolCalls.length > 0 ? result.text.trim() || undefined : undefined,
       eventId: context.at(-1)!.id,
-      final: toolCalls.length === 0,
+      final: toolCalls.length === 0 && !hasUpdates,
     });
 
-    if (options.signal?.aborted || toolCalls.length === 0) {
+    if (options.signal?.aborted || (toolCalls.length === 0 && !hasUpdates)) {
       return {
         bot: runtime.store.requireBot(bot.id),
         finalText: result.text,
@@ -208,6 +232,7 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
     }
   }
 
+  if (receiveUpdates() > 0 || options.readUpdates) throw new Error("本轮达到处理步数上限。已有输出和补充信息已保存，可重试继续。");
   return {
     bot: runtime.store.requireBot(bot.id),
     finalText: lastText,

@@ -7,6 +7,20 @@ export interface JobOutput { text: string; artifacts?: string[]; resultEventId?:
 export interface JobRunner {
   (job: TaskJob, signal: AbortSignal, activity: (text: string) => void): Promise<JobOutput>;
 }
+export interface JobInput {
+  botId: string;
+  task: string;
+  messageText?: string;
+  attachments?: Attachment[];
+  sharedContext?: TaskJob["sharedContext"];
+  channel?: Channel;
+  notify?: TaskJob["notify"];
+  sourceCallId?: string;
+  display?: TaskJob["display"];
+  title?: string;
+  originCallId?: string;
+}
+
 const terminal = new Set(["succeeded", "failed", "cancelled", "interrupted"]);
 
 /** Persist transitions before dispatch. Never replay a job that may have made changes. */
@@ -35,7 +49,7 @@ export class JobQueue {
 
   start(): void { if (this.enabled) return; this.enabled = true; this.pump(); }
 
-  enqueue(input: { botId: string; task: string; messageText?: string; attachments?: Attachment[]; sharedContext?: TaskJob["sharedContext"]; channel?: Channel; notify?: TaskJob["notify"]; sourceCallId?: string; display?: TaskJob["display"]; title?: string; originCallId?: string }): TaskJob {
+  enqueue(input: JobInput): TaskJob {
     if (this.stopped) throw new Error("任务队列正在关闭。");
     if (this.removing.has(input.botId)) throw new Error("这个 Bot 正在删除。");
     this.store.requireBot(input.botId);
@@ -51,20 +65,64 @@ export class JobQueue {
     if (input.attachments?.length) job.attachments = input.attachments.map(a => ({ ...a }));
     if (input.messageText !== undefined) job.messageText = input.messageText;
     if (input.sharedContext) job.sharedContext = structuredClone(input.sharedContext);
+    job.originEventId = this.store.append(job.botId, {
+      type: "user_text", channel: job.channel, text: input.messageText ?? task, jobId: job.id,
+      ...(job.attachments?.length ? { attachments: job.attachments } : {}),
+    }).id;
     this.change(job, {});
     // Dispatch in a microtask so the caller can retain the durable job ID first.
     queueMicrotask(() => this.pump());
-    return { ...job };
+    return structuredClone(job);
+  }
+
+  active(botId: string): TaskJob | undefined {
+    const jobs = this.list(botId);
+    return jobs.find(job => job.status === "running") ?? jobs.find(job => job.status === "queued");
+  }
+
+  submit(input: JobInput, queueNew = false): TaskJob {
+    if (input.sourceCallId) {
+      const previous = this.list(input.botId).find(job => job.sourceCallId === input.sourceCallId || job.supplementSourceIds?.includes(input.sourceCallId!));
+      if (previous) return previous;
+    }
+    if (queueNew) return this.enqueue(input);
+    const active = this.active(input.botId);
+    return active ? this.supplement(active.id, input) : this.enqueue(input);
+  }
+
+  supplement(id: string, input: JobInput): TaskJob {
+    const job = this.records.get(id);
+    if (!job || job.botId !== input.botId || terminal.has(job.status)) throw new Error("这个任务已结束。");
+    if (this.stopped || this.removing.has(job.botId)) throw new Error("这个任务正在关闭。");
+    const text = input.task.trim();
+    if (!text || text.length > 40_000) throw new Error("任务内容不能为空，且不能超过 40000 字。");
+    if (input.sourceCallId && (job.sourceCallId === input.sourceCallId || job.supplementSourceIds?.includes(input.sourceCallId))) return this.get(id);
+    const stored = this.store.append(job.botId, {
+      type: "user_text", channel: input.channel ?? "text", text: input.messageText ?? text,
+      jobId: id, ...(input.attachments?.length ? { attachments: structuredClone(input.attachments) } : {}),
+    });
+    this.change(job, {
+      supplementEventIds: [...(job.supplementEventIds ?? []), stored.id],
+      ...(input.sourceCallId ? { supplementSourceIds: [...(job.supplementSourceIds ?? []), input.sourceCallId] } : {}),
+      ...(input.sharedContext ? { sharedContext: structuredClone(input.sharedContext) } : {}),
+    });
+    return this.get(id);
+  }
+
+  updates(id: string): { events: import("./types.ts").StoredEvent[]; sharedContext?: TaskJob["sharedContext"] } {
+    const job = this.get(id);
+    const ids = new Set(job.supplementEventIds ?? []);
+    return { events: this.store.getEvents(job.botId).filter(event => ids.has(event.id)), sharedContext: job.sharedContext };
   }
 
   list(botId?: string): TaskJob[] {
-    return [...this.records.values()].filter(job => !botId || job.botId === botId).map(job => ({ ...job, artifacts: [...job.artifacts] }));
+    return [...this.records.values()].filter(job => !botId || job.botId === botId).map(job => structuredClone(job));
   }
 
   get(id: string): TaskJob {
     const job = this.records.get(id);
     if (!job) throw new Error("找不到这个任务。");
-    return { ...job, artifacts: [...job.artifacts] };
+    return structuredClone(job);
   }
 
   linkInput(id: string, eventId: number): void {

@@ -5,6 +5,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Avatar, nextAvatarSeed } from "./avatar.tsx";
 import { INK_CHOICES, inkFor } from "./ink.ts";
+import { playHangupSound } from "./call-sounds.ts";
 import { createCallAudio } from "./call-audio.ts";
 import { VoicePanel, type LiveCallView, type LiveCaption } from "./voice-panel.tsx";
 import { CallTasks, ConversationIssue } from "./task-panel.tsx";
@@ -97,6 +98,7 @@ export function App() {
   const followThread = useRef(true);
   const activeRef = useRef("");
   const liveCallId = useRef("");
+  const endedSoundId = useRef("");
   const active = state?.activeSlug ?? "";
   activeRef.current = active;
   const browser = browserBySlug[active] ?? { url: "", title: "", holder: "bot", loading: false };
@@ -165,7 +167,7 @@ export function App() {
     const stops = [
       window.xiaowang.onJob(job => {
         setState(prev => prev ? { ...prev, jobs: [...(prev.jobs ?? []).filter(item => item.id !== job.id), job] } : prev);
-        if (["succeeded", "cancelled", "failed", "interrupted"].includes(job.status) && job.slug === activeRef.current) {
+        if (job.slug === activeRef.current) {
           void window.xiaowang.events(job.slug).then(items => receiveItems(job.slug, items)).catch(error => workspaceError(job.slug, error));
         }
       }),
@@ -286,7 +288,7 @@ export function App() {
     }
   }
 
-  async function sendMessage(attachments: Attachment[] = []): Promise<boolean> {
+  async function sendMessage(attachments: Attachment[] = [], queueNew = false): Promise<boolean> {
     const slug = activeRef.current;
     const text = (draftBySlug[slug] ?? "").trim();
     if ((!text && !attachments.length) || !slug) return false;
@@ -297,7 +299,7 @@ export function App() {
     setItems((currentItems) => [...(itemsSlug === slug ? currentItems : []), { id: -Date.now(), kind: "user", text, attachments }]);
     setItemsSlug(slug);
     try {
-      const next = await window.xiaowang.ask(slug, text, attachments.map(a => a.refId));
+      const next = await window.xiaowang.ask(slug, text, attachments.map(a => a.refId), queueNew);
       if (activeRef.current === slug) {
         receiveItems(slug, next);
         void window.xiaowang.library(slug).then(refs => { if (activeRef.current === slug) setLibrary(refs); }).catch(error => workspaceError(slug, error));
@@ -380,6 +382,11 @@ export function App() {
       return;
     }
     if (note.phase === "closed") {
+      const id = note.callId || liveCallId.current;
+      if (id && endedSoundId.current !== id) {
+        endedSoundId.current = id;
+        void playHangupSound();
+      }
       liveCallId.current = "";
       audioRef.current.stop();
       setCall(null);

@@ -1,6 +1,6 @@
 {
   "name": "xiaowang",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "private": true,
   "type": "module",
   "description": "小王同学 · Realtime voice and research agent",

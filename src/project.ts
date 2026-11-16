@@ -55,7 +55,11 @@ export function projectLlmContext(
   const system = buildSystem(bot, events, options?.library, options?.personName?.trim() || STEWARD_NAME, locale);
   const units = groupUnits(events);
   let dropped = 0;
-  while (units.length > 1 && system.length + charCount(units) > budget) {
+  // Keep the latest user request together with its following tool/assistant messages,
+  // even when system instructions alone consume the nominal budget.
+  const lastUser = units.findLastIndex(unit => unit.messages.some(message => message.role === "user"));
+  const removable = lastUser < 0 ? units.length - 1 : lastUser;
+  while (dropped < removable && system.length + charCount(units) > budget) {
     units.shift();
     dropped += 1;
   }

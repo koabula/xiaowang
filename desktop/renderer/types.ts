@@ -34,7 +34,7 @@ declare global {
       attach: (slug: string, filename: string, bytes: Uint8Array) => Promise<Attachment>;
       pasteImage: (slug: string) => Promise<Attachment | null>;
       onPasteShortcut: (callback: (note: { at: number }) => void) => () => void;
-      ask: (slug: string, text: string, attachments?: string[]) => Promise<ChatItem[]>;
+      ask: (slug: string, text: string, attachments?: string[], queueNew?: boolean) => Promise<ChatItem[]>;
       stop: (slug: string) => Promise<void>;
       cancelJob: (id: string) => Promise<void>;
       retryJob: (id: string) => Promise<TaskJob>;

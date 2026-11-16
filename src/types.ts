@@ -6,6 +6,8 @@ export interface ModelImage { mimeType: string; data: string }
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
 export interface TaskJob {
+  supplementEventIds?: number[];
+  supplementSourceIds?: string[];
   sharedContext?: import("./shared-context.ts").WorkspaceContext;
   messageText?: string;
   attachments?: Attachment[];
