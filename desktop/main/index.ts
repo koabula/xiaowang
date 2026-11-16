@@ -54,6 +54,9 @@ if (process.env.XIAOWANG_USER_DATA) {
   app.setPath("userData", directory);
 }
 const devUrl = process.env.XIAOWANG_DESKTOP_URL ?? "";
+// Acquire before opening the store: a second process must not restore or run jobs.
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) app.quit();
 
 let runtime: Runtime;
 let window: BrowserWindow | null = null;
@@ -951,7 +954,16 @@ function openCall(
   call.start();
 }
 
+app.on("second-instance", () => {
+  if (window && !window.isDestroyed()) {
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+  } else if (runtime && browser) void createWindow();
+});
+
 app.whenReady().then(async () => {
+  if (!primaryInstance) return;
   runtime = Runtime.open(resolveHome());
   for (const bot of runtime.store.listBots()) {
     const events = runtime.store.getEvents(bot.id), saved = events.findLast(item => item.event.type === "workspace_context")?.event;
