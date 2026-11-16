@@ -19,7 +19,8 @@ test('composer, new-bot thinking, sidebar rename/delete and persistence', { time
     if (req.method === 'GET') { res.end('<!doctype html><title>Private bot browser</title><p>PRIVATE-BOT-PAGE</p>'); return; }
     let raw = ''; for await (const part of req) raw += part;
     const body = JSON.parse(raw); const last = body.messages.findLast(item => item.role === 'user')?.content || '';
-    const spawned = body.messages.some(item => item.role === 'tool' && item.tool_call_id === 'spawn-test');
+    const spawnIds = new Set(body.messages.flatMap(item => item.tool_calls ?? []).filter(call => call.function?.name === 'spawn_bot').map(call => call.id));
+    const spawned = body.messages.some(item => item.role === 'tool' && spawnIds.has(item.tool_call_id));
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     let delta;
     if (last.includes('CREATE-CHILD') && !spawned) delta = { tool_calls: [{ index: 0, id: 'spawn-test', function: { name: 'spawn_bot', arguments: JSON.stringify({ name: 'Research child', baseline: 'Separate topic', kickoff_task: 'CHILD-KICKOFF' }) } }] };
@@ -45,6 +46,7 @@ test('composer, new-bot thinking, sidebar rename/delete and persistence', { time
   await textarea.fill('CREATE-CHILD'); assert.equal(await textarea.evaluate(node => node.clientHeight), short);
   await textarea.press('Enter');
   const child = await until(async () => (await page.evaluate(() => window.xiaowang.getState())).bots.find(bot => bot.name === 'Research child'));
+  assert.equal((await page.evaluate(() => window.xiaowang.getState())).bots.filter(bot => bot.name === 'Research child').length, 1);
   const row = page.locator('.bot').filter({ hasText: 'Research child' }); await row.click();
   await page.locator('.thinking .avatar.think').waitFor(); assert.equal(await page.locator('.thinking .dots i').count(), 3);
   await until(() => row.evaluate(node => node.classList.contains('working')));
