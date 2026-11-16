@@ -74,12 +74,29 @@ test('actual clipboard paste, attachments, vision payloads, bot isolation, error
   assert.equal(await page.locator('.bot.on em').innerText(), '结论 图片已收到 VISION-OK');
   await page.locator('.bot-title').focus();
   const titleStyle = await page.locator('.bot-title').evaluate(n => ({ shadow: getComputedStyle(n).boxShadow, radius: getComputedStyle(n).borderRadius, width: n.getBoundingClientRect().width }));
-  assert.equal(titleStyle.shadow, 'none', 'The editorial title uses a flat surface'); assert.ok(parseFloat(titleStyle.radius) <= 8); assert.equal(await page.locator('.bot-title').getAttribute('aria-expanded'), 'false');
+  assert.notEqual(titleStyle.shadow, 'none', 'The bot title has a subtle raised capsule'); assert.equal(parseFloat(titleStyle.radius), 999); assert.equal(await page.locator('.bot-title').getAttribute('aria-expanded'), 'false');
   await page.locator('.bot-title').click(); assert.equal(await page.locator('.bot-title').getAttribute('aria-expanded'), 'true');
-  await page.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-attachments-title.png') });
+  await page.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-attachments-title.png'), animations: 'disabled' });
   await page.evaluate(slug => window.xiaowang.renameBot(slug, '很长的研究主题名称'.repeat(8)), slug);
-  assert.equal(await page.locator('.bot-title-name').evaluate(n => n.scrollWidth > n.clientWidth), true);
-  const noOverlap = await page.locator('.thread > header').evaluate(n => n.querySelector('.bot-title').getBoundingClientRect().right < n.querySelector('.stage-toggle').getBoundingClientRect().left); assert.equal(noOverlap, true);
+  await until(async () => (await page.locator('.bot-title-name').innerText()).startsWith('很长的研究主题名称'));
+  const originalViewport = page.viewportSize();
+  for (const width of [1280, 800]) {
+    await page.setViewportSize({ width, height: 840 });
+    for (const colorScheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme });
+      assert.equal(await page.locator('.bot-title-name').evaluate(n => n.scrollWidth > n.clientWidth), true);
+      const layout = await page.locator('.thread > header').evaluate(n => {
+        const header = n.getBoundingClientRect(), title = n.querySelector('.bot-title').getBoundingClientRect();
+        return { centered: Math.abs((title.left + title.right - header.left - header.right) / 2) < 1,
+          noOverlap: title.right < n.querySelector('.stage-toggle').getBoundingClientRect().left,
+          contained: title.top >= header.top && title.bottom <= header.bottom };
+      });
+      assert.deepEqual(layout, { centered: true, noOverlap: true, contained: true });
+      await page.screenshot({ path: path.join(os.tmpdir(), `xiaowang-title-${width}-${colorScheme}.png`), animations: 'disabled' });
+    }
+  }
+  await page.setViewportSize(originalViewport ?? { width: 1280, height: 840 });
+  await page.emulateMedia({ colorScheme: 'light' });
   await page.evaluate(slug => window.xiaowang.renameBot(slug, 'Attachment research'), slug);
   await page.locator('.attachment-picker').setInputFiles([{ name: 'attached.md', mimeType: 'text/markdown', buffer: Buffer.from('# Input\nATTACHED-CONTENT-42') }, { name: 'other.txt', mimeType: 'text/plain', buffer: Buffer.from('other text') }]);
   await until(async () => await page.locator('.pending-attachments .attachment-open').count() === 2);

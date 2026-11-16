@@ -2,10 +2,12 @@
 .icon { border-radius: var(--control-radius); }
 .thread + .split { background: linear-gradient(var(--line), var(--line)) center / 1px 100% no-repeat var(--surface); }
 .thread + .split:hover, .thread + .split:active { background-image: linear-gradient(var(--accent), var(--accent)); background-size: 2px 100%; }
-.thread > header { position: relative; inset: auto; height: 40px; padding: 0 18px; flex-shrink: 0; justify-content: flex-start; border-bottom: 1px solid var(--line); background: var(--surface); pointer-events: auto; }
+.thread > header { position: relative; inset: auto; height: 52px; padding: 0 18px; flex-shrink: 0; justify-content: center; border-bottom: 1px solid var(--line); background: var(--surface); pointer-events: auto; }
 .thread .messages { padding-top: 24px; scroll-padding-top: 24px; }
-.bot-title, .bot-title.on { padding: 4px 0; gap: 8px; background: transparent; border: 0; border-radius: var(--control-radius); box-shadow: none; }
-.bot-title:hover { background: transparent; box-shadow: none; color: var(--accent); }
+.bot-title { padding: 5px 12px 5px 6px; gap: 9px; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; box-shadow: var(--shadow); }
+.bot-title-name { font-weight: 600; }
+.bot-title:hover { background: var(--surface-soft); border-color: var(--faint); }
+.bot-title.on { border-color: var(--faint); box-shadow: var(--shadow); }
 .rail .steward { display: flex; align-items: center; justify-content: flex-start; padding: 8px; gap: 10px; margin: 0 0 6px; }
 .rail .steward .avatar { width: 40px !important; height: 40px !important; }
 .rail .search-line input, .rail .new-bot input { border-radius: var(--control-radius); background: transparent; box-shadow: none; border-bottom: 1px solid var(--line); padding-left: 8px; }
