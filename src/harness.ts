@@ -1,6 +1,7 @@
+import type { ContextAddition } from "./context-manager.ts";
+import { createHash } from "node:crypto";
 import type { Locale } from "./locale.ts";
-import { projectLlmContext } from "./project.ts";
-import { hydrateImages } from "./attachments.ts";
+import { stableLlmSystem, taskMetadata } from "./project.ts";
 import { contextDescription, type WorkspaceContext } from "./shared-context.ts";
 import type { Runtime } from "./runtime.ts";
 import type { BrowserDriver, StageDriver } from "./stage.ts";
@@ -56,7 +57,7 @@ export interface RunTurnOptions {
 }
 
 /**
- * 一次用户发言对应一轮无状态循环：从会话投影上下文，调用模型，执行工具，再写回会话。
+ * 一次用户发言唤醒执行循环：追加模型上下文，检查预算，调用模型，执行工具，再写回会话。
  * 模型连接本身不保存记忆。派生项目的首轮调研在当前轮结束后单独跑，避免嵌进同一次工具调用。
  */
 export async function runTurn(runtime: Runtime, options: RunTurnOptions): Promise<TurnResult> {
@@ -83,6 +84,7 @@ export async function runTurn(runtime: Runtime, options: RunTurnOptions): Promis
         ...options,
         botId: job.botId,
         input: job.task,
+        jobId: undefined, inputEventId: undefined, excludeJobIds: undefined, readUpdates: undefined,
         attachments: undefined,
         messageText: undefined,
         sharedContext: undefined, sharedImages: undefined,
@@ -130,31 +132,39 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
   }));
   options.onInput?.(context.at(-1)!.id);
 
+  const tools = toolSchemas();
+  const manager = runtime.modelContext(bot, stableLlmSystem(bot, runtime.ensureSteward().name, options.locale), tools, options.provider);
+  const boundaryIds = [context.at(-1)!.id, ...(initialUpdates?.events.map(event => event.id) ?? [])];
+  let metadata = taskMetadata(bot, context, runtime.store.listLibrary(bot.id).map(ref => ({ id: ref.id, filename: ref.filename })));
   let lastText = "";
   for (let step = 1; step <= maxSteps; step += 1) {
     if (options.signal?.aborted) {
       return { bot: runtime.store.requireBot(bot.id), finalText: lastText, steps: step - 1, kickoffs: [], skippedKickoffs: 0 };
     }
-    receiveUpdates();
+    let received = receiveUpdates();
     const current = runtime.store.requireBot(bot.id);
-    const library = runtime.store.listLibrary(bot.id).map((ref) => ({ id: ref.id, filename: ref.filename }));
-    const personName = runtime.ensureSteward().name;
-    const projected = projectLlmContext(current, context, { library, personName, locale: options.locale });
-    if (sharedContext) {
-      const present = new Set(projected.messages.flatMap(message => message.attachments?.map(a => a.refId) ?? []));
-      const attachments = (sharedContext.imageAttachments ?? sharedContext.message?.attachments ?? []).filter(a => !present.has(a.refId));
-      projected.messages.splice(Math.max(0, projected.messages.findLastIndex(message => message.role === "user")), 0, { role: "user", content: contextDescription(sharedContext), attachments, images: sharedImages });
-    }
-    const result = await options.provider.complete({
-      system: projected.system,
-      messages: hydrateImages(runtime.store, bot.id, projected.messages),
-      tools: toolSchemas(),
-      signal: options.signal,
-      onTextDelta: options.onTextDelta ? (text) => options.onTextDelta?.(current, text) : undefined,
-    });
+    let prepared: Awaited<ReturnType<typeof manager.prepare>>;
+    do {
+      if (received) metadata = taskMetadata(current, context, runtime.store.listLibrary(bot.id).map(ref => ({ id: ref.id, filename: ref.filename })));
+      const additions: ContextAddition[] = [{ key: "task", message: { role: "user" as const, content: metadata } }];
+      if (sharedContext) {
+        const attached = new Set(context.flatMap(({ event }) => event.type === "user_text" ? event.attachments?.map(item => item.refId) ?? [] : []));
+        additions.push({ key: "workspace", message: {
+          role: "user", content: contextDescription(sharedContext),
+          attachments: (sharedContext.imageAttachments ?? sharedContext.message?.attachments)?.filter(item => !attached.has(item.refId)),
+          images: sharedImages,
+        } });
+      }
+      const updates = options.readUpdates?.();
+      manager.ingest(context, [...boundaryIds, ...(updates?.events.map(event => event.id) ?? [])], additions);
+      prepared = await manager.prepare(options.provider, options.signal);
+      received = receiveUpdates();
+    } while (received);
+    prepared.request.onTextDelta = options.onTextDelta ? text => options.onTextDelta?.(current, text) : undefined;
+    const result = await manager.complete(options.provider, prepared);
     options.signal?.throwIfAborted();
     lastText = result.text;
-    const toolCalls = normalizeToolCalls(result, step);
+    const toolCalls = normalizeToolCalls(result, step, boundaryIds[0]!);
     const knownIds = new Set(context.map(event => event.id));
     const hasUpdates = toolCalls.length === 0 && Boolean(options.readUpdates?.().events.some(event => !knownIds.has(event.id)));
     if (!result.text.trim() && toolCalls.length === 0 && !hasUpdates) {
@@ -173,6 +183,7 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
       toolCalls,
       jobId: options.jobId,
     }));
+    const assistantEventId = context.at(-1)!.id;
     options.onStep?.({
       bot: current,
       kind: "assistant",
@@ -214,6 +225,7 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
       });
       context.push(runtime.store.append(bot.id, {
         type: "tool_result",
+        assistantEventId, jobId: options.jobId,
         callId: call.id,
         name: call.name,
         output: outcome.output,
@@ -242,9 +254,9 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
   };
 }
 
-function normalizeToolCalls(result: CompletionResult, step: number): ToolCall[] {
+function normalizeToolCalls(result: CompletionResult, step: number, inputEventId: number): ToolCall[] {
   return result.toolCalls.map((call, index) => ({
-    id: call.id || `call_${step}_${index}`,
+    id: `xw_${createHash("sha256").update(JSON.stringify([inputEventId, step, index, call.id])).digest("hex").slice(0, 28)}`,
     name: call.name,
     input: parseInput(call.arguments),
   }));

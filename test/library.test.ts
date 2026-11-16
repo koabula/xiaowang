@@ -110,7 +110,7 @@ test("import stays inside the workspace and sensitive names are refused", async 
   }
 });
 
-test("the model sees library names in its projection, and trimming is not written into the session", async () => {
+test("the model sees library names in appended task data while the system prefix stays stable", async () => {
   const { runtime, close } = openRuntime();
   try {
     const bot = runtime.activeBot();
@@ -119,7 +119,8 @@ test("the model sees library names in its projection, and trimming is not writte
     const provider: LlmProvider = {
       model: "scripted",
       async complete(request): Promise<CompletionResult> {
-        seen = request.system;
+        assert.doesNotMatch(request.system, /named\.pdf/);
+        seen = JSON.stringify(request.messages);
         return { text: "我按资料库里的文件来读。", toolCalls: [] };
       },
     };

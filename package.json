@@ -1,6 +1,6 @@
 {
   "name": "xiaowang",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "private": true,
   "type": "module",
   "description": "小王同学 · Realtime voice and research agent",
@@ -44,6 +44,7 @@
     "@radix-ui/react-select": "^2.4.1",
     "boring-avatars": "^2.0.4",
     "electron-updater": "^6.8.11",
+    "js-tiktoken": "^1.0.21",
     "lucide-react": "^1.72.0",
     "pdfjs-dist": "^6.5.438",
     "react": "^19.3.1",

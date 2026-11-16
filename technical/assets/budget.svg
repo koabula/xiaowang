@@ -1,0 +1,40 @@
+<svg viewBox="0 0 1160 900" width="1160" height="900" role="img" aria-label="预算、水位与确定性重投影" xmlns="http://www.w3.org/2000/svg"><title>预算、水位与确定性重投影</title><desc>默认窗口 32,768 tokens；图中曲线为交互示意值</desc><style>
+  text { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+  .title { font-size: 27px; font-weight: 650; fill: #203453; letter-spacing: -.5px; }
+  .subtitle { font-size: 15px; fill: #6b7c94; }
+  .footer { font-size: 12px; fill: #8593a8; }
+  .wire { fill: none; stroke: #6683be; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .wire.data { stroke: #5e9295; stroke-dasharray: 5 5; }
+  .wire.direct { stroke: #a68155; stroke-dasharray: 2 5; }
+  .edge-label { font-size: 12px; fill: #7a889f; text-anchor: middle; paint-order: stroke; stroke: #fff; stroke-width: 7px; stroke-linejoin: round; }
+  .node { cursor: pointer; outline: none; }
+  .node rect { fill: #f7f9fd; stroke: #d8e2f1; stroke-width: 1.2; }
+  .node .accent { fill: #2b59c3; stroke: none; }
+  .node.teal rect { fill: #f2f8f7; stroke: #d0e4e0; }
+  .node.teal .accent { fill: #428c83; }
+  .node.orange rect { fill: #fdf8f2; stroke: #eddcc7; }
+  .node.orange .accent { fill: #b77b38; }
+  .node .node-title { fill: #263f63; font-size: 19px; font-weight: 600; }
+  .node .node-line { fill: #71829b; font-size: 13px; }
+  .node.selected rect, .node:focus-visible rect { stroke: #2b59c3; stroke-width: 2.5; fill: #edf3ff; }
+  .node.selected .node-title { fill: #234fae; }
+  .node.dim, .edge.dim { opacity: .2; }
+  .node.selected.dim { opacity: 1; }
+  .edge.active .wire { stroke: #2b59c3; stroke-width: 2.8; }
+  .lane-label { font-size: 12px; fill: #71829b; font-weight: 550; }
+  .node.slice .surface { fill: #dce7fc; stroke: #aac1ed; stroke-width: 1.3; }
+  .node.slice .cap { fill: #edf3ff; stroke: #aac1ed; stroke-width: 1.3; }
+  .node.slice.teal .surface { fill: #dbeeea; stroke: #a6cdc3; }
+  .node.slice.teal .cap { fill: #f0f9f6; stroke: #a6cdc3; }
+  .node.slice.orange .surface { fill: #f6e4ce; stroke: #dcb78b; }
+  .node.slice.orange .cap { fill: #fdf5e9; stroke: #dcb78b; }
+  .node.slice.selected .surface, .node.slice.selected .cap, .node.slice:focus-visible .cap { stroke: #2b59c3; stroke-width: 3; }
+  .node.point circle { fill: #2b59c3; stroke: white; stroke-width: 4; }
+  .node.point.orange circle { fill: #c78543; }
+  .node.point.teal circle { fill: #428c83; }
+  .node.point.selected circle, .node.point:focus-visible circle { stroke: #95b6ff; stroke-width: 6; }
+  .node.prefix.selected .row-label, .node.prefix:focus-visible .row-label { fill: #2b59c3; font-weight: 650; }
+  .segment-text { font-size: 16px; font-weight: 550; fill: #35527e; text-anchor: middle; }
+  .point-label { font-size: 16px; font-weight: 650; fill: #3d587e; text-anchor: middle; }
+  .annotation { font-size: 13px; fill: #71829b; }
+</style><rect width="1160" height="900" fill="#ffffff"/><defs><marker id="budget-control" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#6683be" stroke-width="1.6"/></marker><marker id="budget-data" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#5e9295" stroke-width="1.6"/></marker><marker id="budget-direct" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#a68155" stroke-width="1.6"/></marker></defs><text x="40" y="48" class="title">预算、水位与确定性重投影</text><text x="40" y="78" class="subtitle">默认窗口 32,768 tokens；图中曲线为交互示意值</text><path d="M40 105H1120" stroke="#e8edf5" stroke-width="1"/><path d="M120 315H1060" stroke="#b3bfd2" stroke-dasharray="5 6" fill="none"/><text x="1060" y="303" class="annotation" text-anchor="end">输入容量 26,624</text><path d="M120 361H1060" stroke="#cca571" stroke-dasharray="5 6" fill="none"/><text x="1060" y="349" class="annotation" text-anchor="end">高水位 22,630.4</text><path d="M120 445H1060" stroke="#83b2a8" stroke-dasharray="5 6" fill="none"/><text x="1060" y="433" class="annotation" text-anchor="end">低水位目标 14,643.2</text><path d="M120 300V600H1060" stroke="#dce3ef" fill="none"/><path d="M155 515L345 452L535 355" stroke="#2b59c3" stroke-width="3" fill="none"/><path d="M535 355L725 457" stroke="#b77b38" stroke-width="3" stroke-dasharray="7 5" fill="none"/><path d="M725 457L915 410" stroke="#2b59c3" stroke-width="3" fill="none"/><text x="620" y="560" class="annotation" text-anchor="middle">选择 / 摘录 → 校验 → 新周期</text><text x="120" y="628" class="annotation">连续模型调用 →</text><g class="edge" data-from="index" data-to="validate"><path class="wire control" d="M350 740H425" marker-end="url(#budget-control)"/></g><g class="edge" data-from="validate" data-to="checkpoint"><path class="wire control" d="M735 740H810" marker-end="url(#budget-control)"/></g><g class="node blue " data-node="input" aria-label="输入可用空间 26,624"><rect x="40" y="145" width="620" height="94" rx="9"/><rect class="accent" x="40" y="165" width="3" height="54" rx="1.5"/><text class="node-title" x="60" y="178">输入可用空间 26,624</text><text class="node-line" x="60" y="203">system + tools + messages + images</text></g><g class="node blue " data-node="output" aria-label="输出 4,096"><rect x="685" y="145" width="200" height="94" rx="9"/><rect class="accent" x="685" y="165" width="3" height="54" rx="1.5"/><text class="node-title" x="705" y="178">输出 4,096</text><text class="node-line" x="705" y="203">max_tokens</text></g><g class="node teal " data-node="safety" aria-label="安全 2,048"><rect x="910" y="145" width="210" height="94" rx="9"/><rect class="accent" x="910" y="165" width="3" height="54" rx="1.5"/><text class="node-title" x="930" y="178">安全 2,048</text><text class="node-line" x="930" y="203">协议 / 估算余量</text></g><g class="node blue point" data-node="start" aria-label="8,000"><circle cx="155" cy="515" r="10"/><text x="155" y="491" class="point-label">8,000</text></g><g class="node blue point" data-node="grow" aria-label="14,000"><circle cx="345" cy="452" r="10"/><text x="345" y="428" class="point-label">14,000</text></g><g class="node orange point" data-node="high" aria-label="23,200"><circle cx="535" cy="355" r="10"/><text x="535" y="331" class="point-label">23,200</text></g><g class="node teal point" data-node="reduced" aria-label="13,500"><circle cx="725" cy="457" r="10"/><text x="725" y="433" class="point-label">13,500</text></g><g class="node blue point" data-node="next" aria-label="18,000"><circle cx="915" cy="410" r="10"/><text x="915" y="386" class="point-label">18,000</text></g><g class="node blue " data-node="index" aria-label="01 · 选择与折叠"><rect x="40" y="680" width="310" height="120" rx="9"/><rect class="accent" x="40" y="700" width="3" height="80" rx="1.5"/><text class="node-title" x="60" y="713">01 · 选择与折叠</text><text class="node-line" x="60" y="738">最新状态 + 当前要求 + 工作片段</text><text class="node-line" x="60" y="758">固定摘录 + 可读取的原文引用</text></g><g class="node blue " data-node="validate" aria-label="02 · 校验与保留"><rect x="425" y="680" width="310" height="120" rx="9"/><rect class="accent" x="425" y="700" width="3" height="80" rx="1.5"/><text class="node-title" x="445" y="713">02 · 校验与保留</text><text class="node-line" x="445" y="738">最新要求 · 完整工具单元</text><text class="node-line" x="445" y="758">来源引用 / 上限 / 缩小幅度校验</text></g><g class="node teal " data-node="checkpoint" aria-label="03 · 提交新周期"><rect x="810" y="680" width="310" height="120" rx="9"/><rect class="accent" x="810" y="700" width="3" height="80" rx="1.5"/><text class="node-title" x="830" y="713">03 · 提交新周期</text><text class="node-line" x="830" y="738">context_checkpoint · epoch + 1</text><text class="node-line" x="830" y="758">版本 + 来源编号 + 渲染方式</text></g><text class="footer" x="1120" y="875" text-anchor="end">小王同学 · v0.1.16</text></svg>

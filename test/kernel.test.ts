@@ -304,7 +304,9 @@ test("a running LLM turn keeps its task when live voice progress and tools arriv
       const contents = request.messages.map(message => message.content).join("\n");
       assert.match(contents, /历史研究背景/); assert.match(contents, /分析论文-PRIMARY/);
       assert.doesNotMatch(contents, /PROGRESS|FOREGROUND-TOOL/);
-      assert.ok(request.messages.some(message => message.role === "tool" && message.toolCallId === "own"));
+      const ownCall = request.messages.findLast(message => message.role === "assistant" && message.toolCalls?.some(call => call.name === "list_files"))?.toolCalls?.[0];
+      assert.ok(ownCall?.id.startsWith("xw_"));
+      assert.ok(request.messages.some(message => message.role === "tool" && message.toolCallId === ownCall?.id));
       return { text: "分析完成", toolCalls: [] };
     } };
     const result = await runTurn(runtime, { botId: bot.id, input: "分析论文-PRIMARY", provider });

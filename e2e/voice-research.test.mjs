@@ -40,6 +40,7 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
   const model = createServer(async (request, response) => {
     let raw = ''; for await (const chunk of request) raw += chunk;
     const input = JSON.parse(raw);
+    assert.ok(input.tools?.some(tool => (tool.function?.name ?? tool.name) === "inspect_event"), "Only task requests are sent; history lookup is available");
     const index = input.messages.findLastIndex(message => message.role === 'user' && /你去分析一下|文字分析测试/.test(modelText(message)));
     assert.ok(index >= 0); const task = modelText(input.messages[index]);
     const kind = task.lastIndexOf('文字分析测试') > task.lastIndexOf('你去分析一下') ? 'text' : 'voice';

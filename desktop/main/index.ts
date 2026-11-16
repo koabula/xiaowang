@@ -228,6 +228,7 @@ function envFromSecrets(): NodeJS.ProcessEnv {
 
 function envFromRecord(record: SecretRecord): NodeJS.ProcessEnv {
   return {
+    ...Object.fromEntries(["XIAOWANG_CONTEXT_WINDOW", "XIAOWANG_MAX_OUTPUT_TOKENS", "XIAOWANG_CONTEXT_SAFETY_TOKENS", "XIAOWANG_IMAGE_TOKEN_BUDGET", "XIAOWANG_PROMPT_CACHE"].map(key => [key, process.env[key]])),
     XIAOWANG_MODEL: record.model,
     XIAOWANG_BASE_URL: record.baseUrl,
     XIAOWANG_API_STYLE: record.apiStyle,

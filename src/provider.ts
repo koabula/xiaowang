@@ -1,9 +1,13 @@
-import type { CompletionRequest, CompletionResult, LlmProvider, ModelMessage, ToolSchema } from "./types.ts";
+import type { CompletionRequest, CompletionResult, LlmProvider, ModelMessage, ModelUsage, ToolSchema } from "./types.ts";
+import { contextPolicy, type ContextPolicy } from "./token-budget.ts";
+import { createHash } from "node:crypto";
 import { readEventStream, requestSignal } from "./stream.ts";
 
 export type ApiStyle = "openai" | "anthropic";
 
 export interface ProviderConfig {
+  contextPolicy?: ContextPolicy;
+  promptCaching?: boolean;
   apiStyle: ApiStyle;
   baseUrl: string;
   apiKey: string;
@@ -30,6 +34,8 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ProviderCon
     apiStyle,
     baseUrl: resolvedBase,
     apiKey: apiKey || "ollama",
+    contextPolicy: contextPolicy(env),
+    promptCaching: env.XIAOWANG_PROMPT_CACHE !== "off",
     model,
   };
 }
@@ -37,6 +43,22 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ProviderCon
 export function createProvider(config: ProviderConfig): LlmProvider {
   return {
     model: config.model,
+    contextKey: createHash("sha256").update(JSON.stringify([config.apiStyle, config.baseUrl, config.model])).digest("hex"),
+    contextPolicy: config.contextPolicy,
+    ...(config.apiStyle === "anthropic" && new URL(config.baseUrl).hostname === "api.anthropic.com" ? {
+      async countTokens(request: CompletionRequest) {
+        const response = await fetch(anthropicMessagesUrl(config.baseUrl) + "/count_tokens", {
+          method: "POST", headers: { "x-api-key": config.apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+          body: JSON.stringify({ model: config.model, system: request.system, messages: toAnthropicMessages(request.messages, request.preserveMessageBlocks), tools: toAnthropicTools(request.tools) }),
+          signal: requestSignal(request.signal),
+        });
+        const raw = await response.text();
+        if (!response.ok) throw new Error(formatHttpError(response.status, raw, config.apiKey));
+        const tokens = JSON.parse(raw).input_tokens;
+        if (!Number.isSafeInteger(tokens) || tokens < 0) throw new Error("模型服务返回了无效 token 计数。");
+        return tokens as number;
+      },
+    } : {}),
     async complete(request) {
       try {
         return await (config.apiStyle === "anthropic"
@@ -65,9 +87,9 @@ export function anthropicMessagesUrl(baseUrl: string): string {
   return `${base}/v1/messages`;
 }
 
-export function toOpenAIMessages(system: string, messages: ModelMessage[]): unknown[] {
+export function toOpenAIMessages(system: string, messages: ModelMessage[], preserveBlocks = false): unknown[] {
   const out: unknown[] = [{ role: "system", content: system }];
-  for (const message of mergeUserText(messages)) {
+  for (const message of preserveBlocks ? messages : mergeUserText(messages)) {
     if (message.role === "tool") {
       out.push({
         role: "tool",
@@ -110,9 +132,9 @@ export function toOpenAITools(tools: ToolSchema[]): unknown[] {
   }));
 }
 
-export function toAnthropicMessages(messages: ModelMessage[]): unknown[] {
+export function toAnthropicMessages(messages: ModelMessage[], preserveBlocks = false): unknown[] {
   const out: Array<{ role: "user" | "assistant"; content: unknown }> = [];
-  for (const message of mergeUserText(messages)) {
+  for (const message of preserveBlocks ? messages : mergeUserText(messages)) {
     if (message.role === "tool") {
       const block = {
         type: "tool_result",
@@ -159,10 +181,12 @@ export function toAnthropicTools(tools: ToolSchema[]): unknown[] {
 async function completeOpenAI(config: ProviderConfig, request: CompletionRequest): Promise<CompletionResult> {
   const body: Record<string, unknown> = {
     model: config.model,
-    messages: toOpenAIMessages(request.system, request.messages),
-    max_tokens: request.tools.length === 0 ? 32 : 4096,
+    messages: toOpenAIMessages(request.system, request.messages, request.preserveMessageBlocks),
+    max_tokens: request.maxOutputTokens ?? (request.tools.length === 0 ? 32 : 4096),
     ...(request.onTextDelta ? { stream: true } : {}),
   };
+  if (request.cacheKey && config.promptCaching !== false && new URL(config.baseUrl).hostname === "api.openai.com") body.prompt_cache_key = request.cacheKey;
+  if (request.onTextDelta) body.stream_options = { include_usage: true };
   if (request.tools.length > 0) {
     body.tools = toOpenAITools(request.tools);
     body.tool_choice = "auto";
@@ -180,9 +204,11 @@ async function completeOpenAI(config: ProviderConfig, request: CompletionRequest
     let text = "";
     const calls = new Map<number, { id: string; name: string; arguments: string }>();
     let finished = false;
+    let usage: ModelUsage | undefined;
     for await (const event of readEventStream(response)) {
       if (event.data === "[DONE]") { finished = true; break; }
-      const chunk = JSON.parse(event.data) as { error?: { message?: string }; choices?: Array<{ finish_reason?: string | null; delta?: { content?: string; tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> } }> };
+      const chunk = JSON.parse(event.data) as { usage?: Record<string, any>; error?: { message?: string }; choices?: Array<{ finish_reason?: string | null; delta?: { content?: string; tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> } }> };
+      usage = mergeUsage(usage, openAIUsage(chunk.usage));
       if (chunk.error) throw new Error(formatHttpError(502, chunk.error.message || "模型流中断", config.apiKey));
       const choice = chunk.choices?.[0];
       if (choice?.finish_reason) finished = true;
@@ -197,11 +223,12 @@ async function completeOpenAI(config: ProviderConfig, request: CompletionRequest
       }
     }
     if (!finished) throw new Error("模型响应提前断开，请重试。未完成的工具不会执行。");
-    return { text, toolCalls: [...calls.entries()].sort(([a], [b]) => a - b).map(([index, call]) => ({ ...call, id: call.id || `call_${index}` })) };
+    return { text, ...(usage ? { usage } : {}), toolCalls: [...calls.entries()].sort(([a], [b]) => a - b).map(([index, call]) => ({ ...call, id: call.id || `call_${index}` })) };
   }
   const raw = await response.text();
   if (!response.ok) throw new Error(formatHttpError(response.status, raw, config.apiKey));
   const json = JSON.parse(raw) as {
+    usage?: Record<string, any>;
     choices?: Array<{
       message?: {
         content?: string | null;
@@ -214,6 +241,7 @@ async function completeOpenAI(config: ProviderConfig, request: CompletionRequest
   };
   const message = json.choices?.[0]?.message;
   return {
+    ...(openAIUsage(json.usage) ? { usage: openAIUsage(json.usage) } : {}),
     text: typeof message?.content === "string" ? message.content : "",
     toolCalls: (message?.tool_calls ?? []).map((call, index) => ({
       id: call.id || `call_${index}`,
@@ -227,11 +255,12 @@ async function completeAnthropic(config: ProviderConfig, request: CompletionRequ
   const body: Record<string, unknown> = {
     model: config.model,
     system: request.system,
-    messages: toAnthropicMessages(request.messages),
-    max_tokens: request.tools.length === 0 ? 32 : 4096,
+    messages: toAnthropicMessages(request.messages, request.preserveMessageBlocks),
+    max_tokens: request.maxOutputTokens ?? (request.tools.length === 0 ? 32 : 4096),
     ...(request.onTextDelta ? { stream: true } : {}),
   };
   if (request.tools.length > 0) body.tools = toAnthropicTools(request.tools);
+  if (request.preserveMessageBlocks && config.promptCaching !== false) body.cache_control = { type: "ephemeral" };
   const response = await fetch(anthropicMessagesUrl(config.baseUrl), {
     method: "POST",
     headers: {
@@ -245,9 +274,13 @@ async function completeAnthropic(config: ProviderConfig, request: CompletionRequ
   if (response.ok && response.headers.get("content-type")?.includes("text/event-stream")) {
     let text = "";
     let finished = false;
+    let usage: ModelUsage | undefined;
+    const rawUsage: Record<string, any> = {};
     const calls = new Map<number, { id: string; name: string; arguments: string }>();
     for await (const event of readEventStream(response)) {
-      const chunk = JSON.parse(event.data) as { type: string; index: number; error?: { message?: string }; content_block?: { type?: string; id?: string; name?: string; text?: string; input?: unknown }; delta?: { type?: string; text?: string; partial_json?: string } };
+      const chunk = JSON.parse(event.data) as { usage?: Record<string, any>; message?: { usage?: Record<string, any> }; type: string; index: number; error?: { message?: string }; content_block?: { type?: string; id?: string; name?: string; text?: string; input?: unknown }; delta?: { type?: string; text?: string; partial_json?: string } };
+      Object.assign(rawUsage, chunk.message?.usage ?? chunk.usage ?? {});
+      usage = anthropicUsage(rawUsage);
       if (chunk.type === "error") throw new Error(formatHttpError(502, chunk.error?.message || "模型流中断", config.apiKey));
       if (chunk.type === "message_stop") finished = true;
       if (chunk.type === "content_block_start") {
@@ -262,11 +295,12 @@ async function completeAnthropic(config: ProviderConfig, request: CompletionRequ
       }
     }
     if (!finished) throw new Error("模型响应提前断开，请重试。未完成的工具不会执行。");
-    return { text, toolCalls: [...calls.values()].map(call => ({ ...call, arguments: call.arguments || "{}" })) };
+    return { text, ...(usage ? { usage } : {}), toolCalls: [...calls.values()].map(call => ({ ...call, arguments: call.arguments || "{}" })) };
   }
   const raw = await response.text();
   if (!response.ok) throw new Error(formatHttpError(response.status, raw, config.apiKey));
   const json = JSON.parse(raw) as {
+    usage?: Record<string, any>;
     content?: Array<{ type?: string; text?: string; id?: string; name?: string; input?: unknown }>;
   };
   let text = "";
@@ -281,7 +315,36 @@ async function completeAnthropic(config: ProviderConfig, request: CompletionRequ
       });
     }
   }
-  return { text, toolCalls };
+  return { text, toolCalls, ...(anthropicUsage(json.usage) ? { usage: anthropicUsage(json.usage) } : {}) };
+}
+
+function numberToken(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+function mergeUsage(previous: ModelUsage | undefined, incoming: ModelUsage | undefined): ModelUsage | undefined {
+  if (!incoming) return previous;
+  return { ...previous, ...incoming };
+}
+function openAIUsage(raw?: Record<string, any>): ModelUsage | undefined {
+  if (!raw) return undefined;
+  const result = {
+    inputTokens: numberToken(raw.prompt_tokens), outputTokens: numberToken(raw.completion_tokens),
+    cacheReadTokens: numberToken(raw.prompt_tokens_details?.cached_tokens ?? raw.prompt_cache_hit_tokens),
+    cacheWriteTokens: numberToken(raw.prompt_cache_write_tokens),
+  };
+  const known = Object.fromEntries(Object.entries(result).filter(([, value]) => value !== undefined));
+  return Object.keys(known).length ? known : undefined;
+}
+function anthropicUsage(raw?: Record<string, any>): ModelUsage | undefined {
+  if (!raw) return undefined;
+  const input = numberToken(raw.input_tokens);
+  const read = numberToken(raw.cache_read_input_tokens), write = numberToken(raw.cache_creation_input_tokens);
+  const result = {
+    ...(input !== undefined ? { inputTokens: input + (read ?? 0) + (write ?? 0) } : {}),
+    ...(numberToken(raw.output_tokens) !== undefined ? { outputTokens: raw.output_tokens as number } : {}),
+    ...(read !== undefined ? { cacheReadTokens: read } : {}), ...(write !== undefined ? { cacheWriteTokens: write } : {}),
+  };
+  return Object.keys(result).length ? result : undefined;
 }
 
 function mergeUserText(messages: ModelMessage[]): ModelMessage[] {

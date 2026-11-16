@@ -31,6 +31,7 @@ test('actual clipboard paste, attachments, vision payloads, bot isolation, error
   const server = createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw); requests.push(body);
+    assert.ok(body.tools?.some(tool => (tool.function?.name ?? tool.name) === "inspect_event"), "Only task requests are sent; history lookup is available");
     if (failure) { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: 'image input is not supported by this model' })); return; }
     const last = body.messages.findLast(m => m.role === 'user');
     const text = typeof last.content === 'string' ? last.content : last.content.filter(p => p.type === 'text').map(p => p.text).join(' ');

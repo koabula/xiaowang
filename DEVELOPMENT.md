@@ -183,3 +183,22 @@ node --test e2e/visual-context.test.mjs
 ```
 
 The visual acceptance check uses an isolated profile, synthetic macOS speech and a local relay that holds the real key outside the renderer. It records only results and transcripts in a temporary report. `.env.*` files remain ignored.
+
+### Event-based context projection
+
+The backend uses `ContextManager` and the pure functions in `src/event-projection.ts`. Context maintenance performs no LLM inference. Canonical `context_scope` and `context_state` events capture fixed instructions/tools/budgets and accepted application snapshots. Derived `context_append` / `context_checkpoint` manifests store projector version, exact source event IDs, rendering mode, state references, protected inputs and a source watermark. Bump `PROJECTOR_VERSION` when changing rendering or selection semantics.
+
+Within an epoch, messages append without rewriting the prefix. Above 85% of input capacity, deterministic selection targets 55%: retain active input IDs, latest state per key and the last conversation unit; remove superseded states, fold old tool outputs to a fixed 1,200-character excerpt, then archive completed jobs before other older units. Large old tool argument units may become references. Checkpoints commit only after the final request fits the hard budget and becomes smaller; cancellation and oversized required input retain the prior view. There is no summary prompt, summary output reservation or hidden summary request.
+
+`search_memory` uses a rebuildable FTS5 trigram index of original records, with a short-query literal fallback. `inspect_event` pages original text by event ID and character offset. Both restrict access to the active bot and exclude internal manifests/usage. New tool results link to `assistantEventId`; local invocation IDs do not rely on vendor IDs being globally unique. Old logs associate duplicate IDs chronologically.
+
+Default budget: window 32768, output 4096, safety 2048, image reserve 8192 each. Configure `XIAOWANG_CONTEXT_WINDOW`, `XIAOWANG_MAX_OUTPUT_TOKENS`, `XIAOWANG_CONTEXT_SAFETY_TOKENS`, `XIAOWANG_IMAGE_TOKEN_BUDGET`. Local `o200k_base` estimates include a 20% margin and envelope costs; official Anthropic native counting replaces the total input count. Provider-reported usage and cache reads/writes remain separate from local estimates. `npm run xiaowang -- stats [slug]` reports totals; absent actual usage is `null`. Optional cache fields can be disabled with `XIAOWANG_PROMPT_CACHE=off`.
+
+Request hashes link usage to the scoped request. Attachment bytes hydrate from original library references; transient page pixels are never written into events, so exact visual replay after restart requires recapturing the page. Bot metadata and file-reference tables remain separate application state; the new manifests do not imply full application-wide event sourcing or side-effect rollback.
+
+```bash
+node --test test/context-manager.test.ts test/context-provider.test.ts test/memory.test.ts test/task-supplements.test.ts
+node --test --test-concurrency=1 e2e/attachments.test.mjs e2e/task-supplements.test.mjs e2e/visual-context.test.mjs e2e/voice-research.test.mjs
+```
+
+The interactive technical document is `technical/index.html`, with its text counterpart in `technical/README.md`. Static PNG/SVG assets must be regenerated from `window.xiaowangTechnical.image(id, format)` after diagram changes.

@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { ContextManager } from "./context-manager.ts";
+import type { LlmProvider, ToolSchema } from "./types.ts";
 import path from "node:path";
 import { STEWARD_BASELINE, STEWARD_NAME, STEWARD_PROMPT, STEWARD_SLUG } from "./persona.ts";
 import { resolveHome, Store } from "./store.ts";
@@ -5,6 +8,7 @@ import type { Bot, Kickoff } from "./types.ts";
 
 /** 无界面的运行时。桌面端以后挂在同一个 Store 和同一套循环上。 */
 export class Runtime {
+  private readonly contexts = new Map<string, ContextManager>();
   readonly kickoffs: Kickoff[] = [];
   readonly store: Store;
 
@@ -48,6 +52,13 @@ export class Runtime {
 
   enqueueKickoff(job: Kickoff): void {
     this.kickoffs.push(job);
+  }
+
+  modelContext(bot: Bot, system: string, tools: ToolSchema[], provider: LlmProvider): ContextManager {
+    const key = createHash("sha256").update(JSON.stringify([bot.id, provider.contextKey ?? provider.model, provider.contextPolicy, system, tools])).digest("hex");
+    let context = this.contexts.get(key);
+    if (!context) { context = new ContextManager(this.store, bot.id, system, tools, provider); this.contexts.set(key, context); }
+    return context;
   }
 
   botWorkspace(bot: Bot): string {

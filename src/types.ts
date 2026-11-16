@@ -63,10 +63,14 @@ export interface ToolCall {
  * 模型看到的 messages 只是这些事件的投影，不是记忆本身。
  */
 export type SessionEvent =
+  | { type: "context_scope"; scope: string; projectorVersion: number; system: string; tools: ToolSchema[]; policy: import("./token-budget.ts").ContextPolicy; model: string }
+  | { type: "context_state"; scope: string; key: string; message: ModelMessage; transientImages?: number; frameHash?: string }
+  | { type: "context_append" | "context_checkpoint"; projectorVersion: number; scope: string; epoch: number; throughEventId: number; entries: import("./event-projection.ts").ProjectionEntry[]; sources: Record<string, string>; states: Record<string, number>; pinned: string[] }
+  | { type: "model_usage"; scope: string; epoch: number; model: string; requestHash: string; budget: import("./token-budget.ts").TokenBudget; usage?: ModelUsage; durationMs: number; prefixTokens: number; error?: string }
   | { type: "user_text"; channel: Channel; text: string; jobId?: string; attachments?: Attachment[] }
   | { type: "assistant_turn"; channel: Channel; text: string; toolCalls: ToolCall[]; jobId?: string }
   | { type: "call"; callId?: string; startedAt: string; endedAt: string; lines: Array<{ who: "user" | "assistant"; text: string }> }
-  | { type: "tool_result"; callId: string; name: string; output: string; isError: boolean }
+  | { type: "tool_result"; assistantEventId?: number; jobId?: string; callId: string; name: string; output: string; isError: boolean }
   | { type: "baseline"; text: string; fromBotId?: string }
   | { type: "artifact"; path: string; bytes: number }
   | { type: "job"; job: TaskJob }
@@ -103,7 +107,17 @@ export interface ToolSchema {
   parameters: Record<string, unknown>;
 }
 
+export interface ModelUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+}
+
 export interface CompletionRequest {
+  maxOutputTokens?: number;
+  preserveMessageBlocks?: boolean;
+  cacheKey?: string;
   system: string;
   messages: ModelMessage[];
   tools: ToolSchema[];
@@ -112,11 +126,15 @@ export interface CompletionRequest {
 }
 
 export interface CompletionResult {
+  usage?: ModelUsage;
   text: string;
   toolCalls: ModelToolCall[];
 }
 
 export interface LlmProvider {
+  contextKey?: string;
+  contextPolicy?: import("./token-budget.ts").ContextPolicy;
+  countTokens?: (request: CompletionRequest) => Promise<number>;
   model: string;
   complete(request: CompletionRequest): Promise<CompletionResult>;
 }

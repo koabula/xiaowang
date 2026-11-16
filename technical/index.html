@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="小王同学的双模型协作、事件投影、历史反查、token 预算与缓存统计。">
+  <title>小王同学 · 技术架构</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="diagrams.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<aside class="sidebar">
+  <a class="brand" href="#intro"><img src="assets/icon.png" width="37" height="37" alt=""><span>小王同学<small>技术架构</small></span></a>
+  <nav aria-label="文档目录">
+    <a href="#intro">设计约束</a>
+    <a href="#overview">全景架构图</a>
+    <a href="#loop">Agent loop</a>
+    <a href="#context">上下文装配图</a>
+    <a href="#layers">请求分层</a>
+    <a href="#projection">事件投影</a>
+    <a href="#prefix">前缀与缓存</a>
+    <a href="#budget">预算与重投影</a>
+    <a href="#memory">记忆与持久化</a>
+    <a href="#voice">通话与播放</a>
+    <a href="#bots">多 bot 与工具</a>
+    <a href="#recovery">任务恢复</a>
+    <a href="#sources">代码索引</a>
+  </nav>
+  <div class="sidebar-foot"><span>实现版本 v0.1.16</span><a href="https://github.com/koabula/xiaowang/tree/v0.1.16">v0.1.16 源码 ↗</a><button type="button" id="print-document">打印</button></div>
+</aside>
+<main id="main">
+  <header class="hero" id="intro">
+    <div class="edition">小王同学 <span>v0.1.16</span></div>
+    <h1>小王同学的<br>Agent 架构</h1>
+    <p class="lead">实时语音与后台研究并行执行，应用协调任务、工具、上下文和播放状态。</p>
+    <div class="meta"><a href="README.md">Markdown 版本 ↗</a><a href="https://github.com/koabula/xiaowang/tree/v0.1.16">v0.1.16 源码 ↗</a></div>
+  </header>
+
+  <section class="opening">
+    <h2>交互与研究有不同的时间要求</h2>
+    <p>一次语音回应需要尽快开始，一次研究可能涉及多轮检索、阅读和工具调用。用户还会在工作进行中补充要求、打断讲解或切换资料。小王将实时对话和研究执行分别交给 Realtime 与后台 LLM，通过应用层连接两条流程。</p>
+    <p>模型负责理解请求、生成内容和选择工具。应用保存任务与历史，执行工具，协调音频播放和页面展示，并根据执行结果安排下一步。</p>
+    <p class="source-links"><a data-source="desktop/main/index.ts">desktop/main/index.ts</a><a data-source="src/harness.ts">src/harness.ts</a></p>
+  </section>
+
+  <section id="overview">
+    <div class="section-heading"><span class="section-mark">系统协作</span><h2>两类模型如何协作</h2></div>
+    <p>Realtime 接收语音并生成回应，可以直接调用读取资料、翻页和展示工具。需要多步处理的研究通过 <code>delegate_task</code> 交给后台 LLM，通话继续接收用户输入。后台将执行进度和结果回传到通话上下文。</p>
+    <figure class="diagram" id="diagram-overview" data-diagram="overview">
+      <div class="diagram-toolbar"><div class="segmented" aria-label="选择架构路径"><button type="button" data-view="all" aria-pressed="true">全部</button><button type="button" data-view="text" aria-pressed="false">文字研究</button><button type="button" data-view="voice" aria-pressed="false">语音委派</button><button type="button" data-view="direct" aria-pressed="false">直接工具</button></div><div class="export-actions"><button type="button" data-action="expand" aria-label="放大全景架构图">放大</button><button type="button" data-export="svg">SVG</button><button type="button" data-export="png">PNG</button></div></div>
+      <div class="diagram-scroll"></div>
+      <div class="node-detail" aria-live="polite"></div>
+    </figure>
+    <div class="two-col"><div><h3>任务连接两个模型</h3><p>语音委派进入 <code>JobQueue</code>，获得本地任务编号。进度与结果持久化后更新到 Realtime。需要口头汇报时，通话适配器等待用户与播放状态允许，再发出通知。<code>notify=silent</code> 控制静默完成。</p></div><div><h3>应用保存执行归属</h3><p>bot 标识确定任务使用哪份会话、资料与工作区，<code>originCallId</code> 关联发起委派的通话。挂断后，已受理的任务可以继续完成，结果仍归属原通话。</p></div></div>
+    <p class="source-links"><a data-source="desktop/main/index.ts">index.ts</a><a data-source="src/voice-tasks.ts">voice-tasks.ts</a><a data-source="desktop/renderer/task-view.ts">task-view.ts</a></p>
+  </section>
+
+  <section id="loop">
+    <div class="section-heading"><span class="section-mark">执行机制</span><h2>一次任务如何执行</h2></div>
+    <p>任务从已保存的用户请求开始。每一步装配上下文并调用 LLM，模型返回工具调用时，应用执行工具、保存结果，再进入下一次调用。模型返回普通答案后，循环检查还有没有待处理的补充，再决定是否完成。</p>
+    <figure class="diagram" id="diagram-loop" data-diagram="loop">
+      <div class="diagram-toolbar"><div class="segmented" aria-label="选择循环示例"><button type="button" data-view="tools" aria-pressed="true">工具循环</button><button type="button" data-view="supplement" aria-pressed="false">追加补充</button><button type="button" data-view="queue" aria-pressed="false">排队新任务</button><button type="button" data-view="cancel" aria-pressed="false">停止任务</button></div><div class="export-actions"><button type="button" data-action="play" aria-pressed="false">播放流程</button><button type="button" data-action="next">下一步</button><button type="button" data-action="expand" aria-label="放大 Agent loop">放大</button><button type="button" data-export="svg">SVG</button><button type="button" data-export="png">PNG</button></div></div>
+      <div class="diagram-scroll"></div>
+      <div class="node-detail" aria-live="polite"></div>
+    </figure>
+    <div class="two-col"><div><h3>何时接收新要求</h3><p>执行中的普通消息默认补充当前任务。消息保存后，<code>readUpdates()</code> 在下一次模型调用前取出尚未接收的补充，连续多条一起合入。正在运行的工具先返回，模型随后根据新要求调整工作。</p></div><div><h3>何时结束当前任务</h3><p>一次回复生成期间仍可能收到消息。普通答案返回后，有新补充就保留当前输出并继续处理。无工具调用且没有待处理补充时，确认最终回复，回写任务终态并释放执行槽位。</p></div></div>
+    <p>同一 bot 串行执行，默认最多两个工作区并发。显式“排队新任务”或 <code>mode=queue</code> 创建独立任务。停止操作通过 <code>AbortSignal</code> 传入支持取消的执行路径。桌面任务最多进行 40 步模型调用，达到上限后保留已有输出，供检查与重试。</p>
+    <p>文字与语音补充复用同一队列。语音侧由转写识别或 Realtime 工具调用受理，Gemini 的首次研究委派通过工具发起。同一发言关联同一个任务编号，来源标识用于去重，防止重复启动。</p>
+    <p class="source-links"><a data-source="src/harness.ts">harness.ts</a><a data-source="src/jobs.ts">jobs.ts</a><a data-source="src/voice-tasks.ts">voice-tasks.ts</a><a data-source="test/task-supplements.test.ts">补充消息测试</a></p>
+  </section>
+
+  <section id="context">
+    <div class="section-heading"><span class="section-mark">上下文策略</span><h2>模型每次看到什么</h2></div>
+    <p>模型输入由人设与任务说明、会话投影、资料引用和当前工作区状态组成。后台 LLM 使用会话与工具结果推进研究。Realtime 开通话时接收近期对话简报，通话中持续接收页面、任务和结果更新。</p>
+    <figure class="diagram" id="diagram-context" data-diagram="context">
+      <div class="diagram-toolbar"><div class="segmented" aria-label="选择上下文视角"><button type="button" data-view="all" aria-pressed="true">全部</button><button type="button" data-view="llm" aria-pressed="false">后台 LLM</button><button type="button" data-view="realtime" aria-pressed="false">Realtime</button></div><div class="export-actions"><button type="button" data-action="expand" aria-label="放大上下文装配图">放大</button><button type="button" data-export="svg">SVG</button><button type="button" data-export="png">PNG</button></div></div>
+      <div class="diagram-scroll"></div>
+      <div class="node-detail" aria-live="polite"></div>
+    </figure>
+    <div class="two-col"><div><h3>任务上下文的接收时机</h3><p>任务在受理时复制工作区快照。单纯浏览另一页会更新通话的可见页面上下文。给任务追加消息时，任务接收该补充关联的新快照和匹配的页面画面。下一次调用据此更新上下文。</p></div><div><h3>图像与 PDF 当前页</h3><p>附件事件保存引用，调用后台模型前再加载图片字节。PDF 当前页渲染为图像。Gemini、OpenAI 和千问接收受控的视觉输入，画面队列以每秒最多一帧发送并淘汰过期页面。豆包当前通过后台模型处理图片与 PDF 分析。</p></div></div>
+    <p>可见页面由独立的 <code>viewRevision</code> 校验，任务进度更新使用工作区 <code>revision</code>。重启后恢复的页面先标记为隐藏，等待界面重新确认。浏览器页面由模型通过浏览工具访问。当前视觉共享路径覆盖已发送图片以及右侧图片、PDF 当前页。</p>
+    <details class="implementation-details"><summary>Realtime 与共享快照的有界参数</summary>
+    <div class="table-scroll"><table><thead><tr><th>内容</th><th>当前策略</th></tr></thead><tbody>
+      <tr><td>Realtime 初始简报</td><td>最近 6 段对话，每段按 180 字符截短；目标按 500 字符截短，附带术语与最近 8 个产物路径。</td></tr>
+      <tr><td>资料目录</td><td>最多列出 40 项，再通过 list_library 与阅读工具获取内容。</td></tr>
+      <tr><td>工作区快照</td><td>最近 6 个任务，每项结果最多 3,000 字符。</td></tr>
+      <tr><td>语音委派背景</td><td>当前通话最近 8 条转写与原文引用。</td></tr>
+    </tbody></table></div>
+    <p class="fine">这些参数控制通话简报与共享状态。后台 LLM 使用下述 token 预算与确定性重投影。Gemini Live 还启用服务端 slidingWindow 上下文压缩，其内部 token 与缓存不进入后台模型统计。</p>
+    </details>
+    <p class="source-links"><a data-source="src/project.ts">project.ts</a><a data-source="src/shared-context.ts">shared-context.ts</a><a data-source="src/attachments.ts">attachments.ts</a><a data-source="src/visual-queue.ts">visual-queue.ts</a></p>
+  </section>
+
+<section id="layers"><div class="section-heading"><span class="section-mark">请求组成</span><h2>从稳定规则到最新要求</h2></div><p>每次后台请求包含稳定的 system 与 tools，以及从事件生成的 messages。消息包含选中的历史单元、任务与工作区快照，以及本轮用户要求和连续补充。旧历史归档后，输入还会带上事件范围和反查入口。</p><figure class="diagram" id="diagram-layers" data-diagram="layers"><div class="diagram-toolbar"><div class="segmented" aria-label="选择请求组成视角"><button type="button" data-view="all" aria-pressed="true">完整请求</button><button type="button" data-view="prefix" aria-pressed="false">既有前缀</button><button type="button" data-view="tail" aria-pressed="false">追加内容</button><button type="button" data-view="memory" aria-pressed="false">历史引用</button></div><div class="export-actions"><button type="button" data-action="expand">放大</button><button type="button" data-export="svg">SVG</button><button type="button" data-export="png">PNG</button></div></div><div class="diagram-scroll"></div><div class="node-detail" aria-live="polite"></div></figure><p>固定规则、工具定义和预算保存为 <code>context_scope</code>；任务受理或收到补充时的背景保存为 <code>context_state</code>。投影清单引用这些事件，图片附件在发送前加载原件，文档正文由工具按页读取。</p><p>同一周期沿用已有消息顺序并追加尾部。任务说明、术语、目录和页面状态变化时追加新证据，重投影保留每个状态键的最新准确值。后台历史范围由预算与任务归属决定。</p><p class="source-links"><a data-source="src/context-manager.ts">src/context-manager.ts</a><a data-source="src/event-projection.ts">src/event-projection.ts</a><a data-source="src/project.ts">src/project.ts</a></p></section>
+
+<section id="projection"><div class="section-heading"><span class="section-mark">事件与输入</span><h2>投影如何产生</h2></div><p><code>projectContextUnits</code> 将事件转成完整消息单元，采用指定的语音修订，关联助手调用与工具结果。新执行使用应用生成的调用编号和 <code>assistantEventId</code> 记录归属，旧日志按最近的对应调用配对。</p><figure class="diagram" id="diagram-projection" data-diagram="projection"><div class="diagram-toolbar"><div class="segmented" aria-label="选择事件与输入视角"><button type="button" data-view="all" aria-pressed="true">完整流程</button><button type="button" data-view="append" aria-pressed="false">追加清单</button><button type="button" data-view="send" aria-pressed="false">准备发送</button></div><div class="export-actions"><button type="button" data-action="play" aria-pressed="false">播放流程</button><button type="button" data-action="next">下一步</button><button type="button" data-action="expand">放大</button><button type="button" data-export="svg">SVG</button><button type="button" data-export="png">PNG</button></div></div><div class="diagram-scroll"></div><div class="node-detail" aria-live="polite"></div></figure><p><code>context_append</code> 保存来源编号和渲染方式。<code>renderEntry</code> 从这些精确来源恢复消息，迟到修订追加更新说明。任务调用前装配图像并检查预算，准备期间到达的补充再次合入后才发起推理。</p><p>投影器不调用模型或重跑工具。相同事件、版本、预算和原件得到相同视图。页面帧只在当前进程内可用，状态文字始终说明其可用范围；图片附件可以按引用恢复。旧字符裁剪函数保留作兼容用途，正常任务走新管理器。</p><p class="source-links"><a data-source="src/project.ts">src/project.ts</a><a data-source="src/context-manager.ts">src/context-manager.ts</a><a data-source="src/event-projection.ts">src/event-projection.ts</a><a data-source="src/harness.ts">src/harness.ts</a></p></section>
+
+<section id="prefix"><div class="section-heading"><span class="section-mark">前缀与缓存</span><h2>为什么已有块保持不变</h2></div><p>正常调用在尾部追加消息，固定指令与工具定义保持稳定，适配器保留用户消息块边界。目录变化与转写修订以新块表达。超过水位时，程序一次性重建投影视图并递增 epoch。</p><figure class="diagram" id="diagram-prefix" data-diagram="prefix"><div class="diagram-toolbar"><div class="segmented" aria-label="选择前缀与缓存视角"><button type="button" data-view="all" aria-pressed="true">连续请求</button><button type="button" data-view="epoch" aria-pressed="false">周期切换</button><button type="button" data-view="metrics" aria-pressed="false">用量统计</button></div><div class="export-actions"><button type="button" data-action="expand">放大</button><button type="button" data-export="svg">SVG</button><button type="button" data-export="png">PNG</button></div></div><div class="diagram-scroll"></div><div class="node-detail" aria-live="polite"></div></figure><div class="two-col"><div><h3>保留前缀复用机会</h3><p>官方 OpenAI 请求带作用域与周期派生的 <code>prompt_cache_key</code>，Anthropic 启用自动 <code>cache_control</code>。可用 <code>XIAOWANG_PROMPT_CACHE=off</code> 关闭可选缓存字段。实际命中由服务端决定。</p></div><div><h3>记录实际用量</h3><p><code>model_usage</code> 保存请求哈希、完整预算、耗时与服务端用量。<code>prefixTokens</code> 是共同前缀的本地估算，未报告的实际用量显示 null。</p></div></div><p><code>npm run xiaowang -- stats [slug]</code> 汇总调用、检查点及实际 token 用量。缓存读取比例只使用同时报告输入与缓存读取的调用。重启后恢复事件投影，共同前缀诊断从 0 开始。</p><p class="source-links"><a data-source="src/provider.ts">src/provider.ts</a><a data-source="src/context-manager.ts">src/context-manager.ts</a><a data-source="src/cli.ts">src/cli.ts</a><a data-source="test/context-provider.test.ts">test/context-provider.test.ts</a></p></section>
+
+<section id="budget"><div class="section-heading"><span class="section-mark">预算与选择</span><h2>为整个请求留出空间</h2></div><p>默认窗口为 <strong>32,768 tokens</strong>，是应用预算，可按模型实际能力调整。预留 <strong>4,096</strong> 输出和 <strong>2,048</strong> 安全空间后，输入容量为 <strong>26,624</strong>，涵盖 system、tools、消息、工具参数与结果，以及实际装配的图片。</p><figure class="diagram" id="diagram-budget" data-diagram="budget"><div class="diagram-toolbar"><div class="segmented" aria-label="选择预算与选择视角"><button type="button" data-view="all" aria-pressed="true">增长与重投影</button><button type="button" data-view="rebuild" aria-pressed="false">选择与检查点</button><button type="button" data-view="accounting" aria-pressed="false">预算组成</button></div><div class="export-actions"><button type="button" data-action="play" aria-pressed="false">播放流程</button><button type="button" data-action="next">下一步</button><button type="button" data-action="expand">放大</button><button type="button" data-export="svg">SVG</button><button type="button" data-export="png">PNG</button></div></div><div class="diagram-scroll"></div><div class="node-detail" aria-live="polite"></div></figure><div class="two-col"><div><h3>怎样计数</h3><p>文本以本地 o200k_base BPE 分段估算，增加 20% 余量与封装开销；图片每张预留 8,192 tokens。官方 Anthropic 使用原生计数覆盖总输入，分项仍为本地估算。实际用量按响应记录。</p></div><div><h3>怎样重建</h3><p>超过输入容量 85% 时，以 55% 为选择目标。保留当前任务的输入事件、连续补充、最新状态及最后一个对话单元；先移除被取代的旧状态，再折叠较早工具结果，最后优先归档已结束任务，其余按较旧单元顺序处理。</p></div></div><p>固定工具摘录保留前 1,200 字符和来源指针；较旧且参数较大的工具单元可以整体变成事件引用。归档只改变视图，原始事件保持完整。结果在硬预算内且确实缩小后，提交 <code>context_checkpoint</code>。必要内容较大时可以高于低水位；原生计数仍超限时再尝试归档全部可选历史。</p><p>检查点记录投影版本、截止事件、来源编号、渲染方式、状态引用和保护集合。取消或无法容纳当前输入时保留原投影，返回预算错误。上下文维护不产生自动 LLM 摘要调用。</p><details class="implementation-details"><summary>预算配置</summary><div class="table-scroll"><table><thead><tr><th>环境变量</th><th>默认值</th></tr></thead><tbody><tr><td><code>XIAOWANG_CONTEXT_WINDOW</code></td><td>32768</td></tr><tr><td><code>XIAOWANG_MAX_OUTPUT_TOKENS</code></td><td>4096</td></tr><tr><td><code>XIAOWANG_CONTEXT_SAFETY_TOKENS</code></td><td>2048</td></tr><tr><td><code>XIAOWANG_IMAGE_TOKEN_BUDGET</code></td><td>8192 / 张</td></tr></tbody></table></div></details><p class="source-links"><a data-source="src/token-budget.ts">src/token-budget.ts</a><a data-source="src/event-projection.ts">src/event-projection.ts</a><a data-source="src/context-manager.ts">src/context-manager.ts</a><a data-source="test/context-manager.test.ts">test/context-manager.test.ts</a></p></section>
+
+  <section id="memory"><div class="section-heading"><span class="section-mark">记忆与反查</span><h2>历史如何被再次使用</h2></div>
+<p>原始用户消息、模型回复、工具结果与语音修订保存在追加式事件中。模型通过 <code>search_memory</code> 找到当前 bot 的相关记录，再用 <code>inspect_event</code> 按编号读取原文，读取历史不会重新执行工具。</p>
+<div class="two-col"><div><h3>找到原始记录</h3><p>SQLite FTS5 trigram 索引支持中文子串，少于 3 个字符时使用字面查询。关键词按字面处理，可筛选事件类型，通过 after_id 分页，每页最多 20 条。派生投影和用量记录不进入模型历史检索。</p></div><div><h3>按需展开证据</h3><p>inspect_event 使用事件编号、字符偏移与页长，默认读取 4,000 字符、最多 6,000，并返回下一偏移量。查询与读取均限定当前 bot，资料原件仍通过文件与阅读工具访问。</p></div></div>
+<p>任务与工作区快照保存受理时的准确值。用户要求保存的笔记与结论是普通工作产物。bot 元数据和资料引用仍有各自状态表；这里实现的是上下文的事件投影与恢复，所有界面操作尚不能由事件流重放。</p>
+<p>资料原件按 SHA-256 去重，图片与 PDF 保存引用，投影检查点保存来源清单。备份需同时包含数据库、资料库与工作区。临时页面像素和音频队列只在当前进程内保留。</p>
+<p class="source-links"><a data-source="src/memory.ts">memory.ts</a><a data-source="src/store.ts">store.ts</a><a data-source="src/tools.ts">tools.ts</a><a data-source="test/memory.test.ts">历史反查测试</a></p></section>
+
+  <section id="voice">
+    <div class="section-heading"><span class="section-mark">实时交互</span><h2>通话如何保持连贯</h2></div>
+    <p>模型生成结束后，音频可能仍在传输或排队播放。用户实际听到的位置由渲染进程的播放器确认。播放位置、片段完成与空闲回执返回调度层，用于协调插话、连续讲解和挂断。</p>
+    <div class="numbered-prose"><div><h3>插话</h3><p>用户发言会停止匹配的本地音频，拒收已被中断回复的迟到数据。后台研究保留自己的任务生命周期，继续执行。</p></div><div><h3>连续讲解</h3><p>应用保留讲解目标、材料、页码和暂停状态。Gemini 在生成与实际播放结束后，通过资料展示回执推进页码，再请求下一段讲解。其他适配器保留各自的兼容调度方式。</p></div><div><h3>结果通知与结束</h3><p>后台结果先进入任务记录，再根据通知设置、用户发言与播放状态安排口头汇报。自然挂断要求用户有明确意图，并等待道别的实际播放完成。</p></div></div>
+    <div class="table-scroll"><table><thead><tr><th>通话适配</th><th>实现关注点</th><th>主要入口</th></tr></thead><tbody>
+      <tr><td>OpenAI / 千问</td><td>会话配置、转写、音频事件、工具结果与播放中断关联</td><td><code>realtime.ts</code>、<code>call.ts</code></td></tr>
+      <tr><td>豆包全双工</td><td>原生 ASR / TTS 生命周期、匿名音频流归属、中断确认与函数调用回执</td><td><code>doubao-realtime.ts</code>、<code>call.ts</code></td></tr>
+      <tr><td>Gemini Live</td><td>原生协议、非阻塞委派、同会话恢复、应用驱动的讲解推进</td><td><code>gemini-live.ts</code>、<code>gemini-call.ts</code></td></tr>
+    </tbody></table></div>
+    <p class="source-links"><a data-source="desktop/renderer/call-audio.ts">call-audio.ts</a><a data-source="desktop/main/call.ts">call.ts</a><a data-source="desktop/main/gemini-call.ts">gemini-call.ts</a><a data-source="src/presentation.ts">presentation.ts</a></p>
+  </section>
+
+  <section id="bots">
+    <div class="section-heading"><span class="section-mark">工作区与工具</span><h2>工作区如何隔离</h2></div>
+    <p><code>spawn_bot</code> 接收新 bot 的任务说明、术语、所需资料和首轮要求。工具会先解析文件引用，再建立 bot 并交接原件引用。父轮成功完成后，待启动的子任务才进入队列。子 bot 从自己的任务说明、会话与资料目录开始工作。</p>
+    <p>每个 bot 拥有独立的浏览页面、导航历史与控制权，底层共用 <code>persist:xiaowang</code> 持久化 Session。共享登录状态让不同课题可以使用同一份网站登录资料。用户取得页面控制权后，浏览器输入守卫和模型工具侧都会校验当前操作者。</p>
+    <div class="tool-list"><div><h3>获取与阅读</h3><p><code>search_literature</code> 检索文献，浏览器工具获取网页和原文，<code>read_document</code> 按页或行读取资料。</p></div><div><h3>保存与交接</h3><p><code>write_file</code> 保存产物，<code>import_file</code> 导入资料，<code>share_file</code> 交接引用，<code>remember_terms</code> 保存术语。</p></div><div><h3>展示与协作</h3><p><code>show_stage</code> 打开 PDF、浏览器或 HTML Canvas，并返回展示回执。<code>spawn_bot</code> 建立独立课题。</p></div></div>
+    <p>Canvas 通过 <code>data-xw-slide</code> 标记页面，<code>active</code> 标记当前页，也可以暴露 <code>window.xiaowangSlides</code> 导航接口。主进程发起展示请求，界面确认实际页码后返回回执，讲解流程再据此继续。</p>
+    <p class="source-links"><a data-source="src/tools.ts">tools.ts</a><a data-source="src/harness.ts">harness.ts</a><a data-source="desktop/main/browser.ts">browser.ts</a><a data-source="desktop/renderer/canvas-pager.ts">canvas-pager.ts</a></p>
+  </section>
+
+  <section id="recovery">
+    <div class="section-heading"><span class="section-mark">执行可靠性</span><h2>任务如何恢复</h2></div>
+    <div class="two-col"><div><h3>本地任务恢复</h3><p>队列从事件恢复最新任务状态。排队任务可以继续执行，应用关闭时仍在运行的任务恢复为 <code>interrupted</code>。用户检查已有产物后可以手动重试，关联的补充消息和附件引用继续保留。</p></div><div><h3>通话连接恢复</h3><p>Gemini 恢复句柄保存在进程内，短时断线复用远端会话，并去重重放的工具调用。断线期间的语音由用户重述。挂断后，已经受理的后台任务继续运行，结果保留在原通话记录。</p></div></div>
+    <p>工具返回的 <code>isError</code> 会作为工具结果交回模型，供下一步调整。模型请求失败等抛出的异常由队列记录为 <code>failed</code>，已保存的事件和产物可供检查与重试。</p>
+    <p class="source-links"><a data-source="test/task-supplements.test.ts">任务补充测试</a><a data-source="e2e/task-supplements.test.mjs">桌面补充测试</a><a data-source="e2e/gemini-native.test.mjs">Gemini 桌面测试</a><a data-source="e2e/doubao-native.test.mjs">豆包桌面测试</a></p>
+  </section>
+
+  <section id="sources">
+    <div class="section-heading"><span class="section-mark">实现索引</span><h2>技术栈与代码入口</h2></div>
+    <div class="table-scroll"><table><thead><tr><th>职责</th><th>当前技术</th></tr></thead><tbody><tr><td>桌面与界面</td><td>Electron、React、TypeScript</td></tr><tr><td>阅读与展示</td><td>PDF.js、HTML Canvas</td></tr><tr><td>模型通信</td><td>后台 OpenAI 兼容 / Anthropic 接口与 SSE，Realtime WebSocket 适配</td></tr><tr><td>执行与存储</td><td>Node.js 24、SQLite WAL、文件系统</td></tr></tbody></table></div>
+    <div class="source-index"><a data-source="src/harness.ts"><strong>Agent 循环</strong><code>src/harness.ts</code></a><a data-source="src/jobs.ts"><strong>任务调度</strong><code>src/jobs.ts</code></a><a data-source="src/context-manager.ts"><strong>事件投影与恢复</strong><code>src/context-manager.ts</code></a><a data-source="src/token-budget.ts"><strong>完整请求预算</strong><code>src/token-budget.ts</code></a><a data-source="src/shared-context.ts"><strong>工作区共享状态</strong><code>src/shared-context.ts</code></a><a data-source="src/store.ts"><strong>事件与资料存储</strong><code>src/store.ts</code></a><a data-source="desktop/main/index.ts"><strong>桌面协调入口</strong><code>desktop/main/index.ts</code></a></div>
+    <p>本文对应 v0.1.16。图内源码链接指向同一检出的文件，版本源码链接固定到 v0.1.16 标签。</p>
+  </section>
+  <footer><a href="#intro">小王同学 · 技术架构</a><span>v0.1.16</span><a href="https://github.com/koabula/xiaowang">GitHub ↗</a></footer>
+</main>
+<div class="export-status" role="status" aria-live="polite"></div>
+<noscript><p class="noscript">静态图见 <a href="README.md">Markdown 版本</a>。</p></noscript>
+</body>
+</html>

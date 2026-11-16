@@ -14,6 +14,7 @@ import {
   type StageDriver,
 } from "./stage.ts";
 import { resolveInsideWorkspace } from "./workspace.ts";
+import { memoryText, MEMORY_TYPES } from "./memory.ts";
 
 export interface ToolOutcome {
   output: string;
@@ -76,6 +77,44 @@ const objectSchema = (properties: Record<string, unknown>, required: string[]): 
 });
 
 const TOOLS: Tool[] = [
+  {
+    schema: {
+      name: "search_memory",
+      description: "检索当前 bot 的原始历史。需要找回较早的用户要求、结论或工具输出时使用，返回事件编号和原文片段；再用 inspect_event 读取细节。搜索词是字面文本，支持中文。",
+      parameters: objectSchema({
+        query: { type: "string", description: "1–256 字符的关键词或原文片段。" },
+        event_types: { type: "array", items: { type: "string", enum: [...MEMORY_TYPES] }, description: "可选事件类型筛选。" },
+        after_id: { type: "integer", description: "仅返回此编号之后的匹配，默认 0。" },
+        limit: { type: "integer", description: "每页 1–20 条，默认 10。" },
+      }, ["query"]),
+    },
+    run(input, host) {
+      if (typeof input.query !== "string") return { isError: true, output: "query 必须是搜索文本。" };
+      if (input.event_types !== undefined && (!Array.isArray(input.event_types) || !input.event_types.every(type => typeof type === "string"))) return { isError: true, output: "event_types 必须是事件类型数组。" };
+      const matches = host.store.searchMemory(host.bot.id, input.query, { types: input.event_types as string[] | undefined,
+        afterId: input.after_id as number | undefined, limit: input.limit as number | undefined });
+      return { isError: false, output: JSON.stringify({ matches, nextAfterId: matches.at(-1)?.eventId ?? null }) };
+    },
+  },
+  {
+    schema: {
+      name: "inspect_event",
+      description: "分页读取当前 bot 的原始历史事件。返回原文，不重新执行工具。页面画面不保存像素；文件原件继续使用 read_document。",
+      parameters: objectSchema({
+        event_id: { type: "integer", description: "search_memory 或上下文引用给出的事件编号。" },
+        offset: { type: "integer", description: "原文字符偏移，默认 0；接着读时使用 nextOffset。" },
+        limit: { type: "integer", description: "本页最多 1–6000 字符，默认 4000。" },
+      }, ["event_id"]),
+    },
+    run(input, host) {
+      const stored = host.store.memoryEvent(host.bot.id, input.event_id as number);
+      const text = memoryText(stored), offset = input.offset ?? 0, limit = input.limit ?? 4000;
+      if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0 || offset > text.length || typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 6000) return { isError: true, output: "offset 或 limit 超出允许范围。" };
+      const end = Math.min(text.length, offset + limit);
+      return { isError: false, output: JSON.stringify({ eventId: stored.id, type: stored.event.type, createdAt: stored.createdAt,
+        offset, totalChars: text.length, text: text.slice(offset, end), nextOffset: end < text.length ? end : null }) };
+    },
+  },
   {
     schema: {
       name: "list_files",

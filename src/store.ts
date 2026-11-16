@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { STEWARD_SLUG, stewardPrompt } from "./persona.ts";
 import { APP_ICON_INK, APP_ICON_NAME } from "./beam.ts";
+import { MEMORY_TYPES } from "./memory.ts";
 import type { Bot, SessionEvent, StoredEvent, Term } from "./types.ts";
 
 interface BotRow {
@@ -91,6 +92,32 @@ export class Store {
         created_at TEXT NOT NULL,
         PRIMARY KEY (bot_id, file_id)
       );
+    `);
+    const memoryTypes = MEMORY_TYPES.map(type => `'${type}'`).join(",");
+    const memoryTextSql = (prefix: string) => `CASE ${prefix}type
+      WHEN 'user_text' THEN coalesce(json_extract(${prefix}payload_json, '$.text'), '') || char(10) || coalesce(json_extract(${prefix}payload_json, '$.attachments'), '')
+      WHEN 'assistant_turn' THEN coalesce(json_extract(${prefix}payload_json, '$.text'), '') || char(10) || coalesce(json_extract(${prefix}payload_json, '$.toolCalls'), '')
+      WHEN 'tool_result' THEN json_extract(${prefix}payload_json, '$.output')
+      WHEN 'voice_line' THEN json_extract(${prefix}payload_json, '$.text')
+      WHEN 'call' THEN (SELECT group_concat(json_extract(value, '$.text'), char(10)) FROM json_each(${prefix}payload_json, '$.lines'))
+      WHEN 'baseline' THEN json_extract(${prefix}payload_json, '$.text')
+      WHEN 'artifact' THEN json_extract(${prefix}payload_json, '$.path')
+      WHEN 'context_state' THEN json_extract(${prefix}payload_json, '$.message.content') ELSE '' END`;
+    const memoryVersion = db.prepare("SELECT value FROM meta WHERE key = 'memory_index_version'").get() as { value: string } | undefined;
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(event_id UNINDEXED, bot_id UNINDEXED, event_type UNINDEXED, search_text, tokenize='trigram');
+    `);
+    if (memoryVersion?.value !== "2") db.exec("DROP TRIGGER IF EXISTS memory_fts_insert; DELETE FROM memory_fts;");
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS memory_fts_insert AFTER INSERT ON session_events
+      WHEN new.type IN (${memoryTypes}) BEGIN
+        INSERT INTO memory_fts(rowid, event_id, bot_id, event_type, search_text)
+        VALUES(new.id, new.id, new.bot_id, new.type, ${memoryTextSql("new.")});
+      END;
+      INSERT INTO memory_fts(rowid, event_id, bot_id, event_type, search_text)
+      SELECT id, id, bot_id, type, ${memoryTextSql("")} FROM session_events
+      WHERE type IN (${memoryTypes}) AND id NOT IN (SELECT rowid FROM memory_fts);
+      INSERT INTO meta(key, value) VALUES('memory_index_version', '2') ON CONFLICT(key) DO UPDATE SET value='2';
     `);
     const columns = db.prepare("PRAGMA table_info(bots)").all() as Array<{ name: string }>;
     if (!columns.some((column) => column.name === "avatar_seed")) {
@@ -277,6 +304,31 @@ export class Store {
       createdAt: row.created_at,
       event: JSON.parse(row.payload_json) as SessionEvent,
     }));
+  }
+
+  memoryEvent(botId: string, eventId: number): StoredEvent {
+    this.requireBot(botId);
+    if (!Number.isSafeInteger(eventId) || eventId <= 0) throw new Error("事件编号必须是正整数。");
+    const row = this.db.prepare("SELECT * FROM session_events WHERE bot_id = ? AND id = ?").get(botId, eventId) as EventRow | undefined;
+    if (!row || !(MEMORY_TYPES as readonly string[]).includes(row.type)) throw new Error("当前 bot 没有可读取的这条历史事件。");
+    return { id: row.id, botId: row.bot_id, createdAt: row.created_at, event: JSON.parse(row.payload_json) as SessionEvent };
+  }
+
+  searchMemory(botId: string, query: string, options: { types?: string[]; afterId?: number; limit?: number } = {}) {
+    this.requireBot(botId);
+    query = query.trim();
+    if (!query || query.length > 256) throw new Error("搜索词需为 1–256 个字符。");
+    const types = options.types?.length ? options.types : [...MEMORY_TYPES];
+    if (types.some(type => !(MEMORY_TYPES as readonly string[]).includes(type))) throw new Error("不支持的历史事件类型。");
+    const limit = options.limit ?? 10, afterId = options.afterId ?? 0;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20 || !Number.isSafeInteger(afterId) || afterId < 0) throw new Error("历史检索分页参数无效。");
+    const match = [...query].length >= 3;
+    const predicate = match ? "memory_fts MATCH ?" : "instr(lower(search_text), lower(?)) > 0";
+    const term = match ? `"${query.replaceAll('"', '""')}"` : query;
+    const rows = this.db.prepare(`SELECT event_id, event_type, ${match ? "snippet(memory_fts, 3, '', '', ' … ', 36)" : "substr(search_text, max(1, instr(lower(search_text), lower(?)) - 70), 240)"} AS excerpt
+      FROM memory_fts WHERE bot_id = ? AND event_id > ? AND event_type IN (${types.map(() => "?").join(",")}) AND ${predicate}
+      ORDER BY event_id ASC LIMIT ?`).all(...(match ? [] : [query]), botId, afterId, ...types, term, limit) as Array<{ event_id: number; event_type: string; excerpt: string }>;
+    return rows.map(row => ({ eventId: row.event_id, type: row.event_type, excerpt: row.excerpt.slice(0, 500) }));
   }
 
   getActiveBotId(): string | null {

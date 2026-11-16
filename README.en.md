@@ -79,6 +79,8 @@ npm ci
 npm run desktop
 ```
 
+The [technical architecture document](technical/README.md) (Chinese) covers LLM / Realtime coordination, context, and memory, with interactive diagrams and static images.
+
 See the [development notes](DEVELOPMENT.md) for setup, tests, and packaging.
 
 When reporting an [issue](https://github.com/koabula/xiaowang/issues), include the operating system, app version, voice provider, and reproduction steps. Remove keys and private material.

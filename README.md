@@ -79,6 +79,8 @@ npm ci
 npm run desktop
 ```
 
+LLM 与 Realtime 协作、上下文和记忆策略见[技术架构文档](technical/README.md)，附交互图与静态图片。
+
 项目配置、测试与打包流程见[开发说明](DEVELOPMENT.md)。
 
 遇到问题可在 [Issues](https://github.com/koabula/xiaowang/issues) 附上系统、应用版本、语音服务和复现步骤；请移除密钥与私密资料。

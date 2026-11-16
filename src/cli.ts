@@ -5,6 +5,7 @@ import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { contextUsage } from "./context-manager.ts";
 import { runTurn, type StepEvent } from "./harness.ts";
 import { formatVoiceBrief, projectVoiceBrief } from "./project.ts";
 import { configFromEnv, createProvider } from "./provider.ts";
@@ -22,6 +23,7 @@ const HELP = `小王同学（无头内核）
   xiaowang add <文件> [--bot slug] 把 PDF 或文本放进资料库，并引用到当前项目
   xiaowang library [slug]          列出当前项目引用的原件
   xiaowang share <id或文件名> --to <slug> [--from slug]
+  xiaowang stats [slug]            输出 token、缓存用量与投影检查点统计
   xiaowang events [slug]           打印只追加的会话记录
   xiaowang brief [slug]            打印给实时语音准备的薄上下文
   xiaowang help
@@ -66,6 +68,11 @@ async function main(): Promise<void> {
   await withRuntime(async (runtime) => {
     if (command === "bots") {
       printBots(runtime);
+      return;
+    }
+    if (command === "stats") {
+      const bot = args[1] ? runtime.store.requireBot(args[1]) : runtime.activeBot();
+      output.write(JSON.stringify(contextUsage(runtime.store, bot.id), null, 2) + "\n");
       return;
     }
     if (command === "events") {
@@ -296,6 +303,15 @@ function switchBot(runtime: Runtime, slug: string): void {
 
 function summarize(event: SessionEvent): string {
   switch (event.type) {
+    case "context_scope":
+      return `context_scope\t${event.model}\tv${event.projectorVersion}`;
+    case "context_state":
+      return `context_state\t${event.key}`;
+    case "context_append":
+    case "context_checkpoint":
+      return `${event.type}\tepoch=${event.epoch}\tentries=${event.entries.length}\tthrough=${event.throughEventId}`;
+    case "model_usage":
+      return `model_usage\t${event.model}\tinput=${event.usage?.inputTokens ?? "?"}\tcache=${event.usage?.cacheReadTokens ?? "?"}\t${event.durationMs}ms`;
     case "user_text":
       return `user_text\t${oneLine(event.text)}`;
     case "assistant_turn": {
