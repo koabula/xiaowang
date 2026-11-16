@@ -28,6 +28,8 @@ Choose an installer from the [latest GitHub Release](https://github.com/koabula/
 | Windows | `x64` | `.exe` |
 | Linux | `x64` | `.AppImage` or `.deb` |
 
+The macOS app currently uses a complete ad-hoc signature. If the first launch warns about an unidentified developer, try opening it, then choose **System Settings → Privacy & Security → Open Anyway**. Choose `arm64` for Apple Silicon (M-series Macs).
+
 XiaoWang checks for updates automatically. When a new version is available, click the download icon beside Settings to install it. You can also select **Check for updates** in Settings.
 
 ## First run

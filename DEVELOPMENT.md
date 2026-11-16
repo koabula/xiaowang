@@ -150,7 +150,7 @@ Optional Actions secrets:
 | macOS notarization | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` |
 | Windows signing | `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` |
 
-Without signing secrets, CI produces unsigned installers. macOS microphone descriptions and audio-input entitlements are included.
+Without signing secrets, macOS CI explicitly uses a complete ad-hoc signature (`identity: "-"`). Its separate entitlement file enables JIT, microphone input and disabled library validation while retaining hardened runtime. Certificate-backed builds use the original entitlements. Before uploading, macOS CI extracts both ZIPs, mounts both DMGs, verifies deep/strict signatures and sealed resources for both architectures, and launches the native architecture from each artifact with a fresh profile. It verifies the rendered settings screen, packaged version and post-launch signature. This integrity/startup check does not establish Apple developer trust or notarization; first Internet-downloaded launches may still require approval in Privacy & Security. Run it locally after `npm run dist:mac -- --x64 --arm64` with `XIAOWANG_MAC_RELEASE_DIR=release node --test e2e/mac-release.test.mjs`.
 
 ## Message attachments
 

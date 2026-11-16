@@ -28,6 +28,8 @@ https://github.com/user-attachments/assets/7b27eaa3-ece9-470b-a0b3-87df8baa8588
 | Windows | `x64` | `.exe` |
 | Linux | `x64` | `.AppImage` 或 `.deb` |
 
+macOS 当前使用完整临时签名。首次打开若提示无法验证开发者，可在尝试打开后进入 **系统设置 → 隐私与安全性 → 仍要打开**。Apple Silicon（包括 M 系列）请选择 `arm64`。
+
 应用会自动检查更新。有新版本时，点击设置按钮旁的下载图标即可更新，也可以在设置页手动**检查更新**。
 
 ## 第一次使用

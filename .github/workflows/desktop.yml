@@ -82,6 +82,11 @@ jobs:
       - run: npm run build
       - name: Build installers
         run: npx --no-install electron-builder ${{ matrix.arguments }} --publish never
+      - name: Verify macOS signatures and first launch from ZIP and DMG
+        if: matrix.name == 'macOS'
+        env:
+          XIAOWANG_MAC_RELEASE_DIR: release
+        run: node --test --test-concurrency=1 --test-timeout=180000 e2e/mac-release.test.mjs
       - name: Write SHA-256 checksums
         run: node desktop/scripts/checksums.mjs
       - name: Upload installers

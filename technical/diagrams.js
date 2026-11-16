@@ -348,7 +348,7 @@ function renderDiagram(id, config) {
     svg.append(element('path', { class: `wire ${kind}`, d: `M${x} ${footerY - 5}h28` }));
     svg.append(element('text', { class: 'footer', x: x + 39, y: footerY }, label));
   });
-  svg.append(element('text', { class: 'footer', x: 1120, y: footerY, 'text-anchor': 'end' }, '小王同学 · v0.1.18'));
+  svg.append(element('text', { class: 'footer', x: 1120, y: footerY, 'text-anchor': 'end' }, '小王同学 · v0.1.19'));
   figure.querySelector('.diagram-scroll').append(svg);
   const state = { id, config, figure, svg, view: figure.querySelector('[data-view][aria-pressed=true]').dataset.view, step: -1, timer: null };
   diagrams.set(id, state);
