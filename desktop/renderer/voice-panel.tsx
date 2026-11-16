@@ -19,6 +19,8 @@ export function VoicePanel({ call, audio, jobs, onError, name, seed, ink, locale
   const presentation = call.state?.presentation;
   const last = call.captions.at(-1);
   const paused = presentation?.status === "paused";
+  const mutedLabel = en ? "Microphone muted" : "麦克风已静音";
+  const heading = call.muted && phase === "listening" ? mutedLabel : labels[phase];
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -49,10 +51,12 @@ export function VoicePanel({ call, audio, jobs, onError, name, seed, ink, locale
     const stop = audio.subscribeLevels(levels => draw(levels.input, levels.output));
     return () => { stop(); appearance.removeEventListener("change", updateAppearance); };
   }, [audio, ink]);
-  const detail = call.state?.detail || (call.muted ? en ? "Microphone muted" : "麦克风已静音" : phase === "speaking" ? en ? "You can interrupt at any time" : "你可以随时打断" : en ? "Ready for your voice" : "麦克风已就绪，随时可以提问");
+  let detail = call.state?.detail || (call.muted ? mutedLabel : phase === "speaking" ? en ? "You can interrupt at any time" : "你可以随时打断" : en ? "Ready for your voice" : "麦克风已就绪，随时可以提问");
+  if (call.muted && phase === "listening") detail = en ? "Unmute to continue speaking" : "取消静音后可以继续提问";
+  if (call.muted && phase === "speaking") detail = mutedLabel;
   return (
     <section className={`voice-panel phase-${phase}`} style={{ ["--voice-ink" as string]: ink }} aria-label={en ? "Voice call" : "语音通话"}>
-      <div className="voice-heading"><Avatar slug={call.slug} seed={seed} ink={ink} size={42} mood={phase === "thinking" || phase === "working" ? "think" : "idle"} /><div><strong role="status">{labels[phase]}</strong><p>{detail}</p></div><span className="voice-connected"><span />{en ? "Live" : "语音"}</span></div>
+      <div className="voice-heading"><Avatar slug={call.slug} seed={seed} ink={ink} size={42} mood={phase === "thinking" || phase === "working" ? "think" : "idle"} /><div><strong role="status">{heading}</strong><p>{detail}</p></div><span className="voice-connected"><span />{en ? "Live" : "语音"}</span></div>
       <canvas ref={canvasRef} className="voice-wave" role="img" aria-label={en ? "Live microphone and speaker audio levels" : "实际麦克风输入与扬声器输出音量"} />
       <div className="voice-caption" aria-live="polite" aria-atomic="true"><span>{last?.who === "user" ? en ? "You" : "你" : name}</span><p>{last?.text || (en ? "Say something to get started." : "说说你想做什么。")}</p></div>
       {presentation && presentation.status !== "idle" ? <div className="voice-progress"><AudioLines size={13} /><span>{paused ? en ? "Paused" : "已暂停" : presentation.status === "completed" ? en ? "Completed" : "已讲完" : en ? "Continuous walkthrough" : "连续讲解"}{presentation.path ? ` · ${en ? "Page" : "第"} ${presentation.page}${presentation.totalPages ? ` / ${presentation.totalPages}` : ""}${en ? "" : " 页"}` : ""}</span></div> : null}

@@ -66,6 +66,8 @@ export function App() {
   const [activityBySlug, setActivityBySlug] = useState<Record<string, string>>({});
   const [stageBySlug, setStageBySlug] = useState<Record<string, StageSnap>>({});
   const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchInput = useRef<HTMLInputElement>(null);
   const [creating, setCreating] = useState(false);
   const [botName, setBotName] = useState("");
   const [botMenu, setBotMenu] = useState<BotMenuTarget | null>(null);
@@ -440,15 +442,15 @@ export function App() {
     <div className={wide ? "shell canvas-wide" : "shell"}>
       <aside className="rail" style={{ width: leftWidth }}>
         <div className="traffic-space">
-          <button className="icon" title={copy.search} type="button"><Search size={16} /></button>
+          <button className="icon" title={copy.search} aria-label={copy.search} type="button" onClick={() => { setSearchOpen(true); requestAnimationFrame(() => searchInput.current?.focus()); }}><Search size={16} /></button>
           <button className="icon" title={copy.newTask} type="button" onClick={() => setCreating(true)}><Plus size={16} /></button>
         </div>
         <button className={active === "xiaowang" ? "steward on" : "steward"} type="button" onKeyDown={event => botMenuKey(event, steward)} onContextMenu={event => { if (steward) openBotMenu(event, steward); }} onClick={() => void window.xiaowang.setActive("xiaowang")}>
           <Avatar slug="xiaowang" seed={steward?.avatarSeed} ink={steward?.avatarInk} size={72} mood={steward && botBusy(steward) ? "think" : "idle"} />
           <strong>{steward?.name ?? "小王同学"}</strong>
         </button>
-        <div className="search-line">
-          <input value={query} placeholder={copy.findTask} onChange={(event) => setQuery(event.target.value)} />
+        <div className={searchOpen ? "search-line expanded" : "search-line"}>
+          <input ref={searchInput} value={query} aria-label={copy.findTask} placeholder={copy.findTask} onChange={(event) => setQuery(event.target.value)} />
         </div>
         {creating ? (
           <form className="new-bot" onSubmit={(event) => { event.preventDefault(); void createBot(); }}>

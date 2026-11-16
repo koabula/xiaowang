@@ -1,11 +1,46 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { backgroundTurnOwners, isBackgroundJob, presentJob, taskTitle } from '../src/task-presentation.ts';
+import { backgroundTurnOwners, taskTurnOwners, visibleAnswerIds, isBackgroundJob, presentJob, taskTitle } from '../src/task-presentation.ts';
 import { taskLayout } from '../desktop/renderer/task-view.ts';
 import type { SessionEvent, StoredEvent, TaskJob } from '../src/types.ts';
 
 const job = (patch: Partial<TaskJob> = {}): TaskJob => ({ id: 'work', botId: 'bot', task: '梳理论文，包含方法、结果和局限', channel: 'voice', notify: 'when_idle', status: 'succeeded', createdAt: '2026-11-15T01:00:00.000Z', updatedAt: '2026-11-15T01:01:00.000Z', activity: '', result: '原文分析结果', error: '', attempts: 1, artifacts: [], ...patch });
 const stored = (id: number, event: SessionEvent, createdAt = '2026-11-15T01:00:30.000Z'): StoredEvent => ({ id, botId: 'bot', createdAt, event });
+
+test('each successful task exposes its final answer, while steps and unfinished attempts stay in history', () => {
+  const events = [
+    stored(1, { type: 'user_text', channel: 'text', text: '研究', jobId: 'first' }),
+    stored(2, { type: 'assistant_turn', channel: 'text', jobId: 'first', text: '正在读取', toolCalls: [{ id: 'read', name: 'list_files', input: {} }] }),
+    stored(3, { type: 'assistant_turn', channel: 'text', jobId: 'first', text: '补充前的回答', toolCalls: [] }),
+    stored(4, { type: 'user_text', channel: 'text', text: '再看实验', jobId: 'first' }),
+    stored(5, { type: 'assistant_turn', channel: 'text', jobId: 'first', text: '最终分析', toolCalls: [] }),
+    stored(6, { type: 'assistant_turn', channel: 'text', jobId: 'second', text: '另一项回答', toolCalls: [] }),
+    stored(7, { type: 'assistant_turn', channel: 'text', text: '无法确认归属的旧回答', toolCalls: [] }),
+  ];
+  const first = job({ id: 'first', channel: 'text', result: '最终分析', resultEventId: 5 });
+  const second = job({ id: 'second', channel: 'text', result: '另一项回答', resultEventId: 6 });
+  for (const status of ['queued', 'running', 'failed', 'cancelled', 'interrupted'] as const) {
+    const jobs = [{ ...first, status }, second];
+    assert.deepEqual([...visibleAnswerIds(jobs, events, taskTurnOwners(jobs, events))], [6, 7]);
+  }
+  assert.deepEqual([...visibleAnswerIds([first, second], events, taskTurnOwners([first, second], events))], [5, 6, 7]);
+  assert.equal(events.length, 7);
+});
+
+test('legacy text tasks recover a missing final ID even when display metadata already exists', () => {
+  const events = [
+    stored(1, { type: 'user_text', channel: 'text', text: '研究' }),
+    stored(2, { type: 'assistant_turn', channel: 'text', text: '正在核对', toolCalls: [{ id: 'read', name: 'list_files', input: {} }] }),
+    stored(3, { type: 'assistant_turn', channel: 'text', text: '最终分析', toolCalls: [] }),
+    stored(4, { type: 'user_text', channel: 'text', text: '另一项问题' }),
+    stored(5, { type: 'assistant_turn', channel: 'text', text: '独立回答', toolCalls: [] }),
+  ];
+  const shown = presentJob(job({ channel: 'text', task: '研究', result: '最终分析', display: 'conversation', title: '研究' }), events);
+  assert.equal(shown.resultEventId, 3);
+  const owners = taskTurnOwners([shown], events);
+  assert.equal(owners.has(5), false);
+  assert.deepEqual([...visibleAnswerIds([shown], events, owners)], [3, 5]);
+});
 
 test('chat stays out of task cards and history, including legacy greetings and failed replies', () => {
   for (const task of ['hi', '你好', 'What is a transformer?', '解释一下这个术语', '梳理论文']) {

@@ -571,11 +571,11 @@ body { color: var(--ink); background: var(--app-bg); }
 .thread > header { height: 64px; flex-shrink: 0; border-bottom: 1px solid var(--line); }
 .pill { background: transparent; box-shadow: none; font-weight: 500; }
 .pill:hover { background: var(--surface-soft); }
-.bot-title { min-width: 0; max-width: calc(100% - 120px); padding: 8px 13px 8px 8px; gap: 9px; border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); background: var(--surface); box-shadow: 0 3px 12px rgba(20,18,28,.07), 0 1px 2px rgba(20,18,28,.03); transition: background .15s, box-shadow .15s, border-color .15s; }
+.bot-title { min-width: 0; max-width: calc(100% - 120px); padding: 8px 13px 8px 8px; gap: 9px; border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); background: var(--surface); box-shadow: none; transition: background .15s, border-color .15s; }
 .bot-title-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; letter-spacing: -.015em; }
 .bot-title > .avatar, .bot-title > svg { flex-shrink: 0; }
 .bot-title > svg { color: var(--muted); }
-.bot-title:hover { background: var(--surface-soft); box-shadow: 0 4px 15px rgba(20,18,28,.1); }
+.bot-title:hover { background: var(--surface-soft); }
 .bot-title.on { border-color: var(--faint); box-shadow: 0 2px 8px rgba(20,18,28,.06); }
 .bot-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .rail { border-right: 1px solid var(--line); }
@@ -583,7 +583,19 @@ body { color: var(--ink); background: var(--app-bg); }
 .bot.working em::before { content: ""; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); margin-right: 5px; }
 .messages { gap: 18px; padding: 24px clamp(18px, 3vw, 44px); }
 .bubble { max-width: min(90%, 720px); padding: 12px 16px; }
-.bubble.assistant { background: var(--app-bg); }
+.bubble.assistant { background: transparent; border-radius: 0; padding: 4px 0; max-width: min(100%, 720px); line-height: 1.85; }
+.bubble.assistant p { margin: .65em 0; }
+.bubble.assistant > :first-child { margin-top: 0; }
+.bubble.assistant > :last-child { margin-bottom: 0; }
+.bubble.assistant h1, .bubble.assistant h2, .bubble.assistant h3 { line-height: 1.45; letter-spacing: -.015em; margin: 1.4em 0 .55em; font-weight: 600; }
+.bubble.assistant h1 { font-size: 1.55em; }
+.bubble.assistant h2 { font-size: 1.3em; }
+.bubble.assistant h3 { font-size: 1.12em; }
+.bubble.assistant li + li { margin-top: .45em; }
+.bubble.assistant ul, .bubble.assistant ol { padding-left: 1.5em; }
+.bubble.assistant blockquote { margin: 1em 0; padding: .15em 1em; border-left: 2px solid var(--line); color: var(--muted); }
+.bubble.assistant pre { padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--app-bg); line-height: 1.6; }
+.bubble.assistant hr { border: 0; border-top: 1px solid var(--line); margin: 1.5em 0; }
 .bubble.user { border-radius: 17px 17px 5px 17px; }
 .bubble a, .prose a { color: var(--accent); text-underline-offset: 3px; }
 .bubble table, .prose table { display: block; overflow: auto; max-width: 100%; border-collapse: collapse; }
@@ -592,7 +604,7 @@ body { color: var(--ink); background: var(--app-bg); }
 .welcome { flex: 1; min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 28px 12px; text-align: center; }
 .welcome h1 { margin: 0; font-size: 22px; font-weight: 500; letter-spacing: -.02em; }
 .welcome p { margin: 0; color: var(--muted); font-size: 13px; max-width: 320px; }
-.composer { border: 1px solid var(--line); border-radius: 26px; background: var(--surface); box-shadow: 0 4px 18px rgba(25,18,38,.04); margin: 10px 24px 20px; padding: 7px 8px; gap: 6px; flex-shrink: 0; transition: border-color .15s, box-shadow .15s; }
+.composer { border: 1px solid var(--line); border-radius: 22px; background: var(--surface); box-shadow: inset 2px 3px 6px color-mix(in srgb, var(--ink) 5%, transparent), inset -2px -2px 5px var(--surface), 0 2px 8px color-mix(in srgb, var(--ink) 3%, transparent); margin: 10px 24px 20px; padding: 7px 8px; gap: 6px; flex-shrink: 0; transition: border-color .15s, box-shadow .15s; }
 .composer textarea { padding: 9px 5px; outline: none; min-height: 38px; max-height: 144px; line-height: 20px; overflow-y: auto; }
 .composer > button { align-self: flex-end; margin-bottom: 1px; }
 .composer { display: flex; flex-direction: column; align-items: stretch; }
@@ -626,7 +638,9 @@ body { color: var(--ink); background: var(--app-bg); }
 .image-scroll { overflow: auto; padding: 18px; display: grid; place-items: start center; }
 .image-scroll img { max-width: 100%; height: auto; border-radius: 6px; }
 .send-message:disabled { opacity: .45; cursor: wait; }
-.composer:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 9%, transparent), 0 4px 18px rgba(25,18,38,.04); }
+.composer:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); box-shadow: inset 1px 2px 4px color-mix(in srgb, var(--ink) 4%, transparent), 0 0 0 3px color-mix(in srgb, var(--accent) 9%, transparent); }
+.composer .call:not(.stop) { box-shadow: inset 0 1px 1px color-mix(in srgb, var(--on-accent) 30%, transparent), inset 0 -2px 3px color-mix(in srgb, var(--ink) 15%, transparent), 0 2px 5px color-mix(in srgb, var(--ink) 14%, transparent); }
+.composer .call:not(.stop):active:not(:disabled) { box-shadow: inset 0 2px 4px color-mix(in srgb, var(--ink) 22%, transparent); }
 .voice-panel { margin: 4px 24px 0; padding: 14px 17px; border: 1px solid var(--line); border-radius: 18px; background: var(--app-bg); flex-shrink: 0; }
 .voice-heading { display: flex; gap: 11px; align-items: center; }
 .voice-heading strong { font-size: 13px; font-weight: 500; }
@@ -713,7 +727,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   .rail .steward .avatar { width: 44px !important; height: 44px !important; }
   .rail .bot { padding: 8px 9px; }
   .rail .traffic-space { justify-content: center; }
-  .rail .traffic-space button:first-child { display: none; }
+  .rail .traffic-space { flex-wrap: wrap; height: auto; min-height: 38px; }
+  .rail .search-line.expanded { display: block; position: absolute; top: 62px; left: 8px; width: min(230px, calc(100vw - 16px)); z-index: 5; font-size: 13px; }
   .rail .settings { justify-content: center; padding: 0; }
   .stage { width: 40vw !important; }
   .thread { min-width: 260px; }

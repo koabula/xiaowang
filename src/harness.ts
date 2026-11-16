@@ -169,7 +169,7 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
     if (outputLimited(result.stopReason)) {
       runtime.store.append(bot.id, { type: "assistant_turn", channel: "text", text: result.text, toolCalls: [],
         protocol: result.protocol, stopReason: result.stopReason, jobId: options.jobId });
-      throw new Error("模型已用完本步输出预算（包含 thinking），回答未完成，工具未执行。请提高研究预算中的输出预留后重试。");
+      throw new Error("这次回答达到长度上限，尚未完成。可以先让小王整理方法，再继续整理实验结果。");
     }
     const toolCalls = normalizeToolCalls(result, step, boundaryIds[0]!);
     const knownIds = new Set(context.map(event => event.id));

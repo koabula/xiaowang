@@ -10,7 +10,7 @@ import { MossCall, type MossHandlers } from "./moss-call.ts";
 import { mossSession } from "../../src/moss-realtime.ts";
 import { JobQueue, type JobOutput } from "../../src/jobs.ts";
 import { VoiceTasks, voiceJobReceipt } from "../../src/voice-tasks.ts";
-import { backgroundTurnOwners, presentJob } from "../../src/task-presentation.ts";
+import { taskTurnOwners, visibleAnswerIds, presentJob } from "../../src/task-presentation.ts";
 import { StageRequests } from "./stage.ts";
 import type { Attachment, TaskJob } from "../../src/types.ts";
 import type { PresentationState } from "../../src/presentation.ts";
@@ -167,9 +167,12 @@ function botRows(): BotRow[] {
 function chatItems(slug: string): ChatItem[] {
   const bot = runtime.store.requireBot(slug);
   const events = runtime.store.getEvents(bot.id);
-  const owners = backgroundTurnOwners((jobs?.list(bot.id) ?? []).map(job => presentJob(job, events)), events);
+  const shownJobs = (jobs?.list(bot.id) ?? []).map(job => presentJob(job, events));
+  const owners = taskTurnOwners(shownJobs, events);
+  const answers = visibleAnswerIds(shownJobs, events, owners);
   const items: ChatItem[] = [];
   for (const stored of events) {
+    if (stored.event.type === "assistant_turn" && !answers.has(stored.id)) continue;
     const item = present(stored.id, stored.event);
     if (item) items.push({ ...item, jobId: item.jobId ?? owners.get(stored.id) });
   }
