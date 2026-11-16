@@ -3,6 +3,7 @@ import { testWindowOptions } from "./test-mode.ts";
 import { fileURLToPath } from "node:url";
 import type { BrowserDriver } from "../../src/stage.ts";
 import { assertHttpUrl, USER_HAS_BROWSER } from "../../src/stage.ts";
+import { readDownloadBody } from "../../src/downloads.ts";
 
 export interface BrowserViewState {
   url: string;
@@ -33,6 +34,7 @@ export class BrowserPane {
   private holder: "bot" | "user" = "bot";
   private visible = false;
   private controlEpoch = 0;
+  private pdfDownload: AbortController | undefined;
   private state: BrowserViewState = { url: "", title: "", holder: "bot", loading: false };
 
   private frameType = "";
@@ -125,7 +127,7 @@ export class BrowserPane {
 
   setHolder(holder: "bot" | "user"): void {
     if (holder !== "bot" && holder !== "user") throw new Error("无效的浏览器控制权。");
-    if (holder !== this.holder) this.controlEpoch += 1;
+    if (holder !== this.holder) { this.controlEpoch += 1; this.pdfDownload?.abort(); }
     this.holder = holder;
     if (holder === "bot") this.window?.webContents.focus();
     this.patch({ holder });
@@ -148,6 +150,7 @@ export class BrowserPane {
   }
 
   dispose(): void {
+    this.pdfDownload?.abort();
     this.controlEpoch++;
     this.visible = false;
     if (this.view) {
@@ -226,13 +229,21 @@ export class BrowserPane {
     const epoch = this.controlEpoch;
     const looksLikePdf = this.frameType.toLowerCase().includes("pdf") || /\/pdf(\/|$)/i.test(pageUrl);
     if (!looksLikePdf) return null;
-    const response = await session.fromPartition("persist:xiaowang").fetch(pageUrl);
-    const type = response.headers.get("content-type") ?? "";
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (epoch !== this.controlEpoch) return null;
-    const header = bytes.subarray(0, 5).toString("utf8");
-    if (!type.toLowerCase().includes("pdf") && header !== "%PDF-") return null;
-    return this.onPdf(pdfFilename(pageUrl), bytes);
+    const controller = new AbortController(); this.pdfDownload = controller;
+    try {
+      const response = await session.fromPartition("persist:xiaowang").fetch(pageUrl, { signal: controller.signal });
+      const type = response.headers.get("content-type") ?? "";
+      const bytes = await readDownloadBody(response, { signal: controller.signal });
+      if (epoch !== this.controlEpoch) return null;
+      const header = bytes.subarray(0, 5).toString("utf8");
+      if (!type.toLowerCase().includes("pdf") && header !== "%PDF-") return null;
+      return this.onPdf(pdfFilename(pageUrl), bytes);
+    } catch (error) {
+      if (controller.signal.aborted) return null;
+      controller.abort(error);
+      throw error;
+    }
+    finally { if (this.pdfDownload === controller) this.pdfDownload = undefined; }
   }
 
   private contents() {

@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { STEWARD_SLUG, stewardPrompt } from "./persona.ts";
 import { APP_ICON_INK, APP_ICON_NAME } from "./beam.ts";
 import { MEMORY_TYPES } from "./memory.ts";
+import { LIBRARY_BYTE_CAP, librarySizeError } from "./library-limits.ts";
 import type { Bot, SessionEvent, StoredEvent, Term } from "./types.ts";
 
 interface BotRow {
@@ -404,7 +405,7 @@ export class Store {
   addLibraryBytes(botId: string, filename: string, bytes: Buffer): LibraryAddResult {
     this.requireBot(botId);
     if (bytes.length > LIBRARY_BYTE_CAP) {
-      throw new Error(`文件有 ${bytes.length} 字节，超过 ${LIBRARY_BYTE_CAP} 字节。`);
+      throw new Error(librarySizeError(bytes.length));
     }
     const display = displayFilename(filename);
     if (isSensitiveName(display)) throw new Error(`拒绝把 ${display} 放进资料库。`);
@@ -584,8 +585,6 @@ interface LibraryFileRow {
 interface LibraryRow extends LibraryFileRow {
   filename: string;
 }
-
-const LIBRARY_BYTE_CAP = 80 * 1024 * 1024;
 
 function rowToLibraryRef(row: LibraryRow): LibraryRef {
   return {

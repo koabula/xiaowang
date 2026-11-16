@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { configurePagePermissions, isAppPage, protectAppWindow } from "./page-policy.ts";
 import { backgroundTest, testWindowOptions } from "./test-mode.ts";
+import { receiveDownload, type DownloadTask } from "./downloads.ts";
 import { UpdateController } from "./update-state.ts";
 import { createUpdateEngine } from "./updates.ts";
 import { LiveCall, type InterruptionReceipt, type PlaybackPosition, type VoiceState } from "./call.ts";
@@ -109,6 +110,8 @@ let secrets: SecretRecord = {
   locale: "zh",
 };
 let savedSecrets = secrets;
+const activeDownloads = new Set<DownloadTask>();
+let closingDownloads = false;
 
 interface ChatItem {
   attachments?: Attachment[];
@@ -672,25 +675,25 @@ function attachDownloads(): void {
   partition.on("will-download", (_event, item, contents) => {
     const slug = contents && browser.slugForContents(contents.id);
     const owner = slug ? runtime.store.getBot(slug) : undefined;
-    if (!owner) { item.cancel(); return; }
+    if (!owner || closingDownloads) { item.cancel(); return; }
     const filename = item.getFilename() || "download";
-    const savePath = path.join(app.getPath("temp"), `xiaowang-${randomUUID()}-${filename}`);
-    item.setSavePath(savePath);
-    item.once("done", (_done, state) => {
-      if (state !== "completed") return;
-      try {
-        const bytes = readFileSync(savePath);
+    const task = receiveDownload(item, {
+      temporaryRoot: app.getPath("temp"),
+      onComplete(bytes) {
         const bot = runtime.store.getBot(owner.id);
         if (!bot) return;
         const added = runtime.store.addLibraryBytes(bot.id, filename, bytes);
         send("stage", { slug: bot.slug, mode: "file", id: added.ref.id, filename: added.ref.filename, page: 1 });
         send("download", { slug: bot.slug, id: added.ref.id, filename: added.ref.filename });
         publish();
-      } catch (error) {
+      },
+      onError(error) {
         const message = error instanceof Error ? error.message : String(error);
         send("download", { error: message });
-      }
+      },
     });
+    activeDownloads.add(task);
+    void task.done.then(() => activeDownloads.delete(task));
   });
 }
 
@@ -1030,6 +1033,14 @@ app.on("window-all-closed", () => {
 });
 app.on("before-quit", event => {
   if (settingsDirty && window && !window.isDestroyed()) { event.preventDefault(); send("settings:closeRequested", "quit"); return; }
+  if (activeDownloads.size) {
+    event.preventDefault();
+    if (!closingDownloads) {
+      closingDownloads = true;
+      void Promise.all([...activeDownloads].map(task => task.cancel())).then(() => app.quit());
+    }
+    return;
+  }
   for (const timer of updateTimers) clearInterval(timer);
   live?.hangup();
   jobs?.shutdown();
