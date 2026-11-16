@@ -117,6 +117,7 @@ test('desktop browser: IPC ownership, takeover UI, reload hydration and navigati
   const root = await mkdtemp(path.join(os.tmpdir(), 'xw-browser-ui-')); const profile = path.join(root, 'profile'); await mkdir(profile);
   const web = createServer((_request, response) => { response.writeHead(200, { 'content-type': 'text/html' }); response.end(fixtureHtml()); }); const url = await listen(web);
   const model = createServer(async (request, response) => {
+    if (request.url?.endsWith("/models")) { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ data: [] })); return; }
     let raw = ''; for await (const chunk of request) raw += chunk; const input = JSON.parse(raw);
     const navigated = input.messages.some(message => message.role === 'tool');
     response.writeHead(200, { 'content-type': 'application/json' });

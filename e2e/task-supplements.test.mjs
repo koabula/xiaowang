@@ -15,6 +15,7 @@ test('desktop sends supplements as chat, queues new work explicitly and plays on
   const first = deferred(), release = deferred();
   const requests = [];
   const server = createServer(async (req, res) => {
+    if (req.url?.endsWith("/models")) { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ data: [] })); return; }
     let body = ''; for await (const chunk of req) body += chunk;
     const input = JSON.parse(body); requests.push(input);
     if (requests.length === 1) { first.resolve(); await release.promise; }

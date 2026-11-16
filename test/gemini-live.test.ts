@@ -25,6 +25,7 @@ function fixture(patch: Partial<GeminiHandlers> = {}) {
 test("Gemini waits for setup, receives all audio parts and stops real playback at interruption/hangup", () => {
   const { session, socket, audio, interrupts, lines } = fixture();
   assert.throws(() => session.sendText("early"), /尚未就绪/);
+  assert.deepEqual(socket.sent[0]?.setup.contextWindowCompression, { triggerTokens: 32768, slidingWindow: { targetTokens: 16384 } });
   assert.equal(socket.sent[0]?.setup.tools[0].functionDeclarations[0].behavior, "NON_BLOCKING");
   socket.message({ setupComplete: {} });
   session.sendAudio(Buffer.alloc(320)); session.endAudio();

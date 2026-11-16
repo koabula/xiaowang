@@ -19,9 +19,9 @@ const overview = {
   nodes: [
     node('audio', 40, 150, 235, 100, '语音输入与播放', ['麦克风 PCM · Web Audio', '播放位置与空闲回执'], '渲染进程采集并发送 PCM，接收音频进入本地播放队列。应用通过实际播放回执安排后续讲解与挂断。', ['desktop/renderer/call-audio.ts', 'desktop/renderer/App.tsx']),
     node('call', 345, 150, 300, 100, '通话调度与协议适配', ['通话状态 · 工具路由 · 中断', '播放回执 · 结果通知'], '主进程连接 Realtime 服务，处理转写、调用身份、工具执行和音频生命周期。Gemini 使用专属通话类，其他当前开放的服务通过 LiveCall 及对应协议配置接入。', ['desktop/main/index.ts', 'desktop/main/call.ts', 'desktop/main/gemini-call.ts']),
-    node('realtime', 765, 150, 350, 100, 'Realtime 模型', ['Gemini · OpenAI · 千问 · 豆包', '语音对话与前台工具调用'], '模型接收语音、通话简报和动态上下文，生成语音并调用工具。复杂工作通过 delegate_task 委派到本地队列。各适配器负责对齐服务商原生事件与本地状态。', ['src/realtime.ts', 'src/gemini-live.ts', 'src/doubao-realtime.ts']),
+    node('realtime', 765, 150, 350, 100, 'Realtime 模型', ['Gemini · OpenAI · 千问 · 豆包', '32K 活跃窗口目标'], 'Gemini 32K → 16K 滑动；OpenAI 按指令开销配置历史限额。豆包/千问由服务端管理音频历史，应用限制注入内容。模型接收语音、通话简报和动态上下文，生成语音并调用工具。复杂工作通过 delegate_task 委派到本地队列。各适配器负责对齐服务商原生事件与本地状态。', ['src/realtime.ts', 'src/gemini-live.ts', 'src/doubao-realtime.ts']),
     node('text', 40, 365, 235, 100, '文字与附件输入', ['消息 · 图片 · 文档引用', '普通发送 / 排队新任务'], '文字通过 chat:ask 进入主进程。附件先导入当前 bot 的资料库，发送时带引用。普通发送优先补充当前活动任务，排队按钮显式创建另一任务。', ['desktop/renderer/message-composer.tsx', 'desktop/main/index.ts']),
-    node('queue', 345, 365, 300, 100, '任务队列与 Agent 循环', ['JobQueue → runTurn', '接收补充 · 构建输入 · 调用工具'], '同一 bot 串行执行，默认最多两个工作区并发。每轮在模型调用边界接收补充，通过上下文投影和工具结果循环推进任务。任务先持久化，再调度。', ['src/jobs.ts', 'src/harness.ts']),
+    node('queue', 345, 365, 300, 100, '任务队列与 Agent 循环', ['JobQueue → runTurn', '后台 128K 目标 · 自动适配模型'], '文字聊天、子 bot 和通话委派统一默认 128K，按接口模型元数据自动下调。同一 bot 串行执行，默认最多两个工作区并发。每轮在模型调用边界接收补充，通过上下文投影和工具结果循环推进任务。任务先持久化，再调度。', ['src/jobs.ts', 'src/harness.ts']),
     node('llm', 765, 365, 350, 100, '后台 LLM', ['OpenAI 兼容 / Anthropic 接口', '流式文本与工具调用'], '后台适配器使用请求中的 system、messages 和工具定义调用模型。返回文本或结构化工具调用，模型请求的工具由应用执行。', ['src/provider.ts', 'src/stream.ts']),
     node('view', 40, 580, 235, 100, '资料与展示界面', ['PDF.js · HTML Canvas', '页面位置与展示回执'], '界面报告真实可见页面和匹配的图像帧。show_stage 需要页面展示回执；支持视觉的通话接收已发送图片以及图片或 PDF 当前页。', ['desktop/renderer/document-reader.tsx', 'desktop/renderer/canvas-pager.ts', 'desktop/main/index.ts']),
     node('shared', 345, 580, 300, 100, '每个 bot 的共享上下文', ['当前消息 · 可见页面 · 最近任务', 'revision / viewRevision'], 'SharedContexts 按 bot 保存快照。主进程将其更新到通话，任务在受理或接收补充时复制对应快照。独立页面版本帮助拒收迟到画面。', ['src/shared-context.ts', 'src/visual-queue.ts', 'desktop/main/index.ts'], 'teal'),
@@ -154,7 +154,7 @@ const layers = {
     node('history', 170, 375, 350, 84, '03 · 历史消息块', ['用户 / 助手 / 完整工具调用与结果'], '按来源事件投影并追加，正常轮次追加消息，达到水位才调整视图。工具调用和对应返回构成一个单元，在重投影时作为一个单元处理。', ['src/project.ts', 'src/context-manager.ts']),
     node('index', 170, 480, 350, 84, '02 · 历史索引与引用', ['归档事件范围 · 固定摘录 · 读取入口'], '历史归档后出现索引层，提供事件范围、数量与历史反查入口。原文仍保存在事件流中。大工具结果采用固定首段摘录，或把整个工具单元替换为可读取的事件引用。', ['src/context-manager.ts', 'src/event-projection.ts', 'src/types.ts'], 'teal'),
     node('stable', 170, 585, 350, 84, '01 · 稳定前缀', ['人设与工作区规则 · 工具定义'], 'system 与 tools 在相同 bot、接口/模型、身份与预算作用域中保持稳定。任务说明、术语和资料目录进入尾部状态块。工具通过独立 API 字段传递，此图展示逻辑层次。', ['src/project.ts', 'src/runtime.ts', 'src/provider.ts']),
-    node('reserve', 640, 690, 450, 83, '输出与安全余量另行预留', ['研究档：8,192 输出 + 4,096 安全'], '预算在最终图像装配后检查，同时覆盖 system、tools、messages、图片、输出预留与安全余量。预留空间不作为历史消息发送。', ['src/token-budget.ts']),
+    node('reserve', 640, 690, 450, 83, '输出与安全余量另行预留', ['后台自动预算：8,192 输出 + 4,096 安全'], '预算在最终图像装配后检查，同时覆盖 system、tools、messages、图片、输出预留与安全余量。预留空间不作为历史消息发送。', ['src/token-budget.ts']),
   ].map(item => item.id === 'reserve' ? item : { ...item, shape: 'slice' }),
   edges: [], paths: { all: [], prefix: ['stable', 'index', 'history'], tail: ['state', 'input'], memory: ['index', 'history', 'reserve'] },
 };
@@ -202,16 +202,16 @@ const prefix = {
   paths: { all: [], epoch: ['second', 'third'], metrics: ['estimate', 'actual'] },
 };
 const budget = {
-  title: '预算、水位与确定性重投影', subtitle: '研究档：总窗口 131,072；输入低 32,768 / 高 98,304，曲线为示意值', height: 900,
+  title: '预算、水位与确定性重投影', subtitle: '后台自动预算：总窗口 131,072；输入低 32,768 / 高 98,304，曲线为示意值', height: 900,
   defaultNode: 'high', viewNodes: { rebuild: 'checkpoint', accounting: 'input' },
   nodes: [
-    node('input', 40, 145, 620, 94, '输入可用空间 118,784', ['system + tools + messages + images'], '研究档总窗口 131,072 减去输出 8,192 和安全余量 4,096，输入容量 118,784。保守默认档仍为总窗口 32,768，输入容量 26,624。模型上限约束实际预算。实际请求超过硬上限时不会发送任务推理。', ['src/token-budget.ts']),
-    node('output', 685, 145, 200, 94, '输出 8,192', ['含 thinking'], '输出预留独立配置并包含 thinking。max_tokens 耗尽时保留记录、报告未完成，本步工具不执行。投影器不发起摘要请求。', ['src/provider.ts', 'src/token-budget.ts']),
-    node('safety', 910, 145, 210, 94, '安全 4,096', ['协议 / 估算余量'], '为协议封装、tokenizer 差异和计数偏差保留安全空间。图片本地计数每张预留 8,192，可通过环境变量调整。', ['src/token-budget.ts'], 'teal'),
+    node('input', 40, 145, 620, 94, '输入可用空间 118,784', ['system + tools + messages + images'], '后台目标总窗口 131,072 减去输出 8,192 和安全余量 4,096，输入容量 118,784。文字聊天、子 bot、通话委派共用策略。服务端元数据约束实际预算；未知部署回退 32K。实际请求超过硬上限时不会发送任务推理。', ['src/token-budget.ts']),
+    node('output', 685, 145, 200, 94, '输出 8,192', ['含 thinking'], '输出预留自动受模型能力约束，并包含 thinking。max_tokens 耗尽时保留记录、报告未完成，本步工具不执行。投影器不发起摘要请求。', ['src/provider.ts', 'src/token-budget.ts']),
+    node('safety', 910, 145, 210, 94, '安全 4,096', ['协议 / 估算余量'], '为协议封装、tokenizer 差异和计数偏差保留安全空间。图片本地计数每张预留 8,192，计入输入预算。', ['src/token-budget.ts'], 'teal'),
     { ...node('start', 155, 540, 0, 0, '24,000', [], '示意初始输入。正常轮次保留已有前缀，追加新的对话、工具结果与状态。', ['src/context-manager.ts']), shape: 'point' },
     { ...node('grow', 345, 476, 0, 0, '50,000', [], '输入逐步增长，不按固定最近 N 条截断；完整工具结果参与预算。', ['src/context-manager.ts']), shape: 'point' },
-    { ...node('high', 535, 360, 0, 0, '100,000', [], '研究档输入超过独立高水位 98,304 时触发确定性重投影。水位可独立配置，改变输出预留不会按比例移动它；显式水位必须落在输入容量内。', ['src/context-manager.ts', 'src/token-budget.ts'], 'orange'), shape: 'point' },
-    { ...node('reduced', 725, 525, 0, 0, '30,000', [], '研究档以独立低水位 32,768 为目标选择旧块，保留当前任务输入、最新状态与最后的对话单元。结果须在硬上限内且比原输入小；必要内容较大时可以高于目标。', ['src/context-manager.ts'], 'teal'), shape: 'point' },
+    { ...node('high', 535, 360, 0, 0, '100,000', [], '后台输入超过独立高水位 98,304 时触发确定性重投影。较小模型自动降低高低水位，模型能力改变时建立新投影作用域。', ['src/context-manager.ts', 'src/token-budget.ts'], 'orange'), shape: 'point' },
+    { ...node('reduced', 725, 525, 0, 0, '30,000', [], '后台以独立低水位 32,768 为目标选择旧块，保留当前任务输入、最新状态与最后的对话单元。结果须在硬上限内且比原输入小；必要内容较大时可以高于目标。', ['src/context-manager.ts'], 'teal'), shape: 'point' },
     { ...node('next', 915, 445, 0, 0, '62,000', [], '检查点提交后进入新周期，正常尾部继续追加。下一次触及高水位才再次调整投影。', ['src/context-manager.ts']), shape: 'point' },
     node('index', 40, 680, 310, 120, '01 · 选择与折叠', ['最新状态 + 当前要求 + 工作片段', '固定摘录 + 可读取的原文引用'], '纯函数 rebuildProjection 先移除被取代的旧状态，再为较旧工具结果生成固定摘录，最后按已结束任务优先、其余较旧单元顺序归档。原始事件不修改。', ['src/context-manager.ts']),
     node('validate', 425, 680, 310, 120, '02 · 校验与保留', ['最新要求 · 完整工具单元', '来源引用 / 上限 / 缩小幅度校验'], '当前任务输入与连续补充、每个键的最新状态、最后一个对话单元保留。固定工具摘录保留调用与结果配对；取消或无法满足硬预算时不提交新检查点。', ['src/context-manager.ts', 'test/context-manager.test.ts']),
@@ -348,7 +348,7 @@ function renderDiagram(id, config) {
     svg.append(element('path', { class: `wire ${kind}`, d: `M${x} ${footerY - 5}h28` }));
     svg.append(element('text', { class: 'footer', x: x + 39, y: footerY }, label));
   });
-  svg.append(element('text', { class: 'footer', x: 1120, y: footerY, 'text-anchor': 'end' }, '小王同学 · v0.1.17'));
+  svg.append(element('text', { class: 'footer', x: 1120, y: footerY, 'text-anchor': 'end' }, '小王同学 · v0.1.18'));
   figure.querySelector('.diagram-scroll').append(svg);
   const state = { id, config, figure, svg, view: figure.querySelector('[data-view][aria-pressed=true]').dataset.view, step: -1, timer: null };
   diagrams.set(id, state);

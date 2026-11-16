@@ -30,6 +30,7 @@ test('desktop: MOSS native audio, interruption, tools, durable delegation, spoke
   const seed = Runtime.open(home); const ref = seed.store.addLibraryBytes(seed.activeBot().id, 'research-methods.pdf', pdf()).ref; seed.close();
   const gate = deferred(), cancelGate = deferred(), lateGate = deferred(); let read = false, cancelStarted = false, lateStarted = false, requests = 0;
   const model = createServer(async (request, response) => {
+    if (request.url?.endsWith("/models")) { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ data: [] })); return; }
     let raw = ''; for await (const chunk of request) raw += chunk;
     const input = JSON.parse(raw); requests++;
     const user = input.messages.findLast(message => message.role === 'user');

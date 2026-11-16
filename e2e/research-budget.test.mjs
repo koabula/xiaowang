@@ -7,11 +7,12 @@ import path from 'node:path';
 import { _electron as electron } from 'playwright';
 import { closeTestApp } from './launch.mjs';
 
-test('research budgets save, validate, restore and apply to a real desktop thinking/tool loop', { timeout: 60000 }, async t => {
+test('legacy budgets disappear and automatic limits apply to the desktop thinking/tool loop', { timeout: 60000 }, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'xw-research-budget-'));
   const profile = path.join(root, 'profile'); await mkdir(profile);
   const bodies = [];
   const server = createServer(async (req, res) => {
+    if (req.method === 'GET') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: [{ id: 'deepseek-fixture', context_length: 131072 }] })); return; }
     let raw = ''; for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw); bodies.push(body);
     const prior = body.messages.find(m => m.role === 'tool');
@@ -21,32 +22,21 @@ test('research budgets save, validate, restore and apply to a real desktop think
     res.end(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: prior ? 'stop' : 'tool_calls' }] })}\n\ndata: [DONE]\n\n`);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  await writeFile(path.join(profile, 'secrets.bin'), JSON.stringify({ baseUrl: `http://127.0.0.1:${server.address().port}/v1`, model: 'deepseek-fixture', apiKey: 'local', locale: 'zh' }));
+  await writeFile(path.join(profile, 'secrets.bin'), JSON.stringify({ baseUrl: `http://127.0.0.1:${server.address().port}/v1`, model: 'deepseek-fixture', apiKey: 'local', locale: 'zh', contextProfile: 'conservative', contextOutput: '12000', contextWindow: '32768' }));
   const env = { ...process.env, XIAOWANG_HOME: path.join(root, 'home'), XIAOWANG_USER_DATA: profile, XIAOWANG_DISABLE_UPDATES: '1' }; delete env.ELECTRON_RUN_AS_NODE;
   let app, page; const errors = [];
   const launch = async () => { app = await electron.launch({ args: ['--no-sandbox', 'desktop/dist/main.js'], env }); page = await app.firstWindow(); page.on('pageerror', error => errors.push(error.message)); await page.locator('.composer').waitFor(); };
   t.after(async () => { if (app) await closeTestApp(app); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true, maxRetries: 10 }); });
   await launch(); await page.locator('button.settings').click();
   const form = page.getByRole('form', { name: '设置', exact: true });
-  assert.equal(await form.locator('.research-budget').getAttribute('open'), null);
-  await form.locator('.research-budget summary').click();
-  await form.getByRole('combobox', { name: '预算档', exact: true }).click();
-  await page.getByRole('option', { name: '研究 · 128K', exact: true }).click();
-  await form.getByRole('textbox', { name: '模型窗口上限', exact: true }).fill('131072');
-  await form.getByRole('textbox', { name: '高水位（输入）', exact: true }).fill('90000');
-  await form.getByRole('textbox', { name: '低水位目标（输入）', exact: true }).fill('95000');
-  await form.getByRole('button', { name: '保存并进入', exact: true }).click();
-  await form.getByText('上下文预算配置无效，请为输入、输出和安全余量留出空间。', { exact: true }).waitFor();
-  await form.getByRole('textbox', { name: '低水位目标（输入）', exact: true }).fill('24000');
-  await form.getByRole('textbox', { name: '输出预留（含 thinking）', exact: true }).fill('12000');
-  await page.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-research-budget-settings.png') });
+  assert.equal(await form.locator('.research-budget').count(), 0);
   await form.getByRole('button', { name: '保存并进入', exact: true }).click(); await form.waitFor({ state: 'detached' });
   await closeTestApp(app); app = null; await launch();
   const saved = (await page.evaluate(() => window.xiaowang.getState())).settings;
-  assert.equal(saved.contextProfile, 'research'); assert.equal(saved.contextHighWater, '90000'); assert.equal(saved.contextLowWater, '24000');
+  assert.equal(saved.contextProfile, undefined); assert.equal(saved.contextOutput, undefined);
   const textarea = page.locator('.composer textarea'); await textarea.fill('请查看文件'); await textarea.press('Enter');
   await page.getByText('RESEARCH-COMPLETE', { exact: true }).waitFor();
-  assert.equal(bodies.length, 2); assert.ok(bodies.every(body => body.max_tokens === 12000));
+  assert.equal(bodies.length, 2); assert.ok(bodies.every(body => body.max_tokens === 8192));
   const native = bodies[1].messages.find(m => m.role === 'assistant');
   assert.equal(native.reasoning_content, '先检查文件'); assert.equal(native.tool_calls[0].id, 'native-list');
   assert.equal(bodies[1].messages.find(m => m.role === 'tool').tool_call_id, 'native-list');

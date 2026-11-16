@@ -1,3 +1,4 @@
+import { resolveModelLimits } from "./model-limits.ts";
 import type { CompletionRequest, CompletionResult, LlmProvider, ModelMessage, ModelUsage, ToolSchema, AssistantProtocol, HistoryPolicy } from "./types.ts";
 import { contextPolicy, type ContextPolicy } from "./token-budget.ts";
 import { replayHistory } from "./protocol-history.ts";
@@ -48,7 +49,10 @@ export function historyPolicy(config: ProviderConfig): HistoryPolicy {
 
 export function createProvider(config: ProviderConfig): LlmProvider {
   const history = historyPolicy(config);
-  return {
+  const provider: LlmProvider = {
+    async resolveContextPolicy(signal) {
+      provider.contextPolicy = contextPolicy({}, await resolveModelLimits(config, signal));
+    },
     historyPolicy: history,
     model: config.model,
     contextKey: history.key,
@@ -80,6 +84,7 @@ export function createProvider(config: ProviderConfig): LlmProvider {
       }
     },
   };
+  return provider;
 }
 
 export function openaiChatUrl(baseUrl: string): string {

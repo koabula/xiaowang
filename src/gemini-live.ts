@@ -91,7 +91,7 @@ export class GeminiLive {
           systemInstruction: { parts: [{ text: this.config.instructions }] },
           inputAudioTranscription: {}, outputAudioTranscription: {},
           sessionResumption: this.handle ? { handle: this.handle } : {},
-          contextWindowCompression: { slidingWindow: {} },
+          contextWindowCompression: { triggerTokens: 32_768, slidingWindow: { targetTokens: 16_384 } },
           realtimeInputConfig: { automaticActivityDetection: { silenceDurationMs: 450 }, activityHandling: "START_OF_ACTIVITY_INTERRUPTS" },
           ...(this.config.tools?.length ? { tools: [{ functionDeclarations: this.config.tools }] } : {}),
         } });

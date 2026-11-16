@@ -27,6 +27,7 @@ test('desktop: chat stays clean; voice work and results live only inside their c
   seed.close();
   let failedChatOnce = false;
   const model = createServer(async (request, response) => {
+    if (request.url?.endsWith("/models")) { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ data: [] })); return; }
     let body = ''; for await (const chunk of request) body += chunk;
     const input = JSON.parse(body); const text = input.messages.findLast(message => message.role === 'user')?.content || '';
     if (text.includes('失败聊天测试') && !failedChatOnce) {

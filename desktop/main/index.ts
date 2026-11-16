@@ -1,4 +1,3 @@
-import { contextPolicy } from "../../src/token-budget.ts";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, protocol, session, shell } from "electron";
 import { mkdirSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -607,7 +606,6 @@ function registerIpc(): void {
   ipcMain.handle("settings:save", (_event, patch: SecretPatch) => {
     const draft = mergeSettings(secrets, patch);
     assertRealtimeAvailable(draft.realtimeService);
-    contextPolicy(envFromRecord(draft));
     secrets = mergeSecrets(secrets, patch);
     publish();
     return settingsView();

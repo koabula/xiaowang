@@ -151,6 +151,7 @@ export interface CompletionResult {
 }
 
 export interface LlmProvider {
+  resolveContextPolicy?: (signal?: AbortSignal) => Promise<void>;
   historyPolicy?: HistoryPolicy;
   contextKey?: string;
   contextPolicy?: import("./token-budget.ts").ContextPolicy;

@@ -51,6 +51,7 @@ test("desktop: voice interruption, PDF Viewer, bot files, settings and saved sta
   const firstTextGate = new Promise(resolve => { releaseFirstText = resolve; });
   let textRequests = 0;
   const model = createServer(async (request, response) => {
+    if (request.url?.endsWith("/models")) { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ data: [] })); return; }
     let body = ""; for await (const chunk of request) body += chunk;
     const input = JSON.parse(body);
     assert.equal(input.stream, true);

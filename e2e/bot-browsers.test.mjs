@@ -70,6 +70,7 @@ test('desktop bots browse concurrently and switching restores scoped UI and cont
   }); const base = await listen(web);
   let releaseParent = () => {}; let parentWaiting = false;
   const model = createServer(async (req, res) => {
+    if (req.url?.endsWith("/models")) { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ data: [] })); return; }
     let raw = ''; for await (const chunk of req) raw += chunk; const body = JSON.parse(raw);
     const childRequest = body.messages.some(m => m.role === 'user' && typeof m.content === 'string' && m.content.includes('child-browse'));
     const navigated = body.messages.some(m => m.role === 'tool');

@@ -29,6 +29,7 @@ test('actual clipboard paste, attachments, vision payloads, bot isolation, error
   const root = await mkdtemp(path.join(os.tmpdir(), 'xw-attachment-')), profile = path.join(root, 'profile'); await mkdir(profile);
   const requests = []; let failure = false;
   const server = createServer(async (req, res) => {
+    if (req.url?.endsWith("/models")) { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ data: [] })); return; }
     let raw = ''; for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw); requests.push(body);
     assert.ok(body.tools?.some(tool => (tool.function?.name ?? tool.name) === "inspect_event"), "Only task requests are sent; history lookup is available");

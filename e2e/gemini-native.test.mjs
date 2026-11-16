@@ -20,6 +20,7 @@ test('Gemini production call: native tools, playback continuation, reconnect, du
   let release; const gate = new Promise(resolve => { release = resolve; });
   const modelRequests = [];
   const model = createServer(async (req, res) => {
+    if (req.url?.endsWith("/models")) { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ data: [] })); return; }
     let raw = ''; for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw); modelRequests.push(body); res.writeHead(200, { 'content-type': 'text/event-stream' });
     if (body.messages.some(item => item.role === 'tool' && item.content.includes('notes/native.md'))) res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'GEMINI-NATIVE-RESULT' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);

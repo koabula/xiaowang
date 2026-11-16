@@ -1,3 +1,4 @@
+import { textTokens } from "./token-budget.ts";
 import type { Locale } from "./locale.ts";
 import type { ToolSchema } from "./types.ts";
 
@@ -211,6 +212,12 @@ export function realtimeInstructions(personName: string, brief: string, locale: 
   ].join("\n");
 }
 
+export function openaiTruncation(instructions: string, tools: unknown): Record<string, unknown> {
+  const overhead = Math.ceil(textTokens(JSON.stringify([instructions, tools])) * 1.2);
+  return { type: "retention_ratio", retention_ratio: 0.5,
+    token_limits: { post_instructions: Math.max(1024, 32_768 - 4096 - overhead) } };
+}
+
 export function sessionUpdate(options: {
   instructions: string;
   tools: ToolSchema[];
@@ -226,6 +233,7 @@ export function sessionUpdate(options: {
   if (family === "openai") return {
     type: "session.update",
     session: {
+      truncation: openaiTruncation(options.instructions, tools),
       type: "realtime", output_modalities: ["audio"], instructions: options.instructions, tools,
       audio: {
         input: { format: { type: "audio/pcm", rate: 24_000 }, transcription: { model: options.transcriptionModel || "gpt-4o-mini-transcribe" }, turn_detection: { type: "server_vad", threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 600, create_response: false, interrupt_response: false } },

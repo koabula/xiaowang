@@ -14,7 +14,7 @@ export interface ContextPolicy {
 }
 
 export const DEFAULT_CONTEXT_POLICY: ContextPolicy = {
-  windowTokens: 32_768, outputTokens: 4_096, safetyTokens: 2_048,
+  windowTokens: 131_072, outputTokens: 8_192, safetyTokens: 4_096,
   imageTokens: 8_192, highWater: 0.85, lowWater: 0.55,
 };
 
@@ -54,32 +54,20 @@ export function textTokens(text: string): number {
   return count;
 }
 
-export function contextPolicy(env: NodeJS.ProcessEnv = process.env): ContextPolicy {
-  const profile = env.XIAOWANG_CONTEXT_PROFILE || "conservative";
-  if (profile !== "conservative" && profile !== "research") throw new Error("XIAOWANG_CONTEXT_PROFILE 只能是 conservative 或 research。");
-  const policy: ContextPolicy = profile === "research"
-    ? { ...DEFAULT_CONTEXT_POLICY, windowTokens: 131_072, outputTokens: 8_192, safetyTokens: 4_096 }
-    : { ...DEFAULT_CONTEXT_POLICY };
-  for (const [field, variable] of [
-    ["windowTokens", "XIAOWANG_CONTEXT_WINDOW"], ["outputTokens", "XIAOWANG_MAX_OUTPUT_TOKENS"],
-    ["safetyTokens", "XIAOWANG_CONTEXT_SAFETY_TOKENS"], ["imageTokens", "XIAOWANG_IMAGE_TOKEN_BUDGET"],
-    ["highWaterTokens", "XIAOWANG_CONTEXT_HIGH_WATER_TOKENS"], ["lowWaterTokens", "XIAOWANG_CONTEXT_LOW_WATER_TOKENS"],
-  ] as const) {
-    if (!env[variable]?.trim()) continue;
-    const value = Number(env[variable]);
-    if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${variable} 必须是正整数。`);
-    policy[field] = value;
-  }
-  if (env.XIAOWANG_MODEL_CONTEXT_WINDOW?.trim()) {
-    const cap = Number(env.XIAOWANG_MODEL_CONTEXT_WINDOW);
-    if (!Number.isSafeInteger(cap) || cap <= 0) throw new Error("XIAOWANG_MODEL_CONTEXT_WINDOW 必须是正整数。");
-    policy.windowTokens = Math.min(policy.windowTokens, cap);
-  }
-  if (profile === "research") {
-    const capacity = inputCapacity(policy);
-    policy.highWaterTokens ??= capacity >= 98_304 ? 98_304 : Math.floor(capacity * policy.highWater);
-    policy.lowWaterTokens ??= 32_768 < policy.highWaterTokens ? 32_768 : Math.floor(policy.highWaterTokens * policy.lowWater);
-  }
+export interface ModelLimits { context?: number; input?: number; output?: number }
+
+/** Old environment/desktop budget overrides are intentionally ignored. */
+export function contextPolicy(_env: NodeJS.ProcessEnv = process.env, limits?: ModelLimits): ContextPolicy {
+  const windowTokens = Math.min(131_072, limits?.context ?? 131_072);
+  const outputTokens = Math.min(8_192, limits?.output ?? 8_192, Math.floor(windowTokens / 4));
+  const safetyTokens = Math.min(4_096, Math.floor(windowTokens / 16));
+  const capacity = Math.min(windowTokens - outputTokens - safetyTokens, limits?.input ?? Infinity);
+  const high = Math.min(98_304, Math.floor(capacity * 0.85));
+  const policy: ContextPolicy = {
+    ...DEFAULT_CONTEXT_POLICY, windowTokens: capacity + outputTokens + safetyTokens,
+    outputTokens, safetyTokens, highWaterTokens: high,
+    lowWaterTokens: high > 32_768 ? 32_768 : Math.floor(high * 0.55),
+  };
   validatePolicy(policy);
   return policy;
 }

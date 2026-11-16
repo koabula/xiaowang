@@ -38,6 +38,10 @@ test("provider-specific session configuration and audio rates", () => {
   const q = sessionUpdate({ instructions: "小王", tools, audioFormat: "pcm", transcriptionModel: qwen.transcriptionModel }).session as any;
   assert.equal(q.tools[0].function.name, "read_file"); assert.equal(q.audio.input.format.sample_rate, 16000);
   const o = sessionUpdate({ instructions: "小王", tools, audioFormat: "pcm16", transcriptionModel: "gpt-4o-mini-transcribe" }).session as any;
+  assert.equal(o.truncation.type, "retention_ratio");
+  assert.equal(o.truncation.retention_ratio, 0.5);
+  assert.ok(o.truncation.token_limits.post_instructions < 32768 - 4096);
+  assert.equal(q.truncation, undefined);
   assert.equal(o.type, "realtime"); assert.deepEqual(o.output_modalities, ["audio"]); assert.equal(o.tools[0].name, "read_file");
   assert.equal(o.audio.input.turn_detection.create_response, false); assert.equal(o.audio.input.turn_detection.interrupt_response, false);
   assert.equal(realtimeEndpoint({ url: "wss://api.openai.com/v1/realtime" }).inputRate, 24000);

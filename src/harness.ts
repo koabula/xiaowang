@@ -101,6 +101,7 @@ export async function runTurn(runtime: Runtime, options: RunTurnOptions): Promis
 }
 
 async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<TurnResult> {
+  await options.provider.resolveContextPolicy?.(options.signal);
   const bot = runtime.store.requireBot(options.botId);
   const maxSteps = options.maxSteps ?? QUIET_STEP_CAP;
   // Only explicitly addressed supplements enter this turn. Other calls and jobs stay isolated.

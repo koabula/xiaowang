@@ -144,7 +144,7 @@ export class ContextManager {
       }
     }
     signal?.throwIfAborted();
-    if (budget.total > budget.window) throw new Error(`本次输入超出上下文预算（估计/计数输入 ${budget.input}，可用 ${capacity} tokens）。请减少单次附件或原文范围，或调整模型上下文配置。原始事件与当前投影已保留。`);
+    if (budget.total > budget.window) throw new Error(`本次输入超出上下文预算（估计/计数输入 ${budget.input}，可用 ${capacity} tokens）。请减少单次附件或原文范围，或选用支持更大窗口的模型。原始事件与当前投影已保留。`);
     return { request, budget };
   }
 

@@ -224,7 +224,7 @@ test("an archived tool result remains readable through the actual agent tool loo
   const event = runtime.store.append(bot.id, { type: "tool_result", assistantEventId: call.id, callId: "old", name: "read_document", output: original, isError: false });
   seed(runtime, bot.id, 60);
   let calls = 0;
-  const provider: LlmProvider = { model: "test", async complete(request) {
+  const provider: LlmProvider = { model: "test", contextPolicy: { ...DEFAULT_CONTEXT_POLICY, windowTokens: 32768, outputTokens: 4096, safetyTokens: 2048 }, async complete(request) {
     assert.ok(request.tools.some(tool => tool.name === "inspect_event"));
     if (calls++ === 0) {
       assert.ok(!request.messages.some(message => message.content.includes("EXACT-END-VALUE-731")));

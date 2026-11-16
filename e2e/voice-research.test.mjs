@@ -38,6 +38,7 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
   const seed = Runtime.open(home); const ref = seed.store.addLibraryBytes(seed.activeBot().id, 'paper.pdf', pdf()).ref; seed.close();
   const gates = { voice: deferred(), text: deferred() }; const waiting = new Set();
   const model = createServer(async (request, response) => {
+    if (request.url?.endsWith("/models")) { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ data: [] })); return; }
     let raw = ''; for await (const chunk of request) raw += chunk;
     const input = JSON.parse(raw);
     assert.ok(input.tools?.some(tool => (tool.function?.name ?? tool.name) === "inspect_event"), "Only task requests are sent; history lookup is available");

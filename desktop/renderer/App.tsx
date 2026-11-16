@@ -944,11 +944,6 @@ function SettingsPanel({
   const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? "");
   const [apiStyle, setApiStyle] = useState(settings?.apiStyle ?? "");
   const [apiKey, setApiKey] = useState("");
-  const [context, setContext] = useState(() => ({
-    contextProfile: settings?.contextProfile ?? "", contextWindow: settings?.contextWindow ?? "",
-    contextHighWater: settings?.contextHighWater ?? "", contextLowWater: settings?.contextLowWater ?? "",
-    contextOutput: settings?.contextOutput ?? "", contextSafety: settings?.contextSafety ?? "", modelContextWindow: settings?.modelContextWindow ?? "",
-  }));
   const [service, setService] = useState<RealtimeServiceId>(saved.service);
   const [realtimeModel, setRealtimeModel] = useState(saved.model);
   const [voice, setVoice] = useState(saved.voice);
@@ -968,7 +963,6 @@ function SettingsPanel({
   const [previewing, setPreviewing] = useState(false);
   const previewAudio = useRef(createCallAudio(() => {}, (serial, callId) => window.xiaowang.callIdle(serial, callId), position => window.xiaowang.callPosition(position), position => window.xiaowang.callChunkPlayed(position)));
   const patch: SettingsPatch = {
-    ...context,
     model,
     baseUrl,
     apiStyle,
@@ -1143,24 +1137,7 @@ function SettingsPanel({
               <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="deepseek-chat" />
             )}
           </label>
-          <details className="research-budget">
-            <summary>{locale === "en" ? "Research context budget" : "研究上下文预算"}<span>{context.contextProfile === "research" ? "128K" : "32K"}</span></summary>
-            <FieldSelect label={locale === "en" ? "Budget profile" : "预算档"} value={context.contextProfile || "conservative"} onChange={value => setContext(current => ({ ...current, contextProfile: value }))} options={[
-              { value: "conservative", label: locale === "en" ? "Conservative · 32K" : "保守 · 32K" },
-              { value: "research", label: locale === "en" ? "Research · 128K" : "研究 · 128K" },
-            ]} />
-            <div className="budget-fields">
-              {([
-                ["modelContextWindow", "模型窗口上限", "Model limit", ""],
-                ["contextWindow", "总窗口", "Total window", context.contextProfile === "research" ? "131072" : "32768"],
-                ["contextHighWater", "高水位（输入）", "High watermark", context.contextProfile === "research" ? "98304" : "22630"],
-                ["contextLowWater", "低水位目标（输入）", "Low target", context.contextProfile === "research" ? "32768" : "14643"],
-                ["contextOutput", "输出预留（含 thinking）", "Output incl. thinking", context.contextProfile === "research" ? "8192" : "4096"],
-                ["contextSafety", "安全余量", "Safety reserve", context.contextProfile === "research" ? "4096" : "2048"],
-              ] as const).map(([key, zh, en, placeholder]) => <label key={key}>{locale === "en" ? en : zh}<input aria-label={locale === "en" ? en : zh} inputMode="numeric" value={context[key]} placeholder={placeholder || (locale === "en" ? "Provider's limit" : "服务商标注的上限")} onChange={event => setContext(current => ({ ...current, [key]: event.target.value }))} /></label>)}
-            </div>
-            <p>{locale === "en" ? "Blank fields use the profile or launch configuration. Use a window supported by your model. Realtime calls have a separate budget." : "留空沿用预算档或启动配置。请按模型支持的窗口设置；Realtime 通话单独管理。"}</p>
-          </details>
+
         </section>
         <section>
           <h2><AudioLines size={16} strokeWidth={1.75} />{copy.callSection}</h2>
