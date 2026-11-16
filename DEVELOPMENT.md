@@ -11,6 +11,7 @@
 | `desktop/renderer/` | React UI, audio playback, PDF.js Viewer and Canvas adapters |
 | `test/` | Core and protocol regression tests |
 | `e2e/` | Real Electron interaction and audio tests with isolated local fixtures |
+| `e2e/native/` | Explicit OS focus, system clipboard and installer/restart checks |
 | `.github/workflows/desktop.yml` | Checks and three-platform installer builds |
 
 ## Local configuration
@@ -31,6 +32,16 @@ Use the app's Settings panel for normal use. Environment overrides remain in mem
 | `XIAOWANG_USER_DATA` | Electron configuration directory |
 
 Use `npm run preview` for a UI-only browser preview or `npm run xiaowang -- help` for the CLI. Desktop tests use synthetic microphone input and local mock services; they never need real model keys. Real-provider checks should additionally cover a short conversation, interruptions, tool use and reconnects.
+
+## Desktop tests without taking over your workspace
+
+`npm run test:desktop` runs the regular suite sequentially in hidden, non-focusable Electron windows. PDF and UI rendering continue in the background, audio output is muted, and system clipboard reads/writes are blocked before accessing user data. Each app's cleanup checks that no window was shown or focused and no clipboard operation was attempted. Playwright's DOM focus and keyboard events still exercise the rendered UI; these do not establish OS-level focus or shortcut behavior.
+
+All regular tests import `electron` from `e2e/launch.mjs`, including restarts. Temporary Electron fixtures also use `testWindowOptions()` from `desktop/main/test-mode.ts`. The launcher supplies an internal process flag; it is not a user preference and is never saved. `npm run desktop` and normal app startup retain their existing behavior.
+
+`npm run test:desktop:native` is a separate suite for a dedicated desktop or CI: it deliberately activates windows and uses the system clipboard. It retains real clipboard shortcuts, browser mouse/keyboard/IME control, single-instance window activation, and installer/restart checks. The provider files named `*-native.test.mjs` in the regular suite test native model protocols, and continue to run in the background.
+
+CI runs both suites under separate Xvfb desktops. Local background results must not be reported as verification of native OS focus, clipboard shortcuts or installer behavior. Use `XIAOWANG_SCREENSHOT_DIR` to retain background UI captures when inspecting rendering.
 
 ## Realtime provider checks
 
@@ -150,7 +161,7 @@ Optional Actions secrets:
 | macOS notarization | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` |
 | Windows signing | `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` |
 
-Without signing secrets, macOS CI explicitly uses a complete ad-hoc signature (`identity: "-"`). Its separate entitlement file enables JIT, microphone input and disabled library validation while retaining hardened runtime. Certificate-backed builds use the original entitlements. Before uploading, macOS CI extracts both ZIPs, mounts both DMGs, verifies deep/strict signatures and sealed resources for both architectures, and launches the native architecture from each artifact with a fresh profile. It verifies the rendered settings screen, packaged version and post-launch signature. This integrity/startup check does not establish Apple developer trust or notarization; first Internet-downloaded launches may still require approval in Privacy & Security. Run it locally after `npm run dist:mac -- --x64 --arm64` with `XIAOWANG_MAC_RELEASE_DIR=release node --test e2e/mac-release.test.mjs`.
+Without signing secrets, macOS CI explicitly uses a complete ad-hoc signature (`identity: "-"`). Its separate entitlement file enables JIT, microphone input and disabled library validation while retaining hardened runtime. Certificate-backed builds use the original entitlements. Before uploading, macOS CI extracts both ZIPs, mounts both DMGs, verifies deep/strict signatures and sealed resources for both architectures, and launches the native architecture from each artifact with a fresh profile. It verifies the rendered settings screen, packaged version and post-launch signature. This integrity/startup check does not establish Apple developer trust or notarization; first Internet-downloaded launches may still require approval in Privacy & Security. Run it locally after `npm run dist:mac -- --x64 --arm64` with `XIAOWANG_MAC_RELEASE_DIR=release node --test e2e/native/mac-release.test.mjs`.
 
 ## Message attachments
 
