@@ -87,11 +87,16 @@ test('actual clipboard paste, attachments, vision payloads, bot isolation, error
       assert.equal(await page.locator('.bot-title-name').evaluate(n => n.scrollWidth > n.clientWidth), true);
       const layout = await page.locator('.thread > header').evaluate(n => {
         const header = n.getBoundingClientRect(), title = n.querySelector('.bot-title').getBoundingClientRect();
+        const messages = document.querySelector('.messages').getBoundingClientRect();
+        const firstMessage = document.querySelector('.conversation-entry').getBoundingClientRect();
         return { centered: Math.abs((title.left + title.right - header.left - header.right) / 2) < 1,
           noOverlap: title.right < n.querySelector('.stage-toggle').getBoundingClientRect().left,
-          contained: title.top >= header.top && title.bottom <= header.bottom };
+          contained: title.top >= header.top && title.bottom <= header.bottom,
+          floating: Math.abs(header.top - messages.top) < 1 && firstMessage.top >= header.bottom,
+          contentInteractive: !document.elementFromPoint(header.left + 2, header.top + header.height / 2)?.closest('header'),
+          titleInteractive: Boolean(document.elementFromPoint(title.left + title.width / 2, title.top + title.height / 2)?.closest('.bot-title')) };
       });
-      assert.deepEqual(layout, { centered: true, noOverlap: true, contained: true });
+      assert.deepEqual(layout, { centered: true, noOverlap: true, contained: true, floating: true, contentInteractive: true, titleInteractive: true });
       await page.screenshot({ path: path.join(os.tmpdir(), `xiaowang-title-${width}-${colorScheme}.png`), animations: 'disabled' });
     }
   }

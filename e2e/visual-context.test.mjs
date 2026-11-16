@@ -47,7 +47,7 @@ for (const service of ['gemini','openai','qwen']) test(`${service}: sent image +
   assert.equal(packets.some(p=>p.type==='response.create'||p.clientContent?.turnComplete===true),false,'Passive updates cannot request responses');
   if(service==='qwen')assert.ok(packets.findIndex(p=>p.type==='input_audio_buffer.append')<packets.findIndex(p=>p.type==='input_image_buffer.append'));
   const layout=await page.evaluate(()=>{const h=document.querySelector('.thread > header'),m=document.querySelector('.messages'),title=document.querySelector('.bot-title');return {position:getComputedStyle(h).position,border:getComputedStyle(h).borderBottomWidth,header:h.getBoundingClientRect().bottom,messages:m.getBoundingClientRect().top,title:title.getBoundingClientRect().width};});
-  assert.equal(layout.position,'relative');assert.equal(layout.border,'1px');assert.ok(Math.abs(layout.header-layout.messages)<2);assert.ok(layout.title>80);
+  assert.equal(layout.position,'absolute');assert.equal(layout.border,'0px');assert.equal(layout.header-layout.messages,64);assert.ok(layout.title>80);
   await page.screenshot({path:path.join(os.tmpdir(),`xw-visual-${service}.png`)});
   const other=await page.evaluate(()=>window.xiaowang.createBot('Other'));await page.locator('.thread > header .bot-title').filter({hasText:'Other'}).waitFor();
   assert.equal(await page.evaluate(id=>window.xiaowang.stageVisual('xiaowang',{refId:id,page:2,revision:2,data:'YWJj'}),pdf.refId),false);
