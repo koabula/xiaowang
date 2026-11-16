@@ -1,4 +1,5 @@
 import type { ContextAddition } from "./context-manager.ts";
+import { outputLimited } from "./protocol-history.ts";
 import { createHash } from "node:crypto";
 import type { Locale } from "./locale.ts";
 import { stableLlmSystem, taskMetadata } from "./project.ts";
@@ -164,10 +165,19 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
     const result = await manager.complete(options.provider, prepared);
     options.signal?.throwIfAborted();
     lastText = result.text;
+    if (outputLimited(result.stopReason)) {
+      runtime.store.append(bot.id, { type: "assistant_turn", channel: "text", text: result.text, toolCalls: [],
+        protocol: result.protocol, stopReason: result.stopReason, jobId: options.jobId });
+      throw new Error("模型已用完本步输出预算（包含 thinking），回答未完成，工具未执行。请提高研究预算中的输出预留后重试。");
+    }
     const toolCalls = normalizeToolCalls(result, step, boundaryIds[0]!);
     const knownIds = new Set(context.map(event => event.id));
     const hasUpdates = toolCalls.length === 0 && Boolean(options.readUpdates?.().events.some(event => !knownIds.has(event.id)));
     if (!result.text.trim() && toolCalls.length === 0 && !hasUpdates) {
+      if (result.protocol) {
+        runtime.store.append(bot.id, { type: "assistant_turn", channel: "text", text: result.text, toolCalls: [], protocol: result.protocol, stopReason: result.stopReason, jobId: options.jobId });
+        throw new Error("模型没有返回可用的正文或工具调用，协议记录已保存，请重试。");
+      }
       return {
         bot: runtime.store.requireBot(bot.id),
         finalText: lastText,
@@ -180,6 +190,7 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
       type: "assistant_turn",
       channel: "text",
       text: result.text,
+      protocol: result.protocol, stopReason: result.stopReason,
       toolCalls,
       jobId: options.jobId,
     }));
@@ -257,6 +268,7 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
 function normalizeToolCalls(result: CompletionResult, step: number, inputEventId: number): ToolCall[] {
   return result.toolCalls.map((call, index) => ({
     id: `xw_${createHash("sha256").update(JSON.stringify([inputEventId, step, index, call.id])).digest("hex").slice(0, 28)}`,
+    ...(result.protocol ? { wireId: call.id, arguments: call.arguments } : {}),
     name: call.name,
     input: parseInput(call.arguments),
   }));

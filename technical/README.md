@@ -1,6 +1,6 @@
 # 小王同学的 Agent 架构
 
-[交互图](index.html) · 本文对应 v0.1.16 的实现。
+[交互图](index.html) · 本文对应 v0.1.17 的实现。
 
 ## 交互与研究有不同的时间要求
 
@@ -24,7 +24,7 @@ bot 标识确定会话、资料与工作区，`originCallId` 关联发起任务�
 
 每一步接收尚未处理的补充，准备上下文并调用 LLM。模型返回工具调用时，应用执行工具、记录结果，再进入下一步。返回普通答案后再次检查补充，无待处理消息才确认完成。
 
-新工具调用获得应用生成的编号，结果通过 `assistantEventId` 关联执行事件。旧日志中的重复工具编号按最近对应的调用配对。停止操作通过 `AbortSignal` 传入模型和支持取消的工具。桌面任务最多执行 40 步，已有结果与补充保留，供检查和重试。
+新工具调用获得应用生成的编号，服务商原始调用编号与参数另行保存，结果通过 `assistantEventId` 关联执行事件。旧日志中的重复工具编号按最近对应的调用配对。停止操作通过 `AbortSignal` 传入模型和支持取消的工具。桌面任务最多执行 40 步，已有结果与补充保留，供检查和重试。
 
 ![后台 Agent loop](assets/loop.png)
 
@@ -56,7 +56,7 @@ Gemini Live 另启用服务端 `slidingWindow` 会话压缩，其内部 token �
 | --- | --- |
 | 固定规则、工具、预算 | `context_scope` 保存作用域定义，相同配置复用同一作用域 |
 | 历史索引与引用 | 历史归档后提供事件数量、范围与反查入口 |
-| 选中的对话与工具单元 | 原始事件；调用与对应结果一起处理 |
+| 选中的对话与工具单元 | 原始事件；调用与对应结果一起处理；同模型的 thinking / 签名随单元原样回传 |
 | 任务与工作区状态 | `context_state` 保存受理或补充时的快照；重投影保留每个状态键的最新值 |
 | 当前要求与连续补充 | 按当前任务的输入事件编号保护，保持原文 |
 | 图片 | 附件按引用加载；临时页面帧只在当前进程内保留 |
@@ -73,6 +73,20 @@ Gemini Live 另启用服务端 `slidingWindow` 会话压缩，其内部 token �
 
 [事件单元](../src/project.ts) · [纯投影函数](../src/event-projection.ts) · [投影与检查点](../src/context-manager.ts)
 
+## Thinking 是协议数据
+
+模型正文与协议回放数据分别保存。OpenAI 兼容接口接收 `reasoning_content`、`reasoning_details`；Anthropic 保存完整内容块，包括 thinking、signature 和 redacted thinking。SSE 分片按顺序组装，思考内容不进入聊天正文或历史搜索。
+
+![Thinking 协议回放与旧会话恢复](assets/protocol.png)
+
+`assistant_turn.protocol` 记录接口与模型身份。投影器从原始事件恢复协议块，工具结果通过本地调用编号关联，再以原始服务商编号和参数发送。同一模型的原样回放数据参与输入预算，输出预留也包含 thinking。`reasoningTokens` 是输出中的已报告子集，不重复计入总用量。
+
+旧会话未保存所需字段时，无法补造它们。缺失 DeepSeek reasoning 的助手/工具组、不同接口或模型产生的协议组，以及输出额度耗尽的记录，转换为明确标注的历史数据，沿用已记录结果。原始事件保持不变，恢复过程不重新执行工具。输出达到 `length` / `max_tokens` 时保留协议记录与用量并报告未完成，本步工具不执行。
+
+投影版本升为 2，从原始事件重建清单；已有版本 1 清单保留。协议块不会被截成摘录：旧单元可整体归档为引用，仍保留的单元完整回传。
+
+[协议接收与发送](../src/provider.ts) · [兼容投影](../src/protocol-history.ts) · [协议测试](../test/thinking-protocol.test.ts) · [DeepSeek 协议依据](https://api-docs.deepseek.com/guides/thinking_mode/)
+
 ## 稳定前缀与缓存
 
 同一周期内，已有消息保持顺序与内容，新消息追加在尾部。任务背景、目录变化和转写修订作为新证据进入。工具定义与固定指令保持稳定，适配器保留用户消息块边界。
@@ -85,21 +99,32 @@ Gemini Live 另启用服务端 `slidingWindow` 会话压缩，其内部 token �
 
 `model_usage` 保存请求哈希、完整预算、耗时与实际用量。OpenAI 读取 `cached_tokens`，DeepSeek 读取缓存命中字段；Anthropic 总输入合计普通输入、缓存创建与读取。缺失的实际指标为 `null`。`prefixTokens` 仅为相邻成功请求的共同前缀估算，重启或周期切换后从 0 开始。
 
-`npm run xiaowang -- stats [slug]` 查看调用、检查点及 token 用量。缓存读取比例只使用同时报告输入和缓存读取的调用。
+`npm run xiaowang -- stats [slug]` 查看调用、检查点及 token 用量。缓存读取比例只使用同时报告输入和缓存读取的调用。thinking 子集仅在服务端报告时统计。
 
 ## 完整预算与确定性重投影
 
-默认采用 32,768 tokens 的应用窗口，预留 4,096 输出和 2,048 安全空间，输入容量为 26,624。预算包含 system、工具 schema、消息、工具参数及结果、实际装配的图片。
+后台研究与 Realtime 通话使用独立预算。设置 → 文字 → 研究上下文预算提供保守档和研究档，可分别覆盖总窗口、高低水位、输出与安全预留。填入服务商的模型窗口上限后，应用窗口取两者较小值；未知模型默认采用保守档，选择研究档前应确认模型支持的窗口。
+
+| 预算 | 保守档（默认） | 研究档 |
+| --- | ---: | ---: |
+| 总窗口 | 32,768 | 131,072 |
+| 输出预留，含 thinking | 4,096 | 8,192 |
+| 安全余量 | 2,048 | 4,096 |
+| 输入硬容量 | 26,624 | 118,784 |
+| 输入高水位 | 22,630.4（容量的 85%） | 98,304 |
+| 输入低水位目标 | 14,643.2（容量的 55%） | 32,768 |
+
+高低水位是输入 token 数，不含输出和安全余量。研究档默认是独立的绝对数值，修改输出预留不会按比例移动它们。若模型窗口较小，默认水位随可用空间下调；显式水位不合法则拒绝配置。输出预留不足可以单独增加，无须更改历史投影算法。
 
 文本通过本地 `o200k_base` BPE 分段估算，增加 20% 余量与封装开销；图片每张预留 8,192 tokens。官方 Anthropic 使用原生计数覆盖总输入，分项仍为本地估算。模型真实窗口和实际用量由服务商决定。
 
 ![预算与重投影](assets/budget.png)
 
-超过输入容量的 85% 时，以 55% 为目标重建视图：
+超过所选高水位时，以低水位为目标重建视图：
 
 1. 保留当前任务原始输入、连续补充、每个键的最新状态和最后一个对话单元。
 2. 被取代的旧状态退出当前视图。
-3. 较旧工具结果采用前 1,200 字符的固定摘录，附原始事件编号；参数较大的旧工具单元可以整体变为事件引用。
+3. 不含原生协议块的较旧工具结果可采用前 1,200 字符的固定摘录，附原始事件编号；原生 thinking / 签名单元和参数较大的旧工具单元整体变为引用。
 4. 如仍需缩小，优先归档已结束任务，其余按较旧单元顺序处理，提供统一的历史反查入口。
 5. 最终输入在硬预算内且确实缩小后，提交检查点并进入新周期。
 
@@ -107,12 +132,18 @@ Gemini Live 另启用服务端 `slidingWindow` 会话压缩，其内部 token �
 
 `context_checkpoint` 保存投影版本、截止事件、来源编号、渲染方式、状态引用与保护集合。相同清单可从原事件重放，取消不会提交半成品。上下文维护不生成自动 LLM 摘要。
 
-| 环境变量 | 默认值 |
+| 环境变量 | 作用 |
 | --- | --- |
-| `XIAOWANG_CONTEXT_WINDOW` | 32768 |
-| `XIAOWANG_MAX_OUTPUT_TOKENS` | 4096 |
-| `XIAOWANG_CONTEXT_SAFETY_TOKENS` | 2048 |
-| `XIAOWANG_IMAGE_TOKEN_BUDGET` | 8192 / 张 |
+| `XIAOWANG_CONTEXT_PROFILE` | `conservative`（默认）或 `research` |
+| `XIAOWANG_CONTEXT_WINDOW` | 应用总窗口 |
+| `XIAOWANG_MODEL_CONTEXT_WINDOW` | 服务商标注的模型窗口上限，需配置 |
+| `XIAOWANG_CONTEXT_HIGH_WATER_TOKENS` | 独立输入高水位 |
+| `XIAOWANG_CONTEXT_LOW_WATER_TOKENS` | 独立输入低水位目标 |
+| `XIAOWANG_MAX_OUTPUT_TOKENS` | 每步输出预留，包含 thinking |
+| `XIAOWANG_CONTEXT_SAFETY_TOKENS` | 安全预留 |
+| `XIAOWANG_IMAGE_TOKEN_BUDGET` | 图片估算预留，默认 8192 / 张 |
+
+桌面保存的非空值优先于启动环境变量，空值沿用启动配置或所选档位默认值。预算、模型或接口改变时开启新的投影作用域；重投影过程仍只执行确定性的程序逻辑。
 
 [预算](../src/token-budget.ts) · [选择与折叠](../src/event-projection.ts)
 
@@ -143,3 +174,5 @@ Gemini Live 另启用服务端 `slidingWindow` 会话压缩，其内部 token �
 桌面使用 Electron、React 与 TypeScript，阅读器使用 PDF.js，展示产物采用 HTML。后台通信支持 OpenAI 兼容和 Anthropic 接口及 SSE，Realtime 使用服务商原生 WebSocket 适配。执行与存储使用 Node.js 24、SQLite WAL / FTS5 和文件系统。
 
 [上下文测试](../test/context-manager.test.ts)覆盖前缀、预算、确定性检查点、取消、重启、连续补充和状态保留；[历史测试](../test/memory.test.ts)覆盖中文搜索、分页、权限、原文读取与工具归属；[接口测试](../test/context-provider.test.ts)覆盖实际缓存用量解析。
+
+[研究预算测试](../test/research-budget.test.ts)覆盖独立水位、模型上限及设置持久化；[桌面回归](../e2e/research-budget.test.mjs)验证保存、重启和实际 thinking / 工具请求。

@@ -1,0 +1,40 @@
+<svg viewBox="0 0 1160 850" width="1160" height="850" role="img" aria-label="Thinking 协议的完整回放" xmlns="http://www.w3.org/2000/svg"><title>Thinking 协议的完整回放</title><desc>正文用于交流；原始协议用于同模型续接；旧会话沿用已记录的结果</desc><style>
+  text { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+  .title { font-size: 27px; font-weight: 650; fill: #203453; letter-spacing: -.5px; }
+  .subtitle { font-size: 15px; fill: #6b7c94; }
+  .footer { font-size: 12px; fill: #8593a8; }
+  .wire { fill: none; stroke: #6683be; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .wire.data { stroke: #5e9295; stroke-dasharray: 5 5; }
+  .wire.direct { stroke: #a68155; stroke-dasharray: 2 5; }
+  .edge-label { font-size: 12px; fill: #7a889f; text-anchor: middle; paint-order: stroke; stroke: #fff; stroke-width: 7px; stroke-linejoin: round; }
+  .node { cursor: pointer; outline: none; }
+  .node rect { fill: #f7f9fd; stroke: #d8e2f1; stroke-width: 1.2; }
+  .node .accent { fill: #2b59c3; stroke: none; }
+  .node.teal rect { fill: #f2f8f7; stroke: #d0e4e0; }
+  .node.teal .accent { fill: #428c83; }
+  .node.orange rect { fill: #fdf8f2; stroke: #eddcc7; }
+  .node.orange .accent { fill: #b77b38; }
+  .node .node-title { fill: #263f63; font-size: 19px; font-weight: 600; }
+  .node .node-line { fill: #71829b; font-size: 13px; }
+  .node.selected rect, .node:focus-visible rect { stroke: #2b59c3; stroke-width: 2.5; fill: #edf3ff; }
+  .node.selected .node-title { fill: #234fae; }
+  .node.dim, .edge.dim { opacity: .2; }
+  .node.selected.dim { opacity: 1; }
+  .edge.active .wire { stroke: #2b59c3; stroke-width: 2.8; }
+  .lane-label { font-size: 12px; fill: #71829b; font-weight: 550; }
+  .node.slice .surface { fill: #dce7fc; stroke: #aac1ed; stroke-width: 1.3; }
+  .node.slice .cap { fill: #edf3ff; stroke: #aac1ed; stroke-width: 1.3; }
+  .node.slice.teal .surface { fill: #dbeeea; stroke: #a6cdc3; }
+  .node.slice.teal .cap { fill: #f0f9f6; stroke: #a6cdc3; }
+  .node.slice.orange .surface { fill: #f6e4ce; stroke: #dcb78b; }
+  .node.slice.orange .cap { fill: #fdf5e9; stroke: #dcb78b; }
+  .node.slice.selected .surface, .node.slice.selected .cap, .node.slice:focus-visible .cap { stroke: #2b59c3; stroke-width: 3; }
+  .node.point circle { fill: #2b59c3; stroke: white; stroke-width: 4; }
+  .node.point.orange circle { fill: #c78543; }
+  .node.point.teal circle { fill: #428c83; }
+  .node.point.selected circle, .node.point:focus-visible circle { stroke: #95b6ff; stroke-width: 6; }
+  .node.prefix.selected .row-label, .node.prefix:focus-visible .row-label { fill: #2b59c3; font-weight: 650; }
+  .segment-text { font-size: 16px; font-weight: 550; fill: #35527e; text-anchor: middle; }
+  .point-label { font-size: 16px; font-weight: 650; fill: #3d587e; text-anchor: middle; }
+  .annotation { font-size: 13px; fill: #71829b; }
+</style><rect width="1160" height="850" fill="#ffffff"/><defs><marker id="protocol-control" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#6683be" stroke-width="1.6"/></marker><marker id="protocol-data" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#5e9295" stroke-width="1.6"/></marker><marker id="protocol-direct" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#a68155" stroke-width="1.6"/></marker></defs><text x="40" y="48" class="title">Thinking 协议的完整回放</text><text x="40" y="78" class="subtitle">正文用于交流；原始协议用于同模型续接；旧会话沿用已记录的结果</text><path d="M40 105H1120" stroke="#e8edf5" stroke-width="1"/><g class="edge" data-from="receive" data-to="saved"><path class="wire control" d="M350 212H425" marker-end="url(#protocol-control)"/></g><g class="edge" data-from="saved" data-to="select"><path class="wire control" d="M735 212H810" marker-end="url(#protocol-control)"/></g><g class="edge" data-from="select" data-to="replay"><path class="wire control" d="M965 270V440" marker-end="url(#protocol-control)"/><text class="edge-label" x="965" y="360">身份匹配</text></g><g class="edge" data-from="select" data-to="historical"><path class="wire direct" d="M810 250H770V385H580V440" marker-end="url(#protocol-direct)"/><text class="edge-label" x="690" y="373">缺失 / 不匹配</text></g><g class="edge" data-from="receive" data-to="limit"><path class="wire direct" d="M195 270V440" marker-end="url(#protocol-direct)"/><text class="edge-label" x="195" y="360">length / max_tokens</text></g><g class="edge" data-from="replay" data-to="continue"><path class="wire control" d="M965 555V685" marker-end="url(#protocol-control)"/></g><g class="edge" data-from="historical" data-to="continue"><path class="wire control" d="M580 555V685" marker-end="url(#protocol-control)"/></g><g class="node blue " data-node="receive" aria-label="01 · 接收模型响应"><rect x="40" y="155" width="310" height="115" rx="9"/><rect class="accent" x="40" y="175" width="3" height="75" rx="1.5"/><text class="node-title" x="60" y="188">01 · 接收模型响应</text><text class="node-line" x="60" y="213">JSON / SSE 分片组装</text><text class="node-line" x="60" y="233">正文 · reasoning · 原始调用</text></g><g class="node teal " data-node="saved" aria-label="02 · 保存原始事件"><rect x="425" y="155" width="310" height="115" rx="9"/><rect class="accent" x="425" y="175" width="3" height="75" rx="1.5"/><text class="node-title" x="445" y="188">02 · 保存原始事件</text><text class="node-line" x="445" y="213">assistant_turn.protocol</text><text class="node-line" x="445" y="233">接口 / 模型身份与本地调用归属</text></g><g class="node blue " data-node="select" aria-label="03 · 确定性恢复"><rect x="810" y="155" width="310" height="115" rx="9"/><rect class="accent" x="810" y="175" width="3" height="75" rx="1.5"/><text class="node-title" x="830" y="188">03 · 确定性恢复</text><text class="node-line" x="830" y="213">完整单元 · 原始事件编号</text><text class="node-line" x="830" y="233">校验接口与模型身份</text></g><g class="node blue" data-node="replay" aria-label="04 · 同模型原样回传"><rect x="810" y="440" width="310" height="115" rx="9"/><rect class="accent" x="810" y="460" width="3" height="75" rx="1.5"/><text class="node-title" x="830" y="473">04 · 同模型原样回传</text><text class="node-line" x="830" y="498">thinking + 调用 + 工具结果</text><text class="node-line" x="830" y="518">协议参与完整输入预算</text></g><g class="node orange" data-node="historical" aria-label="旧会话 / 切换模型"><rect x="425" y="440" width="310" height="115" rx="9"/><rect class="accent" x="425" y="460" width="3" height="75" rx="1.5"/><text class="node-title" x="445" y="473">旧会话 / 切换模型</text><text class="node-line" x="445" y="498">缺失字段或协议身份不同</text><text class="node-line" x="445" y="518">整组作为历史数据引用</text></g><g class="node orange" data-node="limit" aria-label="输出额度耗尽"><rect x="40" y="440" width="310" height="115" rx="9"/><rect class="accent" x="40" y="460" width="3" height="75" rx="1.5"/><text class="node-title" x="60" y="473">输出额度耗尽</text><text class="node-line" x="60" y="498">保留协议与实际用量</text><text class="node-line" x="60" y="518">报告未完成，本步工具不执行</text></g><g class="node teal " data-node="continue" aria-label="下一次模型调用"><rect x="425" y="685" width="695" height="90" rx="9"/><rect class="accent" x="425" y="705" width="3" height="50" rx="1.5"/><text class="node-title" x="445" y="718">下一次模型调用</text><text class="node-line" x="445" y="743">完整协议或明确历史数据 → 预算校验 → 继续研究</text></g><path class="wire control" d="M40 820h28"/><text class="footer" x="79" y="825">控制与模型往返</text><path class="wire data" d="M275 820h28"/><text class="footer" x="314" y="825">上下文与持久化</text><path class="wire direct" d="M510 820h28"/><text class="footer" x="549" y="825">直接工具 / 显式排队</text><text class="footer" x="1120" y="825" text-anchor="end">小王同学 · v0.1.17</text></svg>

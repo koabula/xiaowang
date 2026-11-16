@@ -3,13 +3,23 @@ import { REALTIME_SERVICES, realtimeServicesForSettings, resolveRealtime, type R
 export interface VoiceProfile { model: string; voice: string; region: string; workspace: string; url: string; key: string }
 export type VoiceProfilePatch = Partial<VoiceProfile> & { clearKey?: boolean };
 export type VoiceProfileView = Omit<VoiceProfile, "key"> & { keyHint: string };
-export interface SecretRecord {
+export const CONTEXT_SETTINGS = {
+  contextProfile: "XIAOWANG_CONTEXT_PROFILE", contextWindow: "XIAOWANG_CONTEXT_WINDOW",
+  contextHighWater: "XIAOWANG_CONTEXT_HIGH_WATER_TOKENS", contextLowWater: "XIAOWANG_CONTEXT_LOW_WATER_TOKENS",
+  contextOutput: "XIAOWANG_MAX_OUTPUT_TOKENS", contextSafety: "XIAOWANG_CONTEXT_SAFETY_TOKENS",
+  modelContextWindow: "XIAOWANG_MODEL_CONTEXT_WINDOW",
+} as const;
+export interface ContextSettings {
+  contextProfile?: string; contextWindow?: string; contextHighWater?: string; contextLowWater?: string;
+  contextOutput?: string; contextSafety?: string; modelContextWindow?: string;
+}
+export interface SecretRecord extends ContextSettings {
   model: string; baseUrl: string; apiStyle: string; apiKey: string;
   realtimeModel: string; realtimeUrl: string; realtimeKey: string; realtimeService: string;
   realtimeVoice: string; realtimeRegion: string; realtimeWorkspace: string; locale: string;
   realtimeProfiles?: Partial<Record<RealtimeServiceId, VoiceProfile>>;
 }
-export interface SecretPatch {
+export interface SecretPatch extends ContextSettings {
   model?: string; baseUrl?: string; apiStyle?: string; apiKey?: string;
   realtimeModel?: string; realtimeUrl?: string; realtimeKey?: string; realtimeService?: string;
   realtimeVoice?: string; realtimeRegion?: string; realtimeWorkspace?: string; locale?: string;
@@ -21,6 +31,7 @@ export interface SettingsView extends Omit<SecretRecord, "apiKey" | "realtimeKey
 }
 export const EMPTY_SETTINGS: SecretRecord = {
   model: "", baseUrl: "", apiStyle: "", apiKey: "", realtimeModel: "", realtimeUrl: "", realtimeKey: "", realtimeService: "",
+  contextProfile: "", contextWindow: "", contextHighWater: "", contextLowWater: "", contextOutput: "", contextSafety: "", modelContextWindow: "",
   realtimeVoice: "", realtimeRegion: "", realtimeWorkspace: "", locale: "zh",
 };
 const fields = ["model", "voice", "region", "workspace", "url", "key"] as const;
@@ -62,6 +73,13 @@ export function mergeSettings(current: SecretRecord, patch: SecretPatch): Secret
   for (const name of ["model", "baseUrl", "apiStyle", "apiKey"] as const) {
     if (typeof patch[name] === "string" && (name !== "apiKey" || clean(patch[name]))) next[name] = clean(patch[name]);
   }
+  for (const name of Object.keys(CONTEXT_SETTINGS) as Array<keyof ContextSettings>) {
+    if (typeof patch[name] === "string") next[name] = clean(patch[name]);
+  }
+  if (next.contextProfile && !["conservative", "research"].includes(next.contextProfile)) throw new Error("未知研究预算档。");
+  for (const name of Object.keys(CONTEXT_SETTINGS) as Array<keyof ContextSettings>) {
+    if (name !== "contextProfile" && next[name] && (!/^\d+$/.test(next[name]!) || !Number.isSafeInteger(Number(next[name])) || Number(next[name]) <= 0)) throw new Error("预算必须为正整数 tokens。");
+  }
   if (typeof patch.locale === "string") next.locale = patch.locale.trim() === "en" ? "en" : "zh";
   const incoming = record(patch.realtimeProfiles);
   for (const { id } of REALTIME_SERVICES) if (Object.hasOwn(incoming, id)) {
@@ -97,4 +115,9 @@ export function availableRealtimeSettings(current: SecretRecord, experimentalMos
   const profiles = voiceProfiles(current), available = realtimeServicesForSettings();
   const fallback = available.find(({ id }) => profiles[id]?.key.trim() && profiles[id]?.url) ?? available[0]!;
   return mergeSettings(current, { realtimeService: fallback.id });
+}
+
+/** Explicit saved overrides win; blank fields retain launch-time configuration/defaults. */
+export function contextEnvironment(record: ContextSettings, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(CONTEXT_SETTINGS).map(([field, variable]) => [variable, record[field as keyof ContextSettings]?.trim() || env[variable]]));
 }

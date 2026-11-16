@@ -76,7 +76,9 @@ test('PDF links have no permanent frames, stay below settings, and notices expir
 
   // Drive the application's real notification listener, using a fake clock only
   // after the PDF has finished rendering so the timer assertions stay precise.
-  await page.clock.install();
+  await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+  // install() still advances with wall time; pause before checking exact 3s boundaries.
+  await page.clock.pauseAt(new Date("2026-01-01T00:01:00Z"));
   async function notify(filename) {
     await app.evaluate(({ BrowserWindow }, filename) => BrowserWindow.getAllWindows()[0].webContents.send('download', { slug: 'xiaowang', filename }), filename);
     await page.locator('.toast').filter({ hasText: filename }).waitFor();

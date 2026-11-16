@@ -255,13 +255,13 @@ export function projectContextUnits(events: StoredEvent[]): ContextUnit[] {
       if (event.callId && callsWithLines.has(event.callId)) continue;
       unit.messages = [{ role: "user", content: `通话记录：\n${event.lines.filter(line => line.text.trim()).map(line => `${line.who === "user" ? "用户" : "助手"}：${line.text.trim()}`).join("\n")}` }];
     } else if (event.type === "assistant_turn") {
-      if (!event.text.trim() && !event.toolCalls.length) continue;
+      if (!event.text.trim() && !event.toolCalls.length && !event.protocol) continue;
       unit.jobId = event.jobId;
-      unit.messages = [{ role: "assistant", content: event.text, ...(event.toolCalls.length ? { toolCalls: event.toolCalls.map(call => ({ id: call.id, name: call.name, arguments: JSON.stringify(call.input ?? {}) })) } : {}) }];
+      unit.messages = [{ role: "assistant", content: event.text, ...(event.protocol ? { protocol: event.protocol } : {}), ...(event.stopReason ? { stopReason: event.stopReason } : {}), ...(event.toolCalls.length ? { toolCalls: event.toolCalls.map(call => ({ id: call.wireId ?? call.id, name: call.name, arguments: call.arguments ?? JSON.stringify(call.input ?? {}) })) } : {}) }];
       for (const call of event.toolCalls) {
         const result = results.get(stored.id)?.find(item => item.event.type === "tool_result" && item.event.callId === call.id);
         if (result) unit.eventIds.push(result.id);
-        unit.messages.push({ role: "tool", toolCallId: call.id, content: result?.event.type === "tool_result" ? result.event.output : "工具执行被中断，没有结果。请先核对执行状态。" });
+        unit.messages.push({ role: "tool", toolCallId: call.wireId ?? call.id, content: result?.event.type === "tool_result" ? result.event.output : "工具执行被中断，没有结果。请先核对执行状态。" });
       }
     } else continue;
     units.push(unit);
@@ -305,23 +305,25 @@ function groupUnits(events: StoredEvent[], fullResults = false): Unit[] {
       continue;
     }
     if (event.type !== "assistant_turn") continue;
-    if (!event.text.trim() && event.toolCalls.length === 0) continue;
+    if (!event.text.trim() && event.toolCalls.length === 0 && !event.protocol) continue;
 
     const messages: ModelMessage[] = [
       {
         role: "assistant",
         content: event.text,
+        ...(event.protocol ? { protocol: event.protocol } : {}),
+        ...(event.stopReason ? { stopReason: event.stopReason } : {}),
         ...(event.toolCalls.length > 0 ? { toolCalls: event.toolCalls.map((call) => ({
-                id: call.id,
+                id: call.wireId ?? call.id,
                 name: call.name,
-                arguments: JSON.stringify(call.input ?? {}),
+                arguments: call.arguments ?? JSON.stringify(call.input ?? {}),
               })) } : {}),
       },
     ];
     if (event.toolCalls.length > 0) {
       for (const call of event.toolCalls) {
         const result = events.find(stored => stored.event.type === "tool_result" && stored.event.callId === call.id)?.event;
-        messages.push({ role: "tool", toolCallId: call.id, content: result?.type === "tool_result" ? (fullResults ? result.output : capToolOutput(result.output)) : "工具执行被中断，没有结果。请重新调用。" });
+        messages.push({ role: "tool", toolCallId: call.wireId ?? call.id, content: result?.type === "tool_result" ? (fullResults || event.protocol ? result.output : capToolOutput(result.output)) : "工具执行被中断，没有结果。请重新调用。" });
       }
     }
     units.push(toUnit(messages, String(events[i]!.id)));
@@ -332,7 +334,7 @@ function groupUnits(events: StoredEvent[], fullResults = false): Unit[] {
 function toUnit(messages: ModelMessage[], source?: string): Unit {
   const chars = messages.reduce((sum, message) => {
     const args = message.toolCalls?.reduce((inner, call) => inner + call.arguments.length, 0) ?? 0;
-    return sum + message.content.length + args + (message.attachments?.filter(a => a.mimeType.startsWith("image/")).length ?? 0) * 6000;
+    return sum + message.content.length + args + (message.protocol ? JSON.stringify(message.protocol).length : 0) + (message.attachments?.filter(a => a.mimeType.startsWith("image/")).length ?? 0) * 6000;
   }, 0);
   return { messages, chars, source };
 }

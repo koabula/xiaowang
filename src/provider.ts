@@ -1,5 +1,6 @@
-import type { CompletionRequest, CompletionResult, LlmProvider, ModelMessage, ModelUsage, ToolSchema } from "./types.ts";
+import type { CompletionRequest, CompletionResult, LlmProvider, ModelMessage, ModelUsage, ToolSchema, AssistantProtocol, HistoryPolicy } from "./types.ts";
 import { contextPolicy, type ContextPolicy } from "./token-budget.ts";
+import { replayHistory } from "./protocol-history.ts";
 import { createHash } from "node:crypto";
 import { readEventStream, requestSignal } from "./stream.ts";
 
@@ -40,16 +41,23 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ProviderCon
   };
 }
 
+export function historyPolicy(config: ProviderConfig): HistoryPolicy {
+  return { key: createHash("sha256").update(JSON.stringify([config.apiStyle, trimSlash(config.baseUrl), config.model])).digest("hex"),
+    format: config.apiStyle, requiresReasoning: config.apiStyle === "openai" && (new URL(config.baseUrl).hostname === "api.deepseek.com" || (/deepseek/i.test(config.model) && new URL(config.baseUrl).hostname !== "openrouter.ai")) };
+}
+
 export function createProvider(config: ProviderConfig): LlmProvider {
+  const history = historyPolicy(config);
   return {
+    historyPolicy: history,
     model: config.model,
-    contextKey: createHash("sha256").update(JSON.stringify([config.apiStyle, config.baseUrl, config.model])).digest("hex"),
+    contextKey: history.key,
     contextPolicy: config.contextPolicy,
     ...(config.apiStyle === "anthropic" && new URL(config.baseUrl).hostname === "api.anthropic.com" ? {
       async countTokens(request: CompletionRequest) {
         const response = await fetch(anthropicMessagesUrl(config.baseUrl) + "/count_tokens", {
           method: "POST", headers: { "x-api-key": config.apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-          body: JSON.stringify({ model: config.model, system: request.system, messages: toAnthropicMessages(request.messages, request.preserveMessageBlocks), tools: toAnthropicTools(request.tools) }),
+          body: JSON.stringify({ model: config.model, system: request.system, messages: toAnthropicMessages(request.messages, request.preserveMessageBlocks, historyPolicy(config)), tools: toAnthropicTools(request.tools) }),
           signal: requestSignal(request.signal),
         });
         const raw = await response.text();
@@ -87,9 +95,9 @@ export function anthropicMessagesUrl(baseUrl: string): string {
   return `${base}/v1/messages`;
 }
 
-export function toOpenAIMessages(system: string, messages: ModelMessage[], preserveBlocks = false): unknown[] {
+export function toOpenAIMessages(system: string, messages: ModelMessage[], preserveBlocks = false, history?: HistoryPolicy): unknown[] {
   const out: unknown[] = [{ role: "system", content: system }];
-  for (const message of preserveBlocks ? messages : mergeUserText(messages)) {
+  for (const message of replayHistory(preserveBlocks ? messages : mergeUserText(messages), history)) {
     if (message.role === "tool") {
       out.push({
         role: "tool",
@@ -100,8 +108,8 @@ export function toOpenAIMessages(system: string, messages: ModelMessage[], prese
     }
     if (message.role === "assistant") {
       const calls = message.toolCalls ?? [];
-      const text = message.content.trim();
-      if (!text && calls.length === 0) continue;
+      const text = message.content;
+      if (!text.trim() && calls.length === 0) continue;
       const body: Record<string, unknown> = {
         role: "assistant",
         content: text,
@@ -112,6 +120,10 @@ export function toOpenAIMessages(system: string, messages: ModelMessage[], prese
           type: "function",
           function: { name: call.name, arguments: call.arguments },
         }));
+      }
+      if (message.protocol?.format === "openai") {
+        if (Object.hasOwn(message.protocol, "reasoningContent")) body.reasoning_content = message.protocol.reasoningContent;
+        if (message.protocol.reasoningDetails) body.reasoning_details = message.protocol.reasoningDetails;
       }
       out.push(body);
       continue;
@@ -132,9 +144,9 @@ export function toOpenAITools(tools: ToolSchema[]): unknown[] {
   }));
 }
 
-export function toAnthropicMessages(messages: ModelMessage[], preserveBlocks = false): unknown[] {
+export function toAnthropicMessages(messages: ModelMessage[], preserveBlocks = false, history?: HistoryPolicy): unknown[] {
   const out: Array<{ role: "user" | "assistant"; content: unknown }> = [];
-  for (const message of preserveBlocks ? messages : mergeUserText(messages)) {
+  for (const message of replayHistory(preserveBlocks ? messages : mergeUserText(messages), history)) {
     if (message.role === "tool") {
       const block = {
         type: "tool_result",
@@ -151,6 +163,10 @@ export function toAnthropicMessages(messages: ModelMessage[], preserveBlocks = f
       continue;
     }
     if (message.role === "assistant") {
+      if (message.protocol?.format === "anthropic" && message.protocol.contentBlocks?.length) {
+        out.push({ role: "assistant", content: structuredClone(message.protocol.contentBlocks) });
+        continue;
+      }
       const content: unknown[] = [];
       if (message.content.trim()) content.push({ type: "text", text: message.content });
       for (const call of message.toolCalls ?? []) {
@@ -181,7 +197,7 @@ export function toAnthropicTools(tools: ToolSchema[]): unknown[] {
 async function completeOpenAI(config: ProviderConfig, request: CompletionRequest): Promise<CompletionResult> {
   const body: Record<string, unknown> = {
     model: config.model,
-    messages: toOpenAIMessages(request.system, request.messages, request.preserveMessageBlocks),
+    messages: toOpenAIMessages(request.system, request.messages, request.preserveMessageBlocks, historyPolicy(config)),
     max_tokens: request.maxOutputTokens ?? (request.tools.length === 0 ? 32 : 4096),
     ...(request.onTextDelta ? { stream: true } : {}),
   };
@@ -202,17 +218,31 @@ async function completeOpenAI(config: ProviderConfig, request: CompletionRequest
   });
   if (response.ok && response.headers.get("content-type")?.includes("text/event-stream")) {
     let text = "";
+    const protocol: AssistantProtocol = { key: historyPolicy(config).key, format: "openai" };
+    const details = new Map<number, Record<string, unknown>>();
+    let stopReason: string | undefined;
     const calls = new Map<number, { id: string; name: string; arguments: string }>();
     let finished = false;
     let usage: ModelUsage | undefined;
     for await (const event of readEventStream(response)) {
       if (event.data === "[DONE]") { finished = true; break; }
-      const chunk = JSON.parse(event.data) as { usage?: Record<string, any>; error?: { message?: string }; choices?: Array<{ finish_reason?: string | null; delta?: { content?: string; tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> } }> };
+      const chunk = JSON.parse(event.data) as { usage?: Record<string, any>; error?: { message?: string }; choices?: Array<{ finish_reason?: string | null; delta?: { reasoning_content?: string | null; reasoning_details?: Array<Record<string, unknown>>; content?: string; tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> } }> };
       usage = mergeUsage(usage, openAIUsage(chunk.usage));
       if (chunk.error) throw new Error(formatHttpError(502, chunk.error.message || "模型流中断", config.apiKey));
       const choice = chunk.choices?.[0];
-      if (choice?.finish_reason) finished = true;
+      if (choice?.finish_reason) { finished = true; stopReason = choice.finish_reason; }
       const delta = choice?.delta;
+      if (delta && Object.hasOwn(delta, "reasoning_content")) {
+        if (typeof delta.reasoning_content === "string") protocol.reasoningContent = (protocol.reasoningContent ?? "") + delta.reasoning_content;
+        else if (!Object.hasOwn(protocol, "reasoningContent")) protocol.reasoningContent = null;
+      }
+      for (const detail of delta?.reasoning_details ?? []) {
+        const index = typeof detail.index === "number" ? detail.index : details.size;
+        const previous = details.get(index) ?? {};
+        const next = { ...previous, ...detail };
+        for (const field of ["text", "summary", "data", "signature"] as const) if (typeof previous[field] === "string" && typeof detail[field] === "string") next[field] = previous[field] + detail[field];
+        details.set(index, next);
+      }
       if (delta?.content) { text += delta.content; request.onTextDelta?.(delta.content); }
       for (const call of delta?.tool_calls ?? []) {
         const current = calls.get(call.index) ?? { id: "", name: "", arguments: "" };
@@ -223,14 +253,18 @@ async function completeOpenAI(config: ProviderConfig, request: CompletionRequest
       }
     }
     if (!finished) throw new Error("模型响应提前断开，请重试。未完成的工具不会执行。");
-    return { text, ...(usage ? { usage } : {}), toolCalls: [...calls.entries()].sort(([a], [b]) => a - b).map(([index, call]) => ({ ...call, id: call.id || `call_${index}` })) };
+    if (details.size) protocol.reasoningDetails = [...details.entries()].sort(([a], [b]) => a - b).map(([, value]) => value);
+    return { text, protocol, stopReason, ...(usage ? { usage } : {}), toolCalls: [...calls.entries()].sort(([a], [b]) => a - b).map(([index, call]) => ({ ...call, id: call.id || `call_${index}` })) };
   }
   const raw = await response.text();
   if (!response.ok) throw new Error(formatHttpError(response.status, raw, config.apiKey));
   const json = JSON.parse(raw) as {
     usage?: Record<string, any>;
     choices?: Array<{
+      finish_reason?: string;
       message?: {
+        reasoning_content?: string | null;
+        reasoning_details?: Array<Record<string, unknown>>;
         content?: string | null;
         tool_calls?: Array<{
           id?: string;
@@ -240,7 +274,11 @@ async function completeOpenAI(config: ProviderConfig, request: CompletionRequest
     }>;
   };
   const message = json.choices?.[0]?.message;
+  const protocol: AssistantProtocol = { key: historyPolicy(config).key, format: "openai",
+    ...(message && Object.hasOwn(message, "reasoning_content") ? { reasoningContent: message.reasoning_content } : {}),
+    ...(message?.reasoning_details ? { reasoningDetails: message.reasoning_details } : {}) };
   return {
+    protocol, stopReason: json.choices?.[0]?.finish_reason,
     ...(openAIUsage(json.usage) ? { usage: openAIUsage(json.usage) } : {}),
     text: typeof message?.content === "string" ? message.content : "",
     toolCalls: (message?.tool_calls ?? []).map((call, index) => ({
@@ -255,7 +293,7 @@ async function completeAnthropic(config: ProviderConfig, request: CompletionRequ
   const body: Record<string, unknown> = {
     model: config.model,
     system: request.system,
-    messages: toAnthropicMessages(request.messages, request.preserveMessageBlocks),
+    messages: toAnthropicMessages(request.messages, request.preserveMessageBlocks, historyPolicy(config)),
     max_tokens: request.maxOutputTokens ?? (request.tools.length === 0 ? 32 : 4096),
     ...(request.onTextDelta ? { stream: true } : {}),
   };
@@ -276,17 +314,27 @@ async function completeAnthropic(config: ProviderConfig, request: CompletionRequ
     let finished = false;
     let usage: ModelUsage | undefined;
     const rawUsage: Record<string, any> = {};
+    const blocks = new Map<number, Record<string, any>>();
+    let stopReason: string | undefined;
     const calls = new Map<number, { id: string; name: string; arguments: string }>();
     for await (const event of readEventStream(response)) {
-      const chunk = JSON.parse(event.data) as { usage?: Record<string, any>; message?: { usage?: Record<string, any> }; type: string; index: number; error?: { message?: string }; content_block?: { type?: string; id?: string; name?: string; text?: string; input?: unknown }; delta?: { type?: string; text?: string; partial_json?: string } };
+      const chunk = JSON.parse(event.data) as { usage?: Record<string, any>; message?: { usage?: Record<string, any> }; type: string; index: number; error?: { message?: string }; content_block?: Record<string, any>; delta?: { stop_reason?: string; type?: string; text?: string; thinking?: string; signature?: string; partial_json?: string } };
       Object.assign(rawUsage, chunk.message?.usage ?? chunk.usage ?? {});
       usage = anthropicUsage(rawUsage);
       if (chunk.type === "error") throw new Error(formatHttpError(502, chunk.error?.message || "模型流中断", config.apiKey));
       if (chunk.type === "message_stop") finished = true;
+      if (chunk.delta?.stop_reason) stopReason = chunk.delta.stop_reason;
       if (chunk.type === "content_block_start") {
         const block = chunk.content_block;
+        if (block) blocks.set(chunk.index, structuredClone(block));
         if (block?.type === "tool_use") calls.set(chunk.index, { id: block.id || `tool_${chunk.index}`, name: block.name || "", arguments: block.input && Object.keys(block.input as object).length ? JSON.stringify(block.input) : "" });
         if (block?.type === "text" && block.text) { text += block.text; request.onTextDelta?.(block.text); }
+      }
+      const savedBlock = blocks.get(chunk.index);
+      if (savedBlock && chunk.delta) {
+        if (chunk.delta.type === "text_delta") savedBlock.text = (savedBlock.text ?? "") + (chunk.delta.text ?? "");
+        if (chunk.delta.type === "thinking_delta") savedBlock.thinking = (savedBlock.thinking ?? "") + (chunk.delta.thinking ?? "");
+        if (chunk.delta.type === "signature_delta") savedBlock.signature = (savedBlock.signature ?? "") + (chunk.delta.signature ?? "");
       }
       if (chunk.delta?.type === "text_delta" && chunk.delta.text) { text += chunk.delta.text; request.onTextDelta?.(chunk.delta.text); }
       if (chunk.delta?.type === "input_json_delta") {
@@ -295,13 +343,15 @@ async function completeAnthropic(config: ProviderConfig, request: CompletionRequ
       }
     }
     if (!finished) throw new Error("模型响应提前断开，请重试。未完成的工具不会执行。");
-    return { text, ...(usage ? { usage } : {}), toolCalls: [...calls.values()].map(call => ({ ...call, arguments: call.arguments || "{}" })) };
+    for (const [index, call] of calls) if (blocks.has(index)) blocks.get(index)!.input = parseObject(call.arguments || "{}");
+    return { text, stopReason, protocol: { key: historyPolicy(config).key, format: "anthropic", contentBlocks: [...blocks.entries()].sort(([a], [b]) => a - b).map(([, block]) => block) }, ...(usage ? { usage } : {}), toolCalls: [...calls.values()].map(call => ({ ...call, arguments: call.arguments || "{}" })) };
   }
   const raw = await response.text();
   if (!response.ok) throw new Error(formatHttpError(response.status, raw, config.apiKey));
   const json = JSON.parse(raw) as {
     usage?: Record<string, any>;
-    content?: Array<{ type?: string; text?: string; id?: string; name?: string; input?: unknown }>;
+    stop_reason?: string;
+    content?: Array<Record<string, any>>;
   };
   let text = "";
   const toolCalls: CompletionResult["toolCalls"] = [];
@@ -315,7 +365,7 @@ async function completeAnthropic(config: ProviderConfig, request: CompletionRequ
       });
     }
   }
-  return { text, toolCalls, ...(anthropicUsage(json.usage) ? { usage: anthropicUsage(json.usage) } : {}) };
+  return { text, toolCalls, stopReason: json.stop_reason, protocol: { key: historyPolicy(config).key, format: "anthropic", contentBlocks: json.content ?? [] }, ...(anthropicUsage(json.usage) ? { usage: anthropicUsage(json.usage) } : {}) };
 }
 
 function numberToken(value: unknown): number | undefined {
@@ -328,6 +378,7 @@ function mergeUsage(previous: ModelUsage | undefined, incoming: ModelUsage | und
 function openAIUsage(raw?: Record<string, any>): ModelUsage | undefined {
   if (!raw) return undefined;
   const result = {
+    reasoningTokens: numberToken(raw.completion_tokens_details?.reasoning_tokens),
     inputTokens: numberToken(raw.prompt_tokens), outputTokens: numberToken(raw.completion_tokens),
     cacheReadTokens: numberToken(raw.prompt_tokens_details?.cached_tokens ?? raw.prompt_cache_hit_tokens),
     cacheWriteTokens: numberToken(raw.prompt_cache_write_tokens),
@@ -340,6 +391,7 @@ function anthropicUsage(raw?: Record<string, any>): ModelUsage | undefined {
   const input = numberToken(raw.input_tokens);
   const read = numberToken(raw.cache_read_input_tokens), write = numberToken(raw.cache_creation_input_tokens);
   const result = {
+    ...(numberToken(raw.output_tokens_details?.thinking_tokens) !== undefined ? { reasoningTokens: raw.output_tokens_details.thinking_tokens as number } : {}),
     ...(input !== undefined ? { inputTokens: input + (read ?? 0) + (write ?? 0) } : {}),
     ...(numberToken(raw.output_tokens) !== undefined ? { outputTokens: raw.output_tokens as number } : {}),
     ...(read !== undefined ? { cacheReadTokens: read } : {}), ...(write !== undefined ? { cacheWriteTokens: write } : {}),

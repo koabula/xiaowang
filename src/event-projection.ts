@@ -2,7 +2,7 @@ import { projectContextUnits } from "./project.ts";
 import type { ModelMessage, StoredEvent, ToolSchema } from "./types.ts";
 import { measureRequest, type ContextPolicy } from "./token-budget.ts";
 
-export const PROJECTOR_VERSION = 1;
+export const PROJECTOR_VERSION = 2;
 export interface ProjectionEntry {
   source: string;
   eventIds: number[];
@@ -41,7 +41,7 @@ export function renderEntry(entry: ProjectionEntry, events: ReadonlyMap<number, 
       ...message, content: `${message.content.slice(0, 1200)}\n[固定首段摘录；完整结果见事件 ${selected.find(item => item.event.type === "tool_result" && item.event.callId === message.toolCallId)?.id}，用 inspect_event 分页读取。]`,
     } : message);
   }
-  return entry.correction ? [{ role: "user", content: `先前记录的更新（来源事件 ${entry.eventIds.join("、")}）：${JSON.stringify(messages)}` }] : messages;
+  return entry.correction ? [{ role: "user", content: `先前记录的更新（来源事件 ${entry.eventIds.join("、")}）：${JSON.stringify(messages.map(({ protocol: _protocol, ...message }) => message))}` }] : messages;
 }
 
 export interface ProjectionPlan {
@@ -92,7 +92,8 @@ export function rebuildProjection(options: {
     if (required(entry) || entry.kind !== "conversation" || entry.correction) continue;
     const first = events.get(entry.eventIds[0]!)?.event;
     if (first?.type !== "assistant_turn" || !first.toolCalls.length) continue;
-    entry.rendering = "excerpt";
+    // Opaque thinking/signature blocks are indivisible; archive the whole native unit instead.
+    entry.rendering = first.protocol ? "reference" : "excerpt";
     if (cost() > target && first.toolCalls.some(call => JSON.stringify(call.input).length > 1200)) entry.rendering = "reference";
   }
   // Completed work is archived before other old conversation units. Order within each class is chronological.

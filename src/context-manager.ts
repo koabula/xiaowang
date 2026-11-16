@@ -1,10 +1,11 @@
+import { replayHistory, outputLimited } from "./protocol-history.ts";
 import { createHash } from "node:crypto";
 import { hydrateImages } from "./attachments.ts";
 import { projectContextUnits } from "./project.ts";
 import { PROJECTOR_VERSION, rebuildProjection, renderEntry, type ProjectionEntry } from "./event-projection.ts";
-import { DEFAULT_CONTEXT_POLICY, inputCapacity, measureRequest, validatePolicy, withoutImageBytes, type ContextPolicy, type TokenBudget } from "./token-budget.ts";
+import { DEFAULT_CONTEXT_POLICY, inputCapacity, watermarks, measureRequest, validatePolicy, withoutImageBytes, type ContextPolicy, type TokenBudget } from "./token-budget.ts";
 import type { Store } from "./store.ts";
-import type { CompletionRequest, CompletionResult, LlmProvider, ModelMessage, StoredEvent, ToolSchema } from "./types.ts";
+import type { CompletionRequest, CompletionResult, LlmProvider, HistoryPolicy, ModelMessage, StoredEvent, ToolSchema } from "./types.ts";
 
 export interface ContextAddition { key: string; message: ModelMessage }
 export interface PreparedContext { request: CompletionRequest; budget: TokenBudget }
@@ -23,20 +24,22 @@ export class ContextManager {
   private events = new Map<number, StoredEvent>();
   private frames = new Map<number, ModelMessage["images"]>();
   private previous: Array<{ hash: string; tokens: number }> = [];
+  private readonly history?: HistoryPolicy;
   private readonly store: Store;
   private readonly botId: string;
   private readonly system: string;
   private readonly tools: ToolSchema[];
 
   constructor(store: Store, botId: string, system: string, tools: ToolSchema[], provider: LlmProvider) {
+    this.history = provider.historyPolicy;
     this.store = store; this.botId = botId; this.system = system; this.tools = tools;
     this.policy = { ...DEFAULT_CONTEXT_POLICY, ...provider.contextPolicy };
     validatePolicy(this.policy);
-    this.scope = digest([PROJECTOR_VERSION, provider.contextKey ?? provider.model, system, tools, this.policy]);
+    this.scope = digest([PROJECTOR_VERSION, provider.contextKey ?? provider.model, system, tools, this.policy, this.history]);
     const events = store.getEvents(botId);
     if (!events.some(({ event }) => event.type === "context_scope" && event.scope === this.scope)) {
       events.push(store.append(botId, { type: "context_scope", scope: this.scope, projectorVersion: PROJECTOR_VERSION,
-        system, tools, policy: this.policy, model: provider.model }));
+        system, tools, policy: this.policy, historyPolicy: this.history, model: provider.model }));
     }
     this.events = new Map(events.map(event => [event.id, event]));
     for (const { event } of events) {
@@ -97,7 +100,7 @@ export class ContextManager {
   }
 
   private resolve = (entry: ProjectionEntry): ModelMessage[] => {
-    const messages = renderEntry(entry, this.events);
+    const messages = replayHistory(renderEntry(entry, this.events), this.history);
     if (entry.kind === "state" && this.frames.has(entry.eventIds[0]!)) messages[0]!.images = this.frames.get(entry.eventIds[0]!);
     return hydrateImages(this.store, this.botId, messages);
   };
@@ -123,8 +126,9 @@ export class ContextManager {
     let request = this.request(this.entries, signal);
     let budget = await this.measure(request, provider);
     const capacity = inputCapacity(this.policy);
-    if (budget.input > capacity * this.policy.highWater) {
-      for (const target of [capacity * this.policy.lowWater, 0]) {
+    const { high, low } = watermarks(this.policy);
+    if (budget.input > high) {
+      for (const target of [low, 0]) {
         const plan = rebuildProjection({ entries: this.entries, events: this.events, pinned: this.pinned,
           system: this.system, tools: this.tools, policy: this.policy, throughEventId: this.throughEventId, target, resolve: this.resolve });
         if (!plan.changed) continue;
@@ -162,7 +166,7 @@ export class ContextManager {
       result = await provider.complete(request);
       request.signal?.throwIfAborted();
       this.store.append(this.botId, { type: "model_usage", scope: this.scope, epoch: this.epoch, requestHash,
-        model: provider.model, budget, usage: result.usage, durationMs: Date.now() - started, prefixTokens: Math.min(prefixTokens, budget.input) });
+        model: provider.model, budget, usage: result.usage, stopReason: result.stopReason, ...(outputLimited(result.stopReason) ? { error: "模型输出额度耗尽，回答未完成。" } : {}), durationMs: Date.now() - started, prefixTokens: Math.min(prefixTokens, budget.input) });
       this.previous = current;
       return result;
     } catch (error) {
@@ -183,6 +187,7 @@ export function contextUsage(store: Store, botId: string) {
     requests: calls.length, failures: calls.filter(call => call.error).length,
     reportedRequests: reported.length, cacheReportedRequests: cacheReported.length,
     inputTokens: reported.length ? reported.reduce((sum, call) => sum + call.usage!.inputTokens!, 0) : null,
+    reasoningTokens: calls.some(call => call.usage?.reasoningTokens !== undefined) ? calls.reduce((sum, call) => sum + (call.usage?.reasoningTokens ?? 0), 0) : null,
     outputTokens: calls.some(call => call.usage?.outputTokens !== undefined) ? calls.reduce((sum, call) => sum + (call.usage?.outputTokens ?? 0), 0) : null,
     cacheReadTokens: cacheReported.length ? read : null,
     cacheWriteTokens: calls.some(call => call.usage?.cacheWriteTokens !== undefined) ? calls.reduce((sum, call) => sum + (call.usage?.cacheWriteTokens ?? 0), 0) : null,

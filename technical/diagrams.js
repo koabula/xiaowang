@@ -72,7 +72,7 @@ const loop = {
     node('queued', 790, 145, 310, 90, '独立任务排队', ['新任务编号 · 等待执行槽位'], '显式排队拥有独立 jobId。同 bot 等待当前执行释放槽位后启动，其他工作区可以在并发上限内执行。', ['src/jobs.ts'], 'orange'),
     node('supplement', 40, 325, 235, 95, '连续补充消息', ['立即保存 · 关联原任务'], '每条补充作为 user_text 保存，其事件编号加入任务 supplementEventIds。多条补充可以在一次模型调用边界合并接收。', ['src/jobs.ts', 'src/types.ts'], 'orange'),
     node('updates', 355, 325, 245, 95, '接收待处理补充', ['readUpdates() · 按事件编号去重'], '循环在模型调用前读取关联补充，仅追加尚未进入本轮 context 的事件。相应快照和页面画面也随补充更新。', ['src/harness.ts', 'desktop/main/index.ts']),
-    node('context', 355, 495, 245, 95, '装配本次模型输入', ['投影历史 · 资料目录 · 图像'], 'projectLlmContext 生成系统与会话投影，随后插入共享快照并通过 hydrateImages 加载附件图像字节。独立排队任务的输入在当前任务中被排除。', ['src/harness.ts', 'src/project.ts', 'src/attachments.ts']),
+    node('context', 355, 495, 245, 95, '装配本次模型输入', ['投影历史 · 资料目录 · 图像'], 'ContextManager 从事件与快照装配消息；相同模型保留原生 thinking 协议，随后通过 hydrateImages 加载附件图像字节。独立排队任务的输入在当前任务中被排除。', ['src/harness.ts', 'src/project.ts', 'src/attachments.ts']),
     node('model', 355, 665, 245, 95, '调用后台 LLM', ['system + messages + tools'], 'Provider 调用 OpenAI 兼容或 Anthropic 接口，支持流式文本增量和结构化工具调用。桌面任务默认最多调用 40 步。', ['src/provider.ts', 'src/harness.ts']),
     node('parse', 790, 665, 310, 95, '保存并解析模型输出', ['assistant_turn · toolCalls'], '模型返回后先检查取消信号。助手输出和工具调用写入事件；工具调用按返回顺序执行。普通答案进入完成检查。', ['src/harness.ts']),
     node('tool', 790, 495, 310, 95, '执行工具并写回结果', ['tool_result · artifact'], 'executeTool 使用当前 bot、工作区和驱动。每项结果与工具调用编号关联，产物记录另存为 artifact，随后进入下一次调用。', ['src/harness.ts', 'src/tools.ts']),
@@ -154,7 +154,7 @@ const layers = {
     node('history', 170, 375, 350, 84, '03 · 历史消息块', ['用户 / 助手 / 完整工具调用与结果'], '按来源事件投影并追加，正常轮次追加消息，达到水位才调整视图。工具调用和对应返回构成一个单元，在重投影时作为一个单元处理。', ['src/project.ts', 'src/context-manager.ts']),
     node('index', 170, 480, 350, 84, '02 · 历史索引与引用', ['归档事件范围 · 固定摘录 · 读取入口'], '历史归档后出现索引层，提供事件范围、数量与历史反查入口。原文仍保存在事件流中。大工具结果采用固定首段摘录，或把整个工具单元替换为可读取的事件引用。', ['src/context-manager.ts', 'src/event-projection.ts', 'src/types.ts'], 'teal'),
     node('stable', 170, 585, 350, 84, '01 · 稳定前缀', ['人设与工作区规则 · 工具定义'], 'system 与 tools 在相同 bot、接口/模型、身份与预算作用域中保持稳定。任务说明、术语和资料目录进入尾部状态块。工具通过独立 API 字段传递，此图展示逻辑层次。', ['src/project.ts', 'src/runtime.ts', 'src/provider.ts']),
-    node('reserve', 640, 690, 450, 83, '输出与安全余量另行预留', ['4,096 输出 + 2,048 安全 tokens'], '预算在最终图像装配后检查，同时覆盖 system、tools、messages、图片、输出预留与安全余量。预留空间不作为历史消息发送。', ['src/token-budget.ts']),
+    node('reserve', 640, 690, 450, 83, '输出与安全余量另行预留', ['研究档：8,192 输出 + 4,096 安全'], '预算在最终图像装配后检查，同时覆盖 system、tools、messages、图片、输出预留与安全余量。预留空间不作为历史消息发送。', ['src/token-budget.ts']),
   ].map(item => item.id === 'reserve' ? item : { ...item, shape: 'slice' }),
   edges: [], paths: { all: [], prefix: ['stable', 'index', 'history'], tail: ['state', 'input'], memory: ['index', 'history', 'reserve'] },
 };
@@ -163,15 +163,31 @@ const projection = {
   defaultNode: 'ledger',
   nodes: [
     node('events', 40, 170, 310, 116, '01 · 读取当前任务的事件', ['按 bot 与任务归属筛选', '接收尚未处理的补充'], 'harness 筛除独立排队任务，接收当前任务的文字与语音补充；原始事件保留在 SQLite。', ['src/harness.ts', 'src/jobs.ts'], 'teal'),
-    node('units', 425, 170, 310, 116, '02 · 构造完整消息单元', ['转写采用最新修订', '工具调用 + 对应结果成组'], 'projectContextUnits 从事件恢复用户、助手与工具单元。当前执行路径读取完整工具结果；投影不会将每条结果截到 8,000 字符。', ['src/project.ts']),
+    node('units', 425, 170, 310, 116, '02 · 构造完整消息单元', ['转写采用最新修订', '调用 + 协议 + 对应结果成组'], 'projectContextUnits 从事件恢复用户、助手与工具单元。当前执行路径读取完整工具结果，恢复原生 thinking / 签名、服务商调用编号和原始参数。旧版本缺失协议或切换模型时转为历史数据，原事件不变。', ['src/project.ts']),
     node('ledger', 810, 170, 310, 116, '03 · 追加投影清单', ['来源指纹去重 · 状态增量', '迟到修订作为新证据追加'], 'ContextManager 以来源编号与内容指纹识别新单元。状态快照写入 context_state，context_append 保存精确来源编号与渲染方式。迟到转写修订追加更新说明，已有前缀保持原样。', ['src/context-manager.ts', 'src/event-projection.ts', 'src/types.ts']),
-    node('model', 40, 485, 310, 116, '06 · 调用与记录用量', ['适配 API 消息与缓存字段', '请求哈希 · 实际 tokens · 缓存用量'], '正常请求保留消息边界。model_usage 保存预算、耗时、服务端 usage 和共同前缀估算。服务端没有报告的字段保留为未知。', ['src/provider.ts', 'src/context-manager.ts']),
+    node('model', 40, 485, 310, 116, '06 · 调用与记录用量', ['原样回传 thinking / 签名', '请求哈希 · 实际 tokens · 缓存用量'], '正常请求保留消息边界，同接口同模型的协议块完整回传。model_usage 保存预算、耗时、服务端 usage 和共同前缀估算。服务端没有报告的字段保留为未知。', ['src/provider.ts', 'src/context-manager.ts']),
     node('budget', 425, 485, 310, 116, '05 · 检查完整预算', ['高水位触发确定性重投影', '仍超上限则保留输入并报错'], '完整输入使用本地 BPE 估算或官方 Anthropic 计数。超过水位后按固定规则选择、摘录与归档，不调用模型。准备期间到达的补充再次合入后，再发起任务推理。', ['src/token-budget.ts', 'src/context-manager.ts', 'src/harness.ts']),
     node('visual', 810, 485, 310, 116, '04 · 装配实际图像', ['图片附件加载原件字节', '加入受理 / 补充关联画面'], 'hydrateImages 在当前 bot 的资料权限内加载图片。页面画面仅在进程内保留，状态事件与检查点不持久化图像字节；状态文字始终说明临时画面的可用范围。', ['src/attachments.ts', 'src/context-manager.ts'], 'teal'),
   ],
   edges: [edge('events', 'units', 'M350 228H425'), edge('units', 'ledger', 'M735 228H810'), edge('ledger', 'visual', 'M965 286V485', '追加后装配', 965, 390), edge('visual', 'budget', 'M810 543H735'), edge('budget', 'model', 'M425 543H350'), edge('model', 'events', 'M195 485V286', '工具结果与新补充', 195, 390, 'data')],
   paths: { all: [], append: ['events', 'units', 'ledger'], send: ['visual', 'budget', 'model'] },
   sequences: { all: ['events', 'units', 'ledger', 'visual', 'budget', 'model'], append: ['events', 'units', 'ledger'], send: ['visual', 'budget', 'model'] },
+};
+const protocol = {
+  title: 'Thinking 协议的完整回放', subtitle: '正文用于交流；原始协议用于同模型续接；旧会话沿用已记录的结果', height: 850,
+  defaultNode: 'saved', viewNodes: { native: 'replay', legacy: 'historical' },
+  nodes: [
+    node('receive', 40, 155, 310, 115, '01 · 接收模型响应', ['JSON / SSE 分片组装', '正文 · reasoning · 原始调用'], 'OpenAI 兼容接口保留 reasoning_content 与 reasoning_details；Anthropic 保留完整 thinking、signature、redacted thinking 和工具内容块。只将正文作为文字增量显示。', ['src/provider.ts']),
+    node('saved', 425, 155, 310, 115, '02 · 保存原始事件', ['assistant_turn.protocol', '接口 / 模型身份与本地调用归属'], '协议与正文分别保存。工具调用以本地唯一 ID 关联执行结果，原始服务商 ID 与参数独立保存，避免事件身份与 API 回放身份混淆。', ['src/types.ts', 'src/harness.ts', 'src/store.ts'], 'teal'),
+    node('select', 810, 155, 310, 115, '03 · 确定性恢复', ['完整单元 · 原始事件编号', '校验接口与模型身份'], '投影版本 2 从原始事件重建完整助手/工具组。检查点只保存来源与渲染方式。原生协议完整保留或整体转为引用，不截断签名或 thinking。', ['src/project.ts', 'src/event-projection.ts', 'src/protocol-history.ts']),
+    node('replay', 810, 440, 310, 115, '04 · 同模型原样回传', ['thinking + 调用 + 工具结果', '协议参与完整输入预算'], '协议身份匹配时，恢复所需字段及原始工具 ID、参数。DeepSeek 携带 tools 的请求回传所选助手轮次的 reasoning_content，包括没有调用工具的回复。', ['src/provider.ts', 'src/protocol-history.ts', 'src/token-budget.ts']),
+    node('historical', 425, 440, 310, 115, '旧会话 / 切换模型', ['缺失字段或协议身份不同', '整组作为历史数据引用'], '无法补回旧版本未保存的协议。将正文、调用与结果转为明确标注的历史数据，保留已有成功结果；不补造 reasoning，也不重新执行工具。', ['src/protocol-history.ts', 'test/thinking-protocol.test.ts'], 'orange'),
+    node('limit', 40, 440, 310, 115, '输出额度耗尽', ['保留协议与实际用量', '报告未完成，本步工具不执行'], 'length / max_tokens 不是正常完成。输出预留包含 thinking，可单独提高。reasoningTokens 是 outputTokens 的已报告子集，不额外相加。', ['src/harness.ts', 'src/context-manager.ts', 'src/token-budget.ts'], 'orange'),
+    node('continue', 425, 685, 695, 90, '下一次模型调用', ['完整协议或明确历史数据 → 预算校验 → 继续研究'], '正常回放沿用前缀并追加尾部；配置或投影版本变化开启新的作用域。恢复和预算维护不调用摘要模型，也不回滚或重放外部副作用。', ['src/context-manager.ts', 'test/thinking-protocol.test.ts'], 'teal'),
+  ],
+  edges: [edge('receive', 'saved', 'M350 212H425'), edge('saved', 'select', 'M735 212H810'), edge('select', 'replay', 'M965 270V440', '身份匹配', 965, 360), edge('select', 'historical', 'M810 250H770V385H580V440', '缺失 / 不匹配', 690, 373, 'direct'), edge('receive', 'limit', 'M195 270V440', 'length / max_tokens', 195, 360, 'direct'), edge('replay', 'continue', 'M965 555V685'), edge('historical', 'continue', 'M580 555V685')],
+  paths: { native: ['receive', 'saved', 'select', 'replay', 'continue'], legacy: ['saved', 'select', 'historical', 'continue', 'limit'] },
+  sequences: { native: ['receive', 'saved', 'select', 'replay', 'continue'], legacy: ['select', 'historical', 'continue', 'limit'] },
 };
 const prefix = {
   title: '连续请求与稳定前缀', subtitle: '同一周期追加尾部；预算触发确定性重投影，开始新的周期', height: 850,
@@ -186,17 +202,17 @@ const prefix = {
   paths: { all: [], epoch: ['second', 'third'], metrics: ['estimate', 'actual'] },
 };
 const budget = {
-  title: '预算、水位与确定性重投影', subtitle: '默认窗口 32,768 tokens；图中曲线为交互示意值', height: 900,
+  title: '预算、水位与确定性重投影', subtitle: '研究档：总窗口 131,072；输入低 32,768 / 高 98,304，曲线为示意值', height: 900,
   defaultNode: 'high', viewNodes: { rebuild: 'checkpoint', accounting: 'input' },
   nodes: [
-    node('input', 40, 145, 620, 94, '输入可用空间 26,624', ['system + tools + messages + images'], '窗口 32,768 减去输出预留 4,096 和安全余量 2,048，得到输入容量 26,624。实际请求超过硬上限时不会发送任务推理。', ['src/token-budget.ts']),
-    node('output', 685, 145, 200, 94, '输出 4,096', ['max_tokens'], '显式 maxOutputTokens 传给任务模型接口。投影器只执行程序逻辑，不生成额外模型请求。', ['src/provider.ts', 'src/token-budget.ts']),
-    node('safety', 910, 145, 210, 94, '安全 2,048', ['协议 / 估算余量'], '为协议封装、tokenizer 差异和计数偏差保留安全空间。图片本地计数每张预留 8,192，可通过环境变量调整。', ['src/token-budget.ts'], 'teal'),
-    { ...node('start', 155, 515, 0, 0, '8,000', [], '示意初始输入。正常轮次保留已有前缀，追加新的对话、工具结果与状态。', ['src/context-manager.ts']), shape: 'point' },
-    { ...node('grow', 345, 452, 0, 0, '14,000', [], '输入逐步增长，不按固定最近 N 条截断；完整工具结果参与预算。', ['src/context-manager.ts']), shape: 'point' },
-    { ...node('high', 535, 355, 0, 0, '23,200', [], '超过输入容量的 85%（22,630.4）触发确定性重投影。高水位以输入容量计算，输出与安全预留不会被挤占。', ['src/context-manager.ts', 'src/token-budget.ts'], 'orange'), shape: 'point' },
-    { ...node('reduced', 725, 457, 0, 0, '13,500', [], '先按 55% 低水位目标选择旧块，保留当前任务输入、最新状态与最后的对话单元。结果须在硬上限内且比原输入小；必要内容较大时可以高于目标。', ['src/context-manager.ts'], 'teal'), shape: 'point' },
-    { ...node('next', 915, 410, 0, 0, '18,000', [], '检查点提交后进入新周期，正常尾部继续追加。下一次触及高水位才再次调整投影。', ['src/context-manager.ts']), shape: 'point' },
+    node('input', 40, 145, 620, 94, '输入可用空间 118,784', ['system + tools + messages + images'], '研究档总窗口 131,072 减去输出 8,192 和安全余量 4,096，输入容量 118,784。保守默认档仍为总窗口 32,768，输入容量 26,624。模型上限约束实际预算。实际请求超过硬上限时不会发送任务推理。', ['src/token-budget.ts']),
+    node('output', 685, 145, 200, 94, '输出 8,192', ['含 thinking'], '输出预留独立配置并包含 thinking。max_tokens 耗尽时保留记录、报告未完成，本步工具不执行。投影器不发起摘要请求。', ['src/provider.ts', 'src/token-budget.ts']),
+    node('safety', 910, 145, 210, 94, '安全 4,096', ['协议 / 估算余量'], '为协议封装、tokenizer 差异和计数偏差保留安全空间。图片本地计数每张预留 8,192，可通过环境变量调整。', ['src/token-budget.ts'], 'teal'),
+    { ...node('start', 155, 540, 0, 0, '24,000', [], '示意初始输入。正常轮次保留已有前缀，追加新的对话、工具结果与状态。', ['src/context-manager.ts']), shape: 'point' },
+    { ...node('grow', 345, 476, 0, 0, '50,000', [], '输入逐步增长，不按固定最近 N 条截断；完整工具结果参与预算。', ['src/context-manager.ts']), shape: 'point' },
+    { ...node('high', 535, 360, 0, 0, '100,000', [], '研究档输入超过独立高水位 98,304 时触发确定性重投影。水位可独立配置，改变输出预留不会按比例移动它；显式水位必须落在输入容量内。', ['src/context-manager.ts', 'src/token-budget.ts'], 'orange'), shape: 'point' },
+    { ...node('reduced', 725, 525, 0, 0, '30,000', [], '研究档以独立低水位 32,768 为目标选择旧块，保留当前任务输入、最新状态与最后的对话单元。结果须在硬上限内且比原输入小；必要内容较大时可以高于目标。', ['src/context-manager.ts'], 'teal'), shape: 'point' },
+    { ...node('next', 915, 445, 0, 0, '62,000', [], '检查点提交后进入新周期，正常尾部继续追加。下一次触及高水位才再次调整投影。', ['src/context-manager.ts']), shape: 'point' },
     node('index', 40, 680, 310, 120, '01 · 选择与折叠', ['最新状态 + 当前要求 + 工作片段', '固定摘录 + 可读取的原文引用'], '纯函数 rebuildProjection 先移除被取代的旧状态，再为较旧工具结果生成固定摘录，最后按已结束任务优先、其余较旧单元顺序归档。原始事件不修改。', ['src/context-manager.ts']),
     node('validate', 425, 680, 310, 120, '02 · 校验与保留', ['最新要求 · 完整工具单元', '来源引用 / 上限 / 缩小幅度校验'], '当前任务输入与连续补充、每个键的最新状态、最后一个对话单元保留。固定工具摘录保留调用与结果配对；取消或无法满足硬预算时不提交新检查点。', ['src/context-manager.ts', 'test/context-manager.test.ts']),
     node('checkpoint', 810, 680, 310, 120, '03 · 提交新周期', ['context_checkpoint · epoch + 1', '版本 + 来源编号 + 渲染方式'], '检查点保存 projectorVersion、throughEventId、来源清单、状态引用与输入保护集合。重启通过原事件渲染同一视图，不重新调用模型或执行工具。临时页面像素只在当前进程可用。', ['src/context-manager.ts', 'src/event-projection.ts', 'src/types.ts'], 'teal'),
@@ -278,15 +294,15 @@ function renderDiagram(id, config) {
     svg.append(element('text', { x: 82, y: 442, transform: 'rotate(-90 82 442)', class: 'annotation', 'text-anchor': 'middle' }, '请求的逻辑顺序'));
   }
   if (id === 'budget') {
-    for (const [y, label, color] of [[315, '输入容量 26,624', '#b3bfd2'], [361, '高水位 22,630.4', '#cca571'], [445, '低水位目标 14,643.2', '#83b2a8']]) {
+    for (const [y, label, color] of [[315, '输入容量 118,784', '#b3bfd2'], [364, '输入高水位 98,304', '#cca571'], [521, '输入低水位目标 32,768', '#83b2a8']]) {
       svg.append(element('path', { d: `M120 ${y}H1060`, stroke: color, 'stroke-dasharray': '5 6', fill: 'none' }));
       svg.append(element('text', { x: 1060, y: y - 12, class: 'annotation', 'text-anchor': 'end' }, label));
     }
     svg.append(element('path', { d: 'M120 300V600H1060', stroke: '#dce3ef', fill: 'none' }));
-    svg.append(element('path', { d: 'M155 515L345 452L535 355', stroke: '#2b59c3', 'stroke-width': 3, fill: 'none' }));
-    svg.append(element('path', { d: 'M535 355L725 457', stroke: '#b77b38', 'stroke-width': 3, 'stroke-dasharray': '7 5', fill: 'none' }));
-    svg.append(element('path', { d: 'M725 457L915 410', stroke: '#2b59c3', 'stroke-width': 3, fill: 'none' }));
-    svg.append(element('text', { x: 620, y: 560, class: 'annotation', 'text-anchor': 'middle' }, '选择 / 摘录 → 校验 → 新周期'));
+    svg.append(element('path', { d: 'M155 540L345 476L535 360', stroke: '#2b59c3', 'stroke-width': 3, fill: 'none' }));
+    svg.append(element('path', { d: 'M535 360L725 525', stroke: '#b77b38', 'stroke-width': 3, 'stroke-dasharray': '7 5', fill: 'none' }));
+    svg.append(element('path', { d: 'M725 525L915 445', stroke: '#2b59c3', 'stroke-width': 3, fill: 'none' }));
+    svg.append(element('text', { x: 620, y: 580, class: 'annotation', 'text-anchor': 'middle' }, '选择 / 摘录 → 校验 → 新周期'));
     svg.append(element('text', { x: 120, y: 628, class: 'annotation' }, '连续模型调用 →'));
   }
   for (const connection of config.edges) {
@@ -332,7 +348,7 @@ function renderDiagram(id, config) {
     svg.append(element('path', { class: `wire ${kind}`, d: `M${x} ${footerY - 5}h28` }));
     svg.append(element('text', { class: 'footer', x: x + 39, y: footerY }, label));
   });
-  svg.append(element('text', { class: 'footer', x: 1120, y: footerY, 'text-anchor': 'end' }, '小王同学 · v0.1.16'));
+  svg.append(element('text', { class: 'footer', x: 1120, y: footerY, 'text-anchor': 'end' }, '小王同学 · v0.1.17'));
   figure.querySelector('.diagram-scroll').append(svg);
   const state = { id, config, figure, svg, view: figure.querySelector('[data-view][aria-pressed=true]').dataset.view, step: -1, timer: null };
   diagrams.set(id, state);
@@ -500,7 +516,7 @@ async function exportDiagram(state, format) {
   } catch (error) { showStatus(`导出失败，${error.message}`); }
 }
 
-for (const [id, config] of Object.entries({ overview, loop, context, layers, projection, prefix, budget })) renderDiagram(id, config);
+for (const [id, config] of Object.entries({ overview, loop, context, layers, projection, protocol, prefix, budget })) renderDiagram(id, config);
 for (const link of document.querySelectorAll('[data-source]')) link.href = SOURCE_ROOT + link.dataset.source;
 
 document.querySelector('#print-document').addEventListener('click', () => {

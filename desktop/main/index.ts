@@ -1,3 +1,4 @@
+import { contextPolicy } from "../../src/token-budget.ts";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, protocol, session, shell } from "electron";
 import { mkdirSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -32,7 +33,7 @@ import { listCanvasPages, resolveInsideWorkspace } from "../../src/workspace.ts"
 import { browseBotFiles, type BrowseOptions } from "../../src/file-browser.ts";
 import { BotBrowsers } from "./browser.ts";
 import { loadSecrets, mergeSecrets, publicSettings, type SecretPatch, type SecretRecord } from "./secrets.ts";
-import { availableRealtimeSettings, mergeSettings } from "../../src/settings.ts";
+import { availableRealtimeSettings, mergeSettings, contextEnvironment } from "../../src/settings.ts";
 import { MossVoiceCatalog } from "./moss-voices.ts";
 import { GeminiCall } from "./gemini-call.ts";
 import { geminiSession } from "../../src/gemini-session.ts";
@@ -229,6 +230,7 @@ function envFromSecrets(): NodeJS.ProcessEnv {
 function envFromRecord(record: SecretRecord): NodeJS.ProcessEnv {
   return {
     ...Object.fromEntries(["XIAOWANG_CONTEXT_WINDOW", "XIAOWANG_MAX_OUTPUT_TOKENS", "XIAOWANG_CONTEXT_SAFETY_TOKENS", "XIAOWANG_IMAGE_TOKEN_BUDGET", "XIAOWANG_PROMPT_CACHE"].map(key => [key, process.env[key]])),
+    ...contextEnvironment(record, process.env),
     XIAOWANG_MODEL: record.model,
     XIAOWANG_BASE_URL: record.baseUrl,
     XIAOWANG_API_STYLE: record.apiStyle,
@@ -237,13 +239,7 @@ function envFromRecord(record: SecretRecord): NodeJS.ProcessEnv {
 }
 
 function draftSecrets(patch: SecretPatch): SecretRecord {
-  return {
-    ...secrets,
-    model: patch.model?.trim() || secrets.model,
-    baseUrl: patch.baseUrl?.trim() ?? secrets.baseUrl,
-    apiStyle: patch.apiStyle?.trim() ?? secrets.apiStyle,
-    apiKey: patch.apiKey?.trim() || secrets.apiKey,
-  };
+  return mergeSettings(secrets, { ...patch, model: patch.model?.trim() || secrets.model });
 }
 
 function libraryOf(slug: string) {
@@ -609,7 +605,9 @@ function registerIpc(): void {
     return shell.openExternal(realtimeKeyPage(typeof service === "string" ? service : "", typeof region === "string" ? region : ""));
   });
   ipcMain.handle("settings:save", (_event, patch: SecretPatch) => {
-    assertRealtimeAvailable(mergeSettings(secrets, patch).realtimeService);
+    const draft = mergeSettings(secrets, patch);
+    assertRealtimeAvailable(draft.realtimeService);
+    contextPolicy(envFromRecord(draft));
     secrets = mergeSecrets(secrets, patch);
     publish();
     return settingsView();

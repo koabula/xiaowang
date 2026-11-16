@@ -1,3 +1,4 @@
+import type { ContextSettings } from "../../src/settings.ts";
 import type { UpdateState } from "../main/update-state.ts";
 export type { UpdateState };
 import type { Attachment, TaskJob } from "../../src/types.ts";
@@ -123,7 +124,7 @@ export interface CanvasPage {
   name: string;
 }
 
-export interface SettingsView {
+export interface SettingsView extends ContextSettings {
   experimentalMossEnabled?: boolean;
   geminiEnabled?: boolean;
   realtimeProfiles?: Partial<Record<RealtimeServiceId, VoiceProfileView>>;
@@ -142,7 +143,7 @@ export interface SettingsView {
   ready: boolean;
 }
 
-export interface SettingsPatch {
+export interface SettingsPatch extends ContextSettings {
   realtimeProfiles?: Partial<Record<RealtimeServiceId, VoiceProfilePatch>>;
   model?: string;
   baseUrl?: string;

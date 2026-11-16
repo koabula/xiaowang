@@ -55,7 +55,7 @@ export class Runtime {
   }
 
   modelContext(bot: Bot, system: string, tools: ToolSchema[], provider: LlmProvider): ContextManager {
-    const key = createHash("sha256").update(JSON.stringify([bot.id, provider.contextKey ?? provider.model, provider.contextPolicy, system, tools])).digest("hex");
+    const key = createHash("sha256").update(JSON.stringify([bot.id, provider.contextKey ?? provider.model, provider.contextPolicy, provider.historyPolicy, system, tools])).digest("hex");
     let context = this.contexts.get(key);
     if (!context) { context = new ContextManager(this.store, bot.id, system, tools, provider); this.contexts.set(key, context); }
     return context;
