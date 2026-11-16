@@ -13,6 +13,7 @@
 .rail .steward { display: flex; align-items: center; justify-content: flex-start; padding: 8px; gap: 10px; margin: 0 0 6px; }
 .rail .steward .avatar { width: 40px !important; height: 40px !important; }
 .rail .search-line input, .rail .new-bot input { border-radius: var(--control-radius); background: transparent; box-shadow: none; border-bottom: 1px solid var(--line); padding-left: 8px; }
+.rail .search-line input:focus-visible { outline: none; }
 .rail .bot { border-radius: var(--control-radius); position: relative; }
 .rail .bot.on::before { content: ""; position: absolute; left: -3px; top: 12px; bottom: 12px; width: 2px; background: var(--accent); }
 .voice-panel { margin: 0 24px; padding: 12px 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 10px; }

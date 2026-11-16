@@ -84,10 +84,13 @@ test('desktop: chat stays clean; voice work and results live only inside their c
   await page.locator('.search-line input').fill('Other space');
   assert.equal(await page.locator('.bot').count(), 1);
   assert.equal(await page.locator('.search-line input').evaluate(node => node === document.activeElement), true);
-  await page.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-editorial-narrow.png') });
+  assert.equal(await page.locator('.search-line input').evaluate(node => getComputedStyle(node).outlineStyle), 'none');
+  await page.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-editorial-narrow.png'), animations: 'disabled' });
   await page.locator('.search-line input').fill('');
   await page.setViewportSize({ width: 1280, height: 840 });
   await page.emulateMedia({ colorScheme: 'light' });
+  await page.locator('.search-line input').click();
+  assert.equal(await page.locator('.search-line input').evaluate(node => getComputedStyle(node).outlineStyle), 'none');
   const greeting = await until(async () => (await page.evaluate(() => window.xiaowang.getState())).jobs.find(job => job.id !== 'old-greeting' && job.task === 'hi'));
   assert.equal(greeting.display, 'conversation'); assert.equal(await page.locator(`[data-job-id="${greeting.id}"]`).count(), 0);
   await sourceCall.locator(':scope > button').click();
