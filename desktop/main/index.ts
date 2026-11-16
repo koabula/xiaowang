@@ -30,6 +30,7 @@ import { CANVAS_HTML_CAP, assertHttpUrl } from "../../src/stage.ts";
 import type { Channel, SessionEvent } from "../../src/types.ts";
 import { listCanvasPages, resolveInsideWorkspace } from "../../src/workspace.ts";
 import { browseBotFiles, type BrowseOptions } from "../../src/file-browser.ts";
+import { filePreview } from "../../src/file-preview.ts";
 import { BotBrowsers } from "./browser.ts";
 import { loadSecrets, mergeSecrets, publicSettings, type SecretPatch, type SecretRecord } from "./secrets.ts";
 import { availableRealtimeSettings, mergeSettings, contextEnvironment } from "../../src/settings.ts";
@@ -486,12 +487,12 @@ function registerIpc(): void {
     const bot = runtime.store.requireBot(slug);
     const resolved = resolveInsideWorkspace(bot.workspaceDir, rel);
     if (!resolved.ok) throw new Error(resolved.error);
-    if (/\.html?$/i.test(resolved.rel)) {
+    if (filePreview(resolved.rel) === "canvas") {
       const html = readFileSync(resolved.abs, "utf8");
       if (Buffer.byteLength(html) > CANVAS_HTML_CAP) throw new Error("这份页面过大。");
       send("stage", { slug, mode: "canvas", title: resolved.rel, html, page: 1 });
     } else {
-      if (!/\.(pdf|md|markdown|txt|csv|json|jsonl)$/i.test(resolved.rel)) throw new Error("暂时不能预览这种文件。");
+      if (filePreview(resolved.rel) !== "file") throw new Error("暂时不能预览这种文件。");
       const result = runtime.store.addLibraryBytes(bot.id, path.basename(resolved.rel), readFileSync(resolved.abs));
       send("stage", { slug, mode: "file", id: result.ref.id, filename: result.ref.filename, page: 1, restore: true });
     }

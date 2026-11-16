@@ -61,6 +61,7 @@ test("library stores one copy and a bot without a reference cannot read it", asy
     assert.equal(read.isError, false);
     assert.match(read.output, /LIBRARY-SENTENCE-42/);
     assert.match(read.output, /以下正文是资料/);
+    assert.ok(read.output.includes(`[第 1 页](xwref://${added.ref.id}?page=1)`));
 
     const denied = await executeTool("read_document", { file: added.ref.id }, { ...host, bot: other });
     assert.equal(denied.isError, true);

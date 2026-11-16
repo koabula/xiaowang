@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, LoaderCircle, Minus, Plus, Search, X } from "lucide-react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { RichText } from "./rich-text.tsx";
 import { AnnotationMode, GlobalWorkerOptions, getDocument, type PDFDocumentLoadingTask, type PDFDocumentProxy } from "pdfjs-dist";
 import { EventBus, PDFViewer, PDFLinkService, PDFFindController, ScrollMode, RenderingStates } from "pdfjs-dist/web/pdf_viewer.mjs";
 import "pdfjs-dist/web/pdf_viewer.css";
@@ -40,7 +39,7 @@ function TextReader({ slug, file }: { slug: string; file: ReaderFile }) {
     if (file.requestId) void window.xiaowang.stageAck(slug, file.requestId, { page: 1, totalPages: 1, error: error || undefined });
     if (!error) void window.xiaowang.stagePosition(slug, { path: file.id, page: 1, totalPages: 1, mode: "file" });
   }, [slug, file.id, file.requestId, error, loading]);
-  return <div className="document-reader" aria-label={file.filename}>{loading ? <Loading /> : null}{error ? <p className="reader-error" role="alert">{error}</p> : null}{/\.(md|markdown)$/i.test(file.filename) ? <div className="prose"><Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown></div> : <pre className="plain">{text}</pre>}</div>;
+  return <div className="document-reader" aria-label={file.filename}>{loading ? <Loading /> : null}{error ? <p className="reader-error" role="alert">{error}</p> : null}{/\.(md|markdown)$/i.test(file.filename) ? <div className="prose"><RichText text={text} slug={slug} /></div> : <pre className="plain">{text}</pre>}</div>;
 }
 function Loading() { return <div className="reader-loading" role="status" aria-label="Loading document / 正在载入文档"><LoaderCircle size={18} className="spin" /></div>; }
 
