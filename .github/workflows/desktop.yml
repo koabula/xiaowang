@@ -118,6 +118,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
       - uses: actions/download-artifact@v8
         with:
           pattern: XiaoWang-*
@@ -132,4 +135,5 @@ jobs:
         run: |
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --draft --verify-tag --generate-notes
           gh release upload "$RELEASE_TAG" release-publish/* --clobber
+          node desktop/scripts/release-notes.ts "$RELEASE_TAG"
           gh release edit "$RELEASE_TAG" --draft=false --latest
