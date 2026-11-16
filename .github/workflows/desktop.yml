@@ -81,7 +81,11 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Build installers
-        run: npx --no-install electron-builder ${{ matrix.arguments }} --publish never
+        shell: bash
+        run: |
+          if [ -z "${CSC_LINK:-}" ]; then unset CSC_LINK; fi
+          if [ -z "${WIN_CSC_LINK:-}" ]; then unset WIN_CSC_LINK; fi
+          npx --no-install electron-builder ${{ matrix.arguments }} --publish never
       - name: Verify macOS signatures and first launch from ZIP and DMG
         if: matrix.name == 'macOS'
         env:
