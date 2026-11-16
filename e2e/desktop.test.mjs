@@ -47,6 +47,9 @@ test("desktop: voice interruption, PDF Viewer, bot files, settings and saved sta
   const reference = seed.store.addLibraryBytes(seed.activeBot().id, "paper.pdf", tinyPdf("EVIDENCE-SENTENCE-42")).ref;
   seed.store.addLibraryBytes(seed.activeBot().id, "notes.md", Buffer.from("# Notes\nA short research note."));
   seed.close();
+  let releaseFirstText;
+  const firstTextGate = new Promise(resolve => { releaseFirstText = resolve; });
+  let textRequests = 0;
   const model = createServer(async (request, response) => {
     let body = ""; for await (const chunk of request) body += chunk;
     const input = JSON.parse(body);
@@ -61,6 +64,7 @@ test("desktop: voice interruption, PDF Viewer, bot files, settings and saved sta
       response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: `原文：EVIDENCE-SENTENCE-42。[来源，第1页](xwref://${reference.id}?page=1)` }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`); return;
     }
     response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "已核对资料" } }] })}\n\n`);
+    if (++textRequests === 1) await firstTextGate;
     await sleep(120);
     response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "，结果已经保存。" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`);
   });
@@ -100,6 +104,7 @@ test("desktop: voice interruption, PDF Viewer, bot files, settings and saved sta
   let app; let stage = "launch"; const processErrors = [];
   function reached(value) { stage = value; if (process.env.XIAOWANG_E2E_DEBUG) console.log(`Desktop check: ${value}`); }
   t.after(async () => {
+    releaseFirstText();
     if (stage !== "complete") console.log(`Last desktop step: ${stage}\n${processErrors.join("").slice(-6000)}`);
     if (app) await closeTestApp(app);
     for (const socket of server.clients) socket.terminate();
@@ -147,7 +152,9 @@ test("desktop: voice interruption, PDF Viewer, bot files, settings and saved sta
   await composer.dispatchEvent("keydown", { key: "Enter", code: "Enter", isComposing: true });
   assert.equal((await page.evaluate(() => window.xiaowang.getState())).jobs.length, 0, "Confirming an IME candidate must not send a message.");
   await composer.press("Enter");
-  await composer.fill("再核对一遍"); await composer.press("Enter");
+  await composer.fill("再核对一遍");
+  await page.getByRole("button", { name: "排队新任务", exact: true }).click();
+  releaseFirstText();
   await until(async () => (await page.evaluate(() => window.xiaowang.getState())).jobs.filter(job => job.status === "succeeded").length === 2);
   const state = await page.evaluate(() => window.xiaowang.getState());
   reached("queued text jobs");
