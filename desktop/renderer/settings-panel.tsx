@@ -9,7 +9,7 @@ import { MossVoicePicker } from "./voice-picker.tsx";
 import { ModalDialog } from "./modal-dialog.tsx";
 import { plainError } from "./errors.ts";
 import { REALTIME_SERVICES, realtimeServicesForSettings, modelsFor, resolveRealtime, voicesFor, type RealtimeRegion, type RealtimeServiceId } from "../../src/realtime-catalog.ts";
-import type { VoiceProfilePatch } from "../../src/settings.ts";
+import { textServiceOrigin, type VoiceProfilePatch } from "../../src/settings.ts";
 import type { AppState, SettingsPatch } from "./types.ts";
 
 function FieldSelect({
@@ -76,7 +76,10 @@ export function SettingsPanel({
   const [models, setModels] = useState<string[]>([]);
   const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? "");
   const [apiStyle, setApiStyle] = useState(settings?.apiStyle ?? "");
-  const [apiKey, setApiKey] = useState("");
+  const [textKeyDrafts, setTextKeyDrafts] = useState<Record<string, string>>({});
+  const textOrigin = textServiceOrigin({ baseUrl, apiStyle, model });
+  const apiKey = textKeyDrafts[textOrigin] ?? "";
+  const setApiKey = (value: string) => setTextKeyDrafts(previous => ({ ...previous, [textOrigin]: value }));
   const [service, setService] = useState<RealtimeServiceId>(saved.service);
   const [realtimeModel, setRealtimeModel] = useState(saved.model);
   const [voice, setVoice] = useState(saved.voice);
@@ -258,7 +261,7 @@ export function SettingsPanel({
             ]} />
           </label>
           <label>{copy.baseUrl}<input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.deepseek.com/v1" /></label>
-          <label>{copy.modelKey}<input value={apiKey} type="password" onChange={(event) => setApiKey(event.target.value)} placeholder={settings?.keyHint || "····"} /></label>
+          <label>{copy.modelKey}<input value={apiKey} type="password" onChange={(event) => setApiKey(event.target.value)} placeholder={settings?.textKeyHints?.[textOrigin] || "····"} /></label>
           <div className="row">
             <button type="button" disabled={busy} onClick={() => void loadModels()}><RefreshCw size={15} strokeWidth={1.75} />{copy.fetchModels}</button>
             <button type="button" disabled={busy} onClick={() => void check()}><Check size={15} strokeWidth={1.75} />{copy.check}</button>

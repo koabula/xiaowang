@@ -132,6 +132,7 @@ export interface SettingsView extends ContextSettings {
   baseUrl: string;
   apiStyle: string;
   keyHint: string;
+  textKeyHints?: Record<string, string>;
   realtimeModel: string;
   realtimeUrl: string;
   realtimeKeyHint: string;
