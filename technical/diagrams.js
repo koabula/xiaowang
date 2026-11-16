@@ -4,6 +4,8 @@ const SOURCE_ROOT = '../';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const diagrams = new Map();
 let statusTimer;
+const english = document.documentElement.lang === 'en';
+const label = value => english ? (window.xiaowangDiagramLabels[value] ?? value) : value;
 
 const node = (id, x, y, w, h, title, lines, description, sources, tone = 'blue') =>
   ({ id, x, y, w, h, title, lines, description, sources, tone });
@@ -266,7 +268,7 @@ const svgStyle = `
 function element(tag, attributes = {}, content) {
   const item = document.createElementNS(SVG_NS, tag);
   for (const [name, value] of Object.entries(attributes)) item.setAttribute(name, String(value));
-  if (content !== undefined) item.textContent = content;
+  if (content !== undefined) item.textContent = label(content);
   return item;
 }
 
@@ -350,6 +352,15 @@ function renderDiagram(id, config) {
   });
   svg.append(element('text', { class: 'footer', x: 1120, y: footerY, 'text-anchor': 'end' }, '小王同学 · v0.1.19'));
   figure.querySelector('.diagram-scroll').append(svg);
+  if (english) for (const item of config.nodes) {
+    const group = svg.querySelector(`[data-node="${item.id}"]`);
+    if (!item.w || item.shape === 'prefix') continue;
+    const width = item.shape === 'slice' ? 450 : item.w - 40;
+    for (const text of group.querySelectorAll('.node-title, .node-line')) {
+      const length = text.getComputedTextLength();
+      if (length > width) text.style.fontSize = `${parseFloat(getComputedStyle(text).fontSize) * width / length}px`;
+    }
+  }
   const state = { id, config, figure, svg, view: figure.querySelector('[data-view][aria-pressed=true]').dataset.view, step: -1, timer: null };
   diagrams.set(id, state);
   figure.addEventListener('click', event => {
@@ -428,14 +439,14 @@ function stopPlayback(state) {
   clearInterval(state.timer);
   state.timer = null;
   const button = state.figure.querySelector('[data-action=play]');
-  if (button) { button.textContent = '播放流程'; button.setAttribute('aria-pressed', 'false'); }
+  if (button) { button.textContent = label('播放流程'); button.setAttribute('aria-pressed', 'false'); }
 }
 
 function togglePlayback(state) {
   if (state.timer) { stopPlayback(state); return; }
   const button = state.figure.querySelector('[data-action=play]');
   state.timer = setInterval(() => advance(state), 1500);
-  button.textContent = '暂停';
+  button.textContent = label('暂停');
   button.setAttribute('aria-pressed', 'true');
   advance(state);
 }
@@ -445,18 +456,18 @@ function toggleExpanded(state) {
   for (const other of diagrams.values()) {
     other.figure.classList.remove('expanded');
     const button = other.figure.querySelector('[data-action=expand]');
-    button.textContent = '放大';
+    button.textContent = label('放大');
     button.setAttribute('aria-expanded', 'false');
-    button.setAttribute('aria-label', '放大' + other.config.title);
+    button.setAttribute('aria-label', label('放大') + ' ' + other.config.title);
     other.figure.removeAttribute('role');
     other.figure.removeAttribute('aria-modal');
     other.figure.removeAttribute('aria-label');
   }
   state.figure.classList.toggle('expanded', expanded);
   const expandButton = state.figure.querySelector('[data-action=expand]');
-  expandButton.textContent = expanded ? '收起' : '放大';
+  expandButton.textContent = expanded ? label('收起') : label('放大');
   expandButton.setAttribute('aria-expanded', String(expanded));
-  expandButton.setAttribute('aria-label', (expanded ? '收起' : '放大') + state.config.title);
+  expandButton.setAttribute('aria-label', (expanded ? label('收起') : label('放大')) + ' ' + state.config.title);
   if (expanded) {
     state.figure.setAttribute('role', 'dialog');
     state.figure.setAttribute('aria-modal', 'true');
@@ -492,7 +503,7 @@ async function diagramBlob(state, format, all = false) {
     canvas.width = 2320;
     canvas.height = state.config.height * 2;
     canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
-    return await new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('图片编码失败')), 'image/png'));
+    return await new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error(label('图片编码失败'))), 'image/png'));
   } finally { URL.revokeObjectURL(url); }
 }
 
@@ -512,11 +523,23 @@ async function exportDiagram(state, format) {
     link.download = `xiaowang-${state.id}.${format}`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
-    showStatus(`已导出 ${format.toUpperCase()} 图片`);
-  } catch (error) { showStatus(`导出失败，${error.message}`); }
+    showStatus(english ? `Exported ${format.toUpperCase()}` : `已导出 ${format.toUpperCase()} 图片`);
+  } catch (error) { showStatus(english ? `Export failed: ${error.message}` : `导出失败，${error.message}`); }
 }
 
-for (const [id, config] of Object.entries({ overview, loop, context, layers, projection, protocol, prefix, budget })) renderDiagram(id, config);
+for (const [id, original] of Object.entries({ overview, loop, context, layers, projection, protocol, prefix, budget })) {
+  let config = original;
+  if (english) {
+    const translation = window.xiaowangDiagramEnglish[id];
+    config = { ...original, title: translation.title, subtitle: translation.subtitle,
+      nodes: original.nodes.map(item => {
+        const [title, lines, description] = translation.nodes[item.id];
+        return { ...item, title, lines, description,
+          ...(item.segments ? { segments: item.segments.map(([text, width, tone]) => [label(text), width, tone]) } : {}) };
+      }) };
+  }
+  renderDiagram(id, config);
+}
 for (const link of document.querySelectorAll('[data-source]')) link.href = SOURCE_ROOT + link.dataset.source;
 
 document.querySelector('#print-document').addEventListener('click', () => {

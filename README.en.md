@@ -22,11 +22,12 @@ Starting with a fresh workspace, ask XiaoWang to fetch *Attention Is All You Nee
 
 Choose an installer from the [latest GitHub Release](https://github.com/koabula/xiaowang/releases/latest):
 
-| System | Architecture | File |
-| --- | --- | --- |
-| macOS | Apple Silicon: `arm64`; Intel: `x64` | `.dmg` |
-| Windows | `x64` | `.exe` |
-| Linux | `x64` | `.AppImage` or `.deb` |
+| OS | Download |
+| --- | --- |
+| macOS · Apple Silicon | [![DMG Apple Silicon](https://img.shields.io/badge/DMG-Apple%20Silicon-2B59C3?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/koabula/xiaowang/releases/download/v0.1.19/XiaoWang-0.1.19-mac-arm64.dmg) |
+| macOS · Intel | [![DMG Intel x64](https://img.shields.io/badge/DMG-Intel%20x64-2B59C3?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/koabula/xiaowang/releases/download/v0.1.19/XiaoWang-0.1.19-mac-x64.dmg) |
+| Windows | [![Setup x64](https://img.shields.io/badge/Setup-x64-2B59C3?style=for-the-badge)](https://github.com/koabula/xiaowang/releases/download/v0.1.19/XiaoWang-0.1.19-win-x64.exe) |
+| Linux | [![AppImage x64](https://img.shields.io/badge/AppImage-x64-2B59C3?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/koabula/xiaowang/releases/download/v0.1.19/XiaoWang-0.1.19-linux-x86_64.AppImage) [![DEB x64](https://img.shields.io/badge/DEB-x64-2B59C3?style=for-the-badge&logo=debian&logoColor=white)](https://github.com/koabula/xiaowang/releases/download/v0.1.19/XiaoWang-0.1.19-linux-amd64.deb) |
 
 The macOS app currently uses a complete ad-hoc signature. If the first launch warns about an unidentified developer, try opening it, then choose **System Settings → Privacy & Security → Open Anyway**. Choose `arm64` for Apple Silicon (M-series Macs).
 
@@ -81,7 +82,7 @@ npm ci
 npm run desktop
 ```
 
-The [technical architecture document](technical/README.md) (Chinese) covers LLM / Realtime coordination, context, and memory, with interactive diagrams and static images.
+The [technical architecture document](technical/README.en.md) covers LLM / Realtime coordination, context, and memory, with interactive diagrams and static images.
 
 See the [development notes](DEVELOPMENT.md) for setup, tests, and packaging.
 

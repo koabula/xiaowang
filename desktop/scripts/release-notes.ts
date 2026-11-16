@@ -22,13 +22,13 @@ export function releaseBody(release: Release, repository: string): string {
     return `[![${title} ${label}](${image})](${url})`;
   }
   const rows = [
-    ["macOS · M 系列", badge("mac", "arm64", ["dmg", "zip"], "Apple Silicon", "apple")],
+    ["macOS · Apple Silicon", badge("mac", "arm64", ["dmg", "zip"], "Apple Silicon", "apple")],
     ["macOS · Intel", badge("mac", "x64", ["dmg", "zip"], "Intel x64", "apple")],
     ["Windows", badge("win", "x64", ["exe"], "x64")],
     ["Linux", [badge("linux", "x86_64", ["AppImage"], "x64", "linux"), badge("linux", "amd64", ["deb"], "x64", "debian")].filter(Boolean).join(" ")],
   ].filter(([, links]) => links);
   if (!rows.length) throw new Error("Release has no supported installers to link.");
-  const table = [start, "## 下载", "", "| 系统 | 下载 |", "| --- | --- |", ...rows.map(([os, links]) => `| ${os} | ${links} |`), "", end].join("\n");
+  const table = [start, "## Download", "", "| OS | Download |", "| --- | --- |", ...rows.map(([os, links]) => `| ${os} | ${links} |`), "", end].join("\n");
   const previous = release.body ?? "";
   const opening = previous.indexOf(start), closing = previous.indexOf(end, opening);
   const body = opening >= 0 && closing >= opening

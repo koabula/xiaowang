@@ -16,7 +16,7 @@ test("release table links only existing installers and prefers DMG over update Z
     assert.ok(release.assets.some(asset => url.endsWith(asset.name)));
   }
   assert.doesNotMatch(body, /\.zip\)|latest\.yml|SHA256SUMS|首次打开/);
-  assert.ok(body.indexOf("## 下载") < body.indexOf("## Changes"));
+  assert.ok(body.indexOf("## Download") < body.indexOf("## Changes"));
 });
 
 test("regeneration updates version and attachments without duplicating tables or losing notes", () => {
@@ -24,7 +24,7 @@ test("regeneration updates version and attachments without duplicating tables or
   assert.equal(releaseBody({ ...release, body: first }, "koabula/xiaowang"), first);
   const next = releaseBody({ tag_name: "v0.1.20", body: first, assets: [{ name: "XiaoWang-0.1.20-mac-arm64.zip" }] }, "koabula/xiaowang");
   assert.match(next, /\.zip\)/); assert.doesNotMatch(next, /v0\.1\.19|Windows|Intel|Linux/);
-  assert.equal(next.match(/## 下载/g)?.length, 1);
+  assert.equal(next.match(/## Download/g)?.length, 1);
   assert.match(next, /Keep this update description\./);
 });
 

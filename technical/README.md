@@ -1,6 +1,6 @@
 # 小王同学的 Agent 架构
 
-[交互图](index.html) · 本文对应 v0.1.19 的实现。
+[交互图](index.html) · [English](README.en.md) · 本文对应 v0.1.19 的实现。
 
 ## 交互与研究有不同的时间要求
 

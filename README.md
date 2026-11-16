@@ -22,11 +22,12 @@ https://github.com/user-attachments/assets/7b27eaa3-ece9-470b-a0b3-87df8baa8588
 
 在 [GitHub Releases 最新版](https://github.com/koabula/xiaowang/releases/latest) 中选择适合设备的安装包：
 
-| 系统 | 架构 | 文件 |
-| --- | --- | --- |
-| macOS | Apple Silicon：`arm64`；Intel：`x64` | `.dmg` |
-| Windows | `x64` | `.exe` |
-| Linux | `x64` | `.AppImage` 或 `.deb` |
+| OS | Download |
+| --- | --- |
+| macOS · Apple Silicon | [![DMG Apple Silicon](https://img.shields.io/badge/DMG-Apple%20Silicon-2B59C3?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/koabula/xiaowang/releases/download/v0.1.19/XiaoWang-0.1.19-mac-arm64.dmg) |
+| macOS · Intel | [![DMG Intel x64](https://img.shields.io/badge/DMG-Intel%20x64-2B59C3?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/koabula/xiaowang/releases/download/v0.1.19/XiaoWang-0.1.19-mac-x64.dmg) |
+| Windows | [![Setup x64](https://img.shields.io/badge/Setup-x64-2B59C3?style=for-the-badge)](https://github.com/koabula/xiaowang/releases/download/v0.1.19/XiaoWang-0.1.19-win-x64.exe) |
+| Linux | [![AppImage x64](https://img.shields.io/badge/AppImage-x64-2B59C3?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/koabula/xiaowang/releases/download/v0.1.19/XiaoWang-0.1.19-linux-x86_64.AppImage) [![DEB x64](https://img.shields.io/badge/DEB-x64-2B59C3?style=for-the-badge&logo=debian&logoColor=white)](https://github.com/koabula/xiaowang/releases/download/v0.1.19/XiaoWang-0.1.19-linux-amd64.deb) |
 
 macOS 当前使用完整临时签名。首次打开若提示无法验证开发者，可在尝试打开后进入 **系统设置 → 隐私与安全性 → 仍要打开**。Apple Silicon（包括 M 系列）请选择 `arm64`。
 

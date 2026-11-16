@@ -1,0 +1,40 @@
+<svg viewBox="0 0 1160 820" width="1160" height="820" role="img" aria-label="The layers of a model request" xmlns="http://www.w3.org/2000/svg"><title>The layers of a model request</title><desc>A deterministic view of original events, assembled under a complete token budget</desc><style>
+  text { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+  .title { font-size: 27px; font-weight: 650; fill: #203453; letter-spacing: -.5px; }
+  .subtitle { font-size: 15px; fill: #6b7c94; }
+  .footer { font-size: 12px; fill: #8593a8; }
+  .wire { fill: none; stroke: #6683be; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .wire.data { stroke: #5e9295; stroke-dasharray: 5 5; }
+  .wire.direct { stroke: #a68155; stroke-dasharray: 2 5; }
+  .edge-label { font-size: 12px; fill: #7a889f; text-anchor: middle; paint-order: stroke; stroke: #fff; stroke-width: 7px; stroke-linejoin: round; }
+  .node { cursor: pointer; outline: none; }
+  .node rect { fill: #f7f9fd; stroke: #d8e2f1; stroke-width: 1.2; }
+  .node .accent { fill: #2b59c3; stroke: none; }
+  .node.teal rect { fill: #f2f8f7; stroke: #d0e4e0; }
+  .node.teal .accent { fill: #428c83; }
+  .node.orange rect { fill: #fdf8f2; stroke: #eddcc7; }
+  .node.orange .accent { fill: #b77b38; }
+  .node .node-title { fill: #263f63; font-size: 19px; font-weight: 600; }
+  .node .node-line { fill: #71829b; font-size: 13px; }
+  .node.selected rect, .node:focus-visible rect { stroke: #2b59c3; stroke-width: 2.5; fill: #edf3ff; }
+  .node.selected .node-title { fill: #234fae; }
+  .node.dim, .edge.dim { opacity: .2; }
+  .node.selected.dim { opacity: 1; }
+  .edge.active .wire { stroke: #2b59c3; stroke-width: 2.8; }
+  .lane-label { font-size: 12px; fill: #71829b; font-weight: 550; }
+  .node.slice .surface { fill: #dce7fc; stroke: #aac1ed; stroke-width: 1.3; }
+  .node.slice .cap { fill: #edf3ff; stroke: #aac1ed; stroke-width: 1.3; }
+  .node.slice.teal .surface { fill: #dbeeea; stroke: #a6cdc3; }
+  .node.slice.teal .cap { fill: #f0f9f6; stroke: #a6cdc3; }
+  .node.slice.orange .surface { fill: #f6e4ce; stroke: #dcb78b; }
+  .node.slice.orange .cap { fill: #fdf5e9; stroke: #dcb78b; }
+  .node.slice.selected .surface, .node.slice.selected .cap, .node.slice:focus-visible .cap { stroke: #2b59c3; stroke-width: 3; }
+  .node.point circle { fill: #2b59c3; stroke: white; stroke-width: 4; }
+  .node.point.orange circle { fill: #c78543; }
+  .node.point.teal circle { fill: #428c83; }
+  .node.point.selected circle, .node.point:focus-visible circle { stroke: #95b6ff; stroke-width: 6; }
+  .node.prefix.selected .row-label, .node.prefix:focus-visible .row-label { fill: #2b59c3; font-weight: 650; }
+  .segment-text { font-size: 16px; font-weight: 550; fill: #35527e; text-anchor: middle; }
+  .point-label { font-size: 16px; font-weight: 650; fill: #3d587e; text-anchor: middle; }
+  .annotation { font-size: 13px; fill: #71829b; }
+</style><rect width="1160" height="820" fill="#ffffff"/><defs><marker id="layers-control" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#6683be" stroke-width="1.6"/></marker><marker id="layers-data" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#5e9295" stroke-width="1.6"/></marker><marker id="layers-direct" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#a68155" stroke-width="1.6"/></marker></defs><text x="40" y="48" class="title">The layers of a model request</text><text x="40" y="78" class="subtitle">A deterministic view of original events, assembled under a complete token budget</text><path d="M40 105H1120" stroke="#e8edf5" stroke-width="1"/><path d="M100 660V170" class="wire" marker-end="url(#layers-control)"/><text x="82" y="442" transform="rotate(-90 82 442)" class="annotation" text-anchor="middle">Logical request order</text><g class="node orange slice" data-node="input" aria-label="05 · Current input"><path class="surface" d="M170 165v84a175 26 0 0 0 350 0v-84Z"/><ellipse class="cap" cx="345" cy="165" rx="175" ry="26"/><path d="M540 195H615" stroke="#c9d6eb" fill="none"/><text x="640" y="189" class="node-title">05 · Current input</text><text x="640" y="215" class="node-line">Original request + supplements</text></g><g class="node orange slice" data-node="state" aria-label="04 · State updates"><path class="surface" d="M170 270v84a175 26 0 0 0 350 0v-84Z"/><ellipse class="cap" cx="345" cy="270" rx="175" ry="26"/><path d="M540 300H615" stroke="#c9d6eb" fill="none"/><text x="640" y="294" class="node-title">04 · State updates</text><text x="640" y="320" class="node-line">Accepted task and workspace snapshots</text></g><g class="node blue slice" data-node="history" aria-label="03 · History blocks"><path class="surface" d="M170 375v84a175 26 0 0 0 350 0v-84Z"/><ellipse class="cap" cx="345" cy="375" rx="175" ry="26"/><path d="M540 405H615" stroke="#c9d6eb" fill="none"/><text x="640" y="399" class="node-title">03 · History blocks</text><text x="640" y="425" class="node-line">Paired dialogue and tool units</text></g><g class="node teal slice" data-node="index" aria-label="02 · Historical index"><path class="surface" d="M170 480v84a175 26 0 0 0 350 0v-84Z"/><ellipse class="cap" cx="345" cy="480" rx="175" ry="26"/><path d="M540 510H615" stroke="#c9d6eb" fill="none"/><text x="640" y="504" class="node-title">02 · Historical index</text><text x="640" y="530" class="node-line">Event ranges + original-text lookup</text></g><g class="node blue slice" data-node="stable" aria-label="01 · Stable prefix"><path class="surface" d="M170 585v84a175 26 0 0 0 350 0v-84Z"/><ellipse class="cap" cx="345" cy="585" rx="175" ry="26"/><path d="M540 615H615" stroke="#c9d6eb" fill="none"/><text x="640" y="609" class="node-title">01 · Stable prefix</text><text x="640" y="635" class="node-line">System instructions + tool schemas</text></g><g class="node blue " data-node="reserve" aria-label="Output and safety reserves"><rect x="640" y="690" width="450" height="83" rx="9"/><rect class="accent" x="640" y="710" width="3" height="43" rx="1.5"/><text class="node-title" x="660" y="723">Output and safety reserves</text><text class="node-line" x="660" y="748">Backend default: 8,192 + 4,096</text></g><text class="footer" x="1120" y="795" text-anchor="end">XiaoWang · v0.1.19</text></svg>
