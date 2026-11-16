@@ -13,6 +13,7 @@ export function MessageComposer({ slug, draft, placeholder, busy, inCall, ink, e
   const [byBot, setByBot] = useState<Record<string, Pending[]>>({});
   const pending = useRef<Record<string, Pending[]>>({}), sequence = useRef(0), sending = useRef(new Set<string>());
   const [dragging, setDragging] = useState(false);
+  const [multiline, setMultiline] = useState(false);
   const pasteTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const lastPasteAt = useRef(0);
   useEffect(() => () => clearTimeout(pasteTimer.current), []);
@@ -21,7 +22,13 @@ export function MessageComposer({ slug, draft, placeholder, busy, inCall, ink, e
   const ready = files.filter(file => file.attachment).map(file => file.attachment!);
   useLayoutEffect(() => {
     const node = textarea.current; if (!node) return;
-    const resize = () => { node.style.height = "0px"; node.style.height = `${Math.min(144, Math.max(38, node.scrollHeight))}px`; };
+    const resize = () => {
+      node.style.height = "0px";
+      const style = getComputedStyle(node);
+      const singleLine = parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      setMultiline(node.scrollHeight > singleLine + 1);
+      node.style.height = `${Math.min(144, Math.max(38, node.scrollHeight))}px`;
+    };
     resize(); const observer = new ResizeObserver(resize); observer.observe(node.parentElement!);
     return () => observer.disconnect();
   }, [draft, slug]);
@@ -72,7 +79,7 @@ export function MessageComposer({ slug, draft, placeholder, busy, inCall, ink, e
     }
     finally { sending.current.delete(owner); }
   }
-  return <form className={`composer${dragging ? " dragging" : ""}`} onSubmit={event => { event.preventDefault(); void send(); }}
+  return <form className={`composer${multiline ? " multiline" : ""}${dragging ? " dragging" : ""}`} onSubmit={event => { event.preventDefault(); void send(); }}
     onDragOver={event => { if (event.dataTransfer.types.includes("Files")) { event.preventDefault(); setDragging(true); } }}
     onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false); }}
     onDrop={event => { if (event.dataTransfer.files.length) { event.preventDefault(); setDragging(false); add(Array.from(event.dataTransfer.files)); } }}

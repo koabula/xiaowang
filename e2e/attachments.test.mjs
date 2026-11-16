@@ -74,7 +74,7 @@ test('actual clipboard paste, attachments, vision payloads, bot isolation, error
   assert.equal(await page.locator('.bot.on em').innerText(), '结论 图片已收到 VISION-OK');
   await page.locator('.bot-title').focus();
   const titleStyle = await page.locator('.bot-title').evaluate(n => ({ shadow: getComputedStyle(n).boxShadow, radius: getComputedStyle(n).borderRadius, width: n.getBoundingClientRect().width }));
-  assert.equal(titleStyle.shadow, 'none', 'The editorial title uses a flat surface'); assert.ok(parseFloat(titleStyle.radius) > 20); assert.equal(await page.locator('.bot-title').getAttribute('aria-expanded'), 'false');
+  assert.equal(titleStyle.shadow, 'none', 'The editorial title uses a flat surface'); assert.ok(parseFloat(titleStyle.radius) <= 8); assert.equal(await page.locator('.bot-title').getAttribute('aria-expanded'), 'false');
   await page.locator('.bot-title').click(); assert.equal(await page.locator('.bot-title').getAttribute('aria-expanded'), 'true');
   await page.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-attachments-title.png') });
   await page.evaluate(slug => window.xiaowang.renameBot(slug, '很长的研究主题名称'.repeat(8)), slug);

@@ -135,7 +135,7 @@ test('desktop browser: IPC ownership, takeover UI, reload hydration and navigati
   await page.locator('.capsule').filter({ hasText: '你正在控制' }).waitFor();
   await page.evaluate(url => window.xiaowang.browserGo(url), `${url}/two`);
   await page.reload(); await page.waitForSelector('.composer');
-  await page.getByRole('button', { name: '浏览器', exact: true }).click();
+  await page.getByRole('tab', { name: '浏览器', exact: true }).click();
   await page.locator('.capsule').filter({ hasText: '你正在控制' }).waitFor();
   assert.equal((await page.evaluate(() => window.xiaowang.getState())).browser.holder, 'user');
   await page.evaluate(() => window.xiaowang.browserBack());

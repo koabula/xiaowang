@@ -1,8 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, AudioLines, Check, ChevronDown, ChevronRight, ChevronUp, Download, LoaderCircle, ExternalLink, Eye, FileText, Frame, Globe, Maximize2, MessageSquareText, Mic, MicOff, Minimize2, MousePointer2, PanelRight, Phone, PhoneOff, Play, Plus, RefreshCw, Search, Settings, Square, X } from "lucide-react";
-import * as Select from "@radix-ui/react-select";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowLeft, ArrowRight, Check, ChevronDown, ChevronRight, Download, LoaderCircle, Eye, MousePointer2, PanelRight, Phone, Plus, Search, Settings } from "lucide-react";
 import { Avatar, nextAvatarSeed } from "./avatar.tsx";
 import { INK_CHOICES, inkFor } from "./ink.ts";
 import { playHangupSound } from "./call-sounds.ts";
@@ -12,28 +9,17 @@ import { CallTasks, ConversationIssue } from "./task-panel.tsx";
 import { taskLayout } from "./task-view.ts";
 import { RichText } from "./rich-text.tsx";
 import { FileBrowser, rememberOpenedFile } from "./file-browser.tsx";
-import { ModalDialog } from "./modal-dialog.tsx";
 import { BotMenu, type BotMenuTarget } from "./bot-menu.tsx";
 import { MessageComposer } from "./message-composer.tsx";
 import { AttachmentChip } from "./message-attachments.tsx";
 import type { Attachment } from "../../src/types.ts";
-import { hasUnsavedSettings } from "./settings-draft.ts";
-const DocumentReader = lazy(() => import("./document-reader.tsx").then(module => ({ default: module.DocumentReader })));
-import { withCanvasPager } from "./canvas-pager.ts";
+import { SettingsPanel } from "./settings-panel.tsx";
+import { plainError } from "./errors.ts";
+import { Workspace, FileStage, CanvasStage, workspaceResources, type StageSnap, type ResourceTab } from "./workspace.tsx";
 import { copyFor, localeOf, type Copy, type Locale } from "./copy.ts";
-import { REALTIME_SERVICES, realtimeServicesForSettings, modelsFor, resolveRealtime, voicesFor, type RealtimeRegion, type RealtimeServiceId } from "../../src/realtime-catalog.ts";
-import { UpdateCheckButton, UpdateProgress, updateDescription } from "./update-panel.tsx";
-import { MossVoicePicker } from "./voice-picker.tsx";
-import type { VoiceProfilePatch } from "../../src/settings.ts";
+import { updateDescription } from "./update-panel.tsx";
 import { mergeUtterance } from "../../src/realtime.ts";
-import type { AppState, BotRow, BrowserNote, CallNote, CanvasPage, ChatItem, TaskJob, LibraryItem, SettingsPatch, StageNote, TurnNote } from "./types.ts";
-
-type StageSnap = {
-  mode: "file" | "browser" | "canvas" | "profile";
-  open: boolean;
-  file: { id: string; filename: string; page: number; requestId?: string; restore?: boolean } | null;
-  canvas: { title: string; html: string; page: number; requestId?: string; restore?: boolean } | null;
-};
+import type { AppState, BotRow, BrowserNote, CallNote, CanvasPage, ChatItem, TaskJob, LibraryItem, StageNote, TurnNote } from "./types.ts";
 
 const EMPTY_STAGE: StageSnap = { mode: "file", open: true, file: null, canvas: null };
 const TAB_STORE = "xiaowang.openTabs";
@@ -92,7 +78,7 @@ export function App() {
   const [rightWidth, setRightWidth] = useState(420);
   const [leftWidth, setLeftWidth] = useState(252);
   const [canvasWide, setCanvasWide] = useState(false);
-  const [stageMenu, setStageMenu] = useState(true);
+  const [resourceMenuOpen, setResourceMenuOpen] = useState(false);
   const [browserBySlug, setBrowserBySlug] = useState<Record<string, BrowserNote>>({});
   const [address, setAddress] = useState("");
   const holeRef = useRef<HTMLDivElement>(null);
@@ -110,6 +96,7 @@ export function App() {
   const file = stage.file;
   const canvas = stage.canvas;
   const stageOpen = stage.open;
+  useEffect(() => { setResourceMenuOpen(false); }, [active, stageOpen]);
   useEffect(() => {
     if (active && (!stageOpen || mode !== "file" && mode !== "canvas" || mode === "file" && !file || mode === "canvas" && !canvas)) void window.xiaowang.stageHide(active);
     return () => { if (active) void window.xiaowang.stageHide(active); };
@@ -129,7 +116,7 @@ export function App() {
   const botBusy = (bot: BotRow) => Boolean(busyBySlug[bot.slug]) || Boolean(state?.jobs?.some(job => job.botId === bot.id && ["queued", "running"].includes(job.status)));
   const steward = state?.bots.find((bot) => bot.slug === "xiaowang");
   const ink = current?.avatarInk || inkFor(active || "xiaowang");
-  const covered = Boolean(fileBrowser) || Boolean(botMenu) || settingsOpen || (state !== null && !state.settings.ready);
+  const covered = resourceMenuOpen || Boolean(fileBrowser) || Boolean(botMenu) || settingsOpen || (state !== null && !state.settings.ready);
 
 
   function openBotMenu(event: React.MouseEvent<HTMLButtonElement>, bot: BotRow) {
@@ -245,13 +232,13 @@ export function App() {
   }, [active, mode, covered, rightWidth, leftWidth, stageOpen]);
 
   useEffect(() => {
-    if (!(canvasWide && mode === "canvas")) return;
+    if (!canvasWide) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") setCanvasWide(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [canvasWide, mode]);
+  }, [canvasWide]);
 
   function pinTab(slug: string, kind: "files" | "pages", key: string) {
     if (!slug || !key) return;
@@ -271,6 +258,37 @@ export function App() {
       saveTabs(next);
       return next;
     });
+  }
+
+  async function selectResource(resource: ResourceTab) {
+    const slug = active;
+    if (resource.kind === "file") {
+      const entry = library.find(item => item.id === resource.path);
+      patchStage(slug, { mode: "file", ...(entry && file?.id !== entry.id ? { file: { ...entry, page: 1, restore: true } } : {}) });
+      return;
+    }
+    if (resource.kind !== "canvas" || !resource.path || canvas?.title === resource.path) {
+      patchStage(slug, { mode: resource.kind });
+      return;
+    }
+    try {
+      if (resource.path.startsWith("library:")) {
+        await window.xiaowang.openReference(slug, resource.path.slice(8).split("/")[0]!, 1);
+      } else {
+        const view = await window.xiaowang.openPage(slug, resource.path, 1);
+        patchStage(slug, { mode: "canvas", open: true, canvas: { title: view.title, html: view.html, page: view.page, restore: true } });
+      }
+    } catch (error) { setToast(plainError(error)); }
+  }
+
+  function closeResource(resource: ResourceTab) {
+    if (resource.kind === "file") {
+      closeTab(active, "files", resource.path);
+      if (file?.id === resource.path) patchStage(active, { file: null });
+    } else if (resource.kind === "canvas") {
+      closeTab(active, "pages", resource.path);
+      if (canvas?.title === resource.path) patchStage(active, { canvas: null });
+    } else patchStage(active, { mode: "file" });
   }
 
   function rememberStage(view: StageNote) {
@@ -436,7 +454,7 @@ export function App() {
   }
 
   const bots = (state?.bots ?? []).filter((bot) => `${bot.name}${bot.preview}`.includes(query.trim()));
-  const wide = canvasWide && mode === "canvas" && stageOpen;
+  const wide = canvasWide && stageOpen;
 
   return (
     <div className={wide ? "shell canvas-wide" : "shell"}>
@@ -514,25 +532,10 @@ export function App() {
 
       {stageOpen ? (
       <aside className="stage" style={wide ? undefined : { width: rightWidth }}>
-        <div className={stageMenu ? "stage-tabs" : "stage-tabs shut"}>
-          {stageMenu ? (
-            <div className="stage-modes" role="group" aria-label="Workspace / 工作区">
-              <button className={mode === "file" ? "on" : ""} type="button" onClick={() => { setCanvasWide(false); patchStage(active, { mode: "file" }); }}><FileText size={15} /> {copy.files}</button>
-              <button className={mode === "browser" ? "on" : ""} type="button" onClick={() => { setCanvasWide(false); patchStage(active, { mode: "browser" }); }}><Globe size={15} /> {copy.browser}</button>
-              <button className={mode === "canvas" ? "on" : ""} type="button" onClick={() => patchStage(active, { mode: "canvas" })}><Frame size={15} /> {copy.canvas}</button>
-            </div>
-          ) : null}
-          <span className="stage-tab-end">
-            {mode === "canvas" ? (
-              <button className="fit" type="button" title={wide ? copy.shrinkCanvas : copy.fillCanvas} onClick={() => setCanvasWide((value) => !value)}>
-                {wide ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
-              </button>
-            ) : null}
-            <button className="fit" type="button" title={stageMenu ? copy.collapseMenu : copy.expandMenu} onClick={() => setStageMenu((value) => !value)}>
-              {stageMenu ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-            </button>
-          </span>
-        </div>
+        <Workspace key={active} stage={stage} resources={workspaceResources(stage, library, pages, openTabs[active]?.files ?? [], openTabs[active]?.pages ?? [], copy, browser.title, current?.name ?? "小王同学")}
+          copy={copy} locale={localeOf(state?.settings.locale)} wide={wide} onWide={() => setCanvasWide(value => !value)}
+          onSelect={resource => void selectResource(resource)} onClose={closeResource}
+          onBrowse={mode => setFileBrowser({ slug: active, mode })} onMenuOpen={setResourceMenuOpen}>
         {mode === "profile" && current ? (
           <ProfileStage
             bot={current}
@@ -546,57 +549,16 @@ export function App() {
             }}
           />
         ) : null}
-        {mode === "file" ? (
-          <FileStage
-            visualCallId={call?.slug === active && call.phase === "live" ? call.callId : undefined}
-            slug={active}
-            library={library}
-            onBrowse={() => setFileBrowser({ slug: active, mode: "file" })}
-            locale={localeOf(state?.settings.locale)}
-            file={file}
-            openIds={openTabs[active]?.files ?? []}
-            menu={stageMenu}
-            copy={copy}
-            onPick={(entry) => {
-              pinTab(active, "files", entry.id);
-              patchStage(active, { file: { ...entry, page: 1, restore: true } });
-            }}
-            onClose={(id) => {
-              closeTab(active, "files", id);
-              if (file?.id === id) patchStage(active, { file: null });
-            }}
-          />
-        ) : null}
-        {mode === "canvas" ? (
-          <CanvasStage
-            slug={active}
-            pages={[...pages, ...library.filter(item => /\.html?$/i.test(item.filename)).map(item => ({ path: `library:${item.id}/${item.filename}`, name: item.filename }))]}
-            onBrowse={() => setFileBrowser({ slug: active, mode: "canvas" })}
-            canvas={canvas}
-            openPaths={openTabs[active]?.pages ?? []}
-            menu={stageMenu}
-            copy={copy}
-            onPick={(path) => {
-              pinTab(active, "pages", path);
-              if (path.startsWith("library:")) { void window.xiaowang.openReference(active, path.slice(8).split("/")[0]!, 1).catch(error => setToast(plainError(error))); return; }
-              void window.xiaowang.openPage(active, path, 1).then((view) => {
-                patchStage(active, { mode: "canvas", open: true, canvas: { title: view.title, html: view.html, page: view.page } });
-              }).catch((error) => setToast(plainError(error)));
-            }}
-            onClose={(path) => {
-              closeTab(active, "pages", path);
-              if (canvas?.title === path) patchStage(active, { canvas: null });
-            }}
-          />
-        ) : null}
+        {mode === "file" ? <FileStage slug={active} file={file} copy={copy} locale={localeOf(state?.settings.locale)} visualCallId={call?.slug === active && call.phase === "live" ? call.callId : undefined} /> : null}
+        {mode === "canvas" ? <CanvasStage slug={active} canvas={canvas} copy={copy} /> : null}
         {mode === "browser" ? (
           <div className="browser-stage">
+            <div className="browser-toolbar">
             <form className="url" onSubmit={(event) => { event.preventDefault(); void window.xiaowang.browserGo(address.startsWith("http") ? address : `https://${address}`); }}>
-              <button type="button" disabled={browser.holder === "bot"} onClick={() => void window.xiaowang.browserBack()}><ArrowLeft size={15} /></button>
-              <button type="button" disabled={browser.holder === "bot"} onClick={() => void window.xiaowang.browserForward()}><ArrowRight size={15} /></button>
-              <input value={address} disabled={browser.holder === "bot"} placeholder="https://" onChange={(event) => setAddress(event.target.value)} />
+              <button type="button" aria-label={localeOf(state?.settings.locale) === "en" ? "Back" : "后退"} disabled={browser.holder === "bot"} onClick={() => void window.xiaowang.browserBack()}><ArrowLeft size={15} /></button>
+              <button type="button" aria-label={localeOf(state?.settings.locale) === "en" ? "Forward" : "前进"} disabled={browser.holder === "bot"} onClick={() => void window.xiaowang.browserForward()}><ArrowRight size={15} /></button>
+              <input aria-label={localeOf(state?.settings.locale) === "en" ? "Address" : "网页地址"} value={address} disabled={browser.holder === "bot"} placeholder="https://" onChange={(event) => setAddress(event.target.value)} />
             </form>
-            <div className="hole" ref={holeRef} />
             <div className="capsule">
               {browser.holder === "bot" ? (
                 <>
@@ -610,8 +572,11 @@ export function App() {
                 </>
               )}
             </div>
+            </div>
+            <div className="hole" ref={holeRef} />
           </div>
         ) : null}
+        </Workspace>
       </aside>
       ) : null}
 
@@ -663,13 +628,6 @@ function UpdateButton({ update, locale, onError }: { update: import("./types.ts"
 
 function isConversation(item: ChatItem): boolean {
   return item.kind === "call" || (item.kind === "user" && Boolean(item.attachments?.length)) || ((item.kind === "user" || item.kind === "assistant") && item.text.trim().length > 0);
-}
-
-function plainError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  const message = raw.replace(/^Error invoking remote method '[^']+': Error: /, "");
-  if (message.includes("content or tool_calls")) return "模型服务拒绝了一条空的助手记录。再发一次就可以。";
-  return message.length > 160 ? `${message.slice(0, 160)}…` : message;
 }
 
 type MessageProps = { item: ChatItem; ink: string; name: string; copy: Copy; slug: string; jobs: TaskJob[]; locale: Locale; onError: (error: string) => void };
@@ -735,459 +693,6 @@ function foldCaption(captions: LiveCaption[], who: "user" | "assistant", text: s
     next.push({ who, text: clean, live: partial });
   }
   return next;
-}
-
-function leafName(label: string): string {
-  const name = label.split(/[/\\]/).pop();
-  return name || label;
-}
-
-function OpenStrip({ openItems, activeKey, addLabel, closeLabel, onOpen, onClose, onBrowse }: {
-  openItems: Array<{ key: string; label: string }>; activeKey: string | null;
-  addLabel: string; closeLabel: string; onOpen(key: string): void; onClose(key: string): void; onBrowse(): void;
-}) {
-  return <div className="open-strip"><div className="open-row"><div className="open-scroll">{openItems.map(item => <span className={item.key === activeKey ? "open-chip on" : "open-chip"} key={item.key}><button className="name" type="button" title={item.label} onClick={() => onOpen(item.key)}>{leafName(item.label)}</button><button className="close" type="button" title={closeLabel} onClick={() => onClose(item.key)}><X size={13} /></button></span>)}</div><button className="open-add" type="button" title={addLabel} aria-label={addLabel} onClick={onBrowse}><Plus size={15} /></button></div></div>;
-}
-
-function FileStage({
-  visualCallId,
-  locale,
-  slug,
-  library,
-  file,
-  openIds,
-  menu,
-  copy,
-  onPick,
-  onBrowse,
-  onClose,
-}: {
-  slug: string;
-  library: LibraryItem[];
-  file: { id: string; filename: string; page: number; requestId?: string; restore?: boolean } | null;
-  openIds: string[];
-  menu: boolean;
-  copy: Copy;
-  locale: Locale;
-  visualCallId?: string;
-  onPick: (file: LibraryItem) => void;
-  onBrowse: () => void;
-  onClose: (id: string) => void;
-}) {
-  const byId = new Map(library.map((entry) => [entry.id, entry]));
-  return (
-    <div className="file-stage">
-      {menu ? (
-      <OpenStrip
-        openItems={openIds.flatMap((id) => {
-          const entry = byId.get(id);
-          return entry ? [{ key: entry.id, label: entry.filename }] : [];
-        })}
-        activeKey={file?.id ?? null}
-        onBrowse={onBrowse}
-        addLabel={copy.openFromLibrary}
-        closeLabel={copy.closeTab}
-        onOpen={(key) => {
-          const entry = byId.get(key);
-          if (entry) onPick(entry);
-        }}
-        onClose={onClose}
-      />
-      ) : null}
-      {file && slug ? <Suspense fallback={<p className="empty">Loading…</p>}><DocumentReader slug={slug} file={file} locale={locale} visualCallId={visualCallId} /></Suspense> : <p className="empty">{copy.pickFile}</p>}
-    </div>
-  );
-}
-
-function CanvasStage({
-  slug,
-  pages,
-  canvas,
-  openPaths,
-  menu,
-  copy,
-  onPick,
-  onBrowse,
-  onClose,
-}: {
-  slug: string;
-  pages: CanvasPage[];
-  canvas: { title: string; html: string; page: number; requestId?: string; restore?: boolean } | null;
-  openPaths: string[];
-  menu: boolean;
-  copy: Copy;
-  onPick: (path: string) => void;
-  onBrowse: () => void;
-  onClose: (path: string) => void;
-}) {
-  const frameRef = useRef<HTMLIFrameElement>(null);
-  const [page, setPage] = useState(canvas?.page ?? 1);
-  const [totalPages, setTotalPages] = useState(0);
-  const [pageError, setPageError] = useState("");
-  useEffect(() => { setPage(canvas?.page ?? 1); setPageError(""); }, [canvas]);
-  useEffect(() => { setTotalPages(0); }, [canvas?.title, canvas?.html]);
-  useEffect(() => {
-    if (!canvas) return;
-    const listener = (event: MessageEvent) => {
-      if (event.source === frameRef.current?.contentWindow && event.data?.type === "xiaowang:ready") {
-        frameRef.current?.contentWindow?.postMessage({ type: "xiaowang:page", page: canvas.page, requestId: canvas.requestId }, "*");
-        return;
-      }
-      if (event.source !== frameRef.current?.contentWindow || event.data?.type !== "xiaowang:position") return;
-      const data = event.data as { page: number; totalPages: number; title?: string; requestId?: string; error?: string };
-      if (!Number.isSafeInteger(data.page) || !Number.isSafeInteger(data.totalPages) || data.totalPages < 1) return;
-      setTotalPages(data.totalPages); setPageError(data.error || "");
-      if (!data.error && data.page >= 1 && data.page <= data.totalPages) {
-        setPage(data.page);
-        void window.xiaowang.stagePosition(slug, { path: canvas.title, page: data.page, totalPages: data.totalPages, mode: "canvas" });
-      }
-      if (data.requestId && data.requestId === canvas.requestId) void window.xiaowang.stageAck(slug, data.requestId, data);
-    };
-    window.addEventListener("message", listener); return () => window.removeEventListener("message", listener);
-  }, [slug, canvas?.title, canvas?.requestId]);
-  useEffect(() => {
-    if (canvas) frameRef.current?.contentWindow?.postMessage({ type: "xiaowang:page", page, requestId: canvas.requestId }, "*");
-  }, [canvas?.title, canvas?.html, canvas?.requestId, page]);
-  const openItems = openPaths.map((path) => ({ key: path, label: pages.find(item => item.path === path)?.name || path }));
-  return (
-    <div className="canvas-stage">
-      {menu ? (
-      <OpenStrip
-        openItems={openItems}
-        activeKey={canvas?.title ?? null}
-        onBrowse={onBrowse}
-        addLabel={copy.openFromLibrary}
-        closeLabel={copy.closeTab}
-        onOpen={onPick}
-        onClose={onClose}
-      />
-      ) : null}
-      {canvas ? <div className="reader-toolbar"><Frame size={14} /><span>{canvas.title}</span><div className="reader-pager"><button type="button" aria-label="Previous page / 上一页" disabled={page <= 1} onClick={() => setPage(page - 1)}><ArrowLeft size={15} /></button><span>{page} / {totalPages || "…"}</span><button type="button" aria-label="Next page / 下一页" disabled={!totalPages || page >= totalPages} onClick={() => setPage(page + 1)}><ArrowRight size={15} /></button></div></div> : null}
-      {pageError ? <p className="reader-error" role="alert">{pageError}</p> : null}
-      {canvas && slug ? (
-        <iframe
-          key={canvas.title}
-          ref={frameRef}
-          className="canvas-frame"
-          title={canvas.title}
-          sandbox="allow-scripts"
-          srcDoc={withCanvasPager(canvas.html)}
-          onLoad={() => frameRef.current?.contentWindow?.postMessage({ type: "xiaowang:page", page, requestId: canvas.requestId }, "*")}
-        />
-      ) : (
-        <p className="empty">{copy.emptyCanvas}</p>
-      )}
-    </div>
-  );
-}
-
-function FieldSelect({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: Array<{ value: string; label: string }>;
-}) {
-  return (
-    <Select.Root value={value} onValueChange={onChange}>
-      <Select.Trigger className="field" aria-label={label}>
-        <Select.Value />
-        <Select.Icon>
-          <ChevronDown size={16} strokeWidth={1.75} />
-        </Select.Icon>
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Content className="menu" position="popper" sideOffset={6} collisionPadding={12}>
-          <Select.Viewport className="menu-scroll">
-            {options.map((option) => (
-              <Select.Item className="menu-item" key={option.value} value={option.value}>
-                <Select.ItemText>{option.label}</Select.ItemText>
-                <Select.ItemIndicator>
-                  <Check size={14} strokeWidth={1.75} />
-                </Select.ItemIndicator>
-              </Select.Item>
-            ))}
-          </Select.Viewport>
-        </Select.Content>
-      </Select.Portal>
-    </Select.Root>
-  );
-}
-
-function SettingsPanel({
-  settings,
-  version,
-  update,
-  forced,
-  onClose,
-  onSave,
-}: {
-  settings: AppState["settings"] | undefined;
-  version: string;
-  update?: import("./types.ts").UpdateState;
-  forced: boolean;
-  onClose: () => void;
-  onSave: (patch: SettingsPatch) => Promise<void>;
-}) {
-  const saved = resolveRealtime({
-    service: settings?.realtimeService,
-    model: settings?.realtimeModel,
-    voice: settings?.realtimeVoice,
-    region: settings?.realtimeRegion,
-    workspace: settings?.realtimeWorkspace,
-    url: settings?.realtimeUrl,
-  });
-  const [model, setModel] = useState(settings?.model ?? "");
-  const [models, setModels] = useState<string[]>([]);
-  const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? "");
-  const [apiStyle, setApiStyle] = useState(settings?.apiStyle ?? "");
-  const [apiKey, setApiKey] = useState("");
-  const [service, setService] = useState<RealtimeServiceId>(saved.service);
-  const [realtimeModel, setRealtimeModel] = useState(saved.model);
-  const [voice, setVoice] = useState(saved.voice);
-  const [region, setRegion] = useState<RealtimeRegion>(saved.region);
-  const [workspace, setWorkspace] = useState(saved.workspace);
-  const [realtimeKey, setRealtimeKey] = useState("");
-  const [clearVoiceKey, setClearVoiceKey] = useState(false);
-  const [profileDrafts, setProfileDrafts] = useState<Partial<Record<RealtimeServiceId, VoiceProfilePatch>>>(() => Object.fromEntries(REALTIME_SERVICES.map(({ id }) => {
-    const profile = settings?.realtimeProfiles?.[id];
-    const choice = resolveRealtime({ service: id, ...(profile ?? (id === saved.service ? saved : {})) });
-    return [id, { model: choice.model, voice: choice.voice, region: choice.region, workspace: choice.workspace, url: choice.url, key: "", clearKey: false }];
-  })));
-  const [locale, setLocale] = useState<Locale>(localeOf(settings?.locale));
-  const [notice, setNotice] = useState("");
-  const copy = copyFor(locale);
-  const [busy, setBusy] = useState(false);
-  const [previewing, setPreviewing] = useState(false);
-  const previewAudio = useRef(createCallAudio(() => {}, (serial, callId) => window.xiaowang.callIdle(serial, callId), position => window.xiaowang.callPosition(position), position => window.xiaowang.callChunkPlayed(position)));
-  const patch: SettingsPatch = {
-    model,
-    baseUrl,
-    apiStyle,
-    apiKey,
-    realtimeService: service,
-    realtimeModel,
-    realtimeVoice: voice,
-    realtimeRegion: region,
-    realtimeWorkspace: workspace,
-    realtimeKey,
-    locale,
-    realtimeProfiles: { ...profileDrafts, [service]: { model: realtimeModel, voice, region, workspace, url: resolveRealtime({ service, model: realtimeModel, workspace, region }).url, key: realtimeKey, clearKey: clearVoiceKey } },
-  };
-  const initial = useRef(patch);
-  const dirty = hasUnsavedSettings(patch, initial.current);
-  const [exitIntent, setExitIntent] = useState<"panel" | "window" | "quit" | null>(null);
-  const [saving, setSaving] = useState(false);
-  const closeHandler = useRef<(intent: "panel" | "window" | "quit") => void>(() => {});
-  closeHandler.current = requestClose;
-  useEffect(() => { void window.xiaowang.settingsDirty(dirty); }, [dirty]);
-  useEffect(() => {
-    const stop = window.xiaowang.onSettingsClose(intent => closeHandler.current(intent));
-    return () => { stop(); void window.xiaowang.settingsDirty(false); };
-  }, []);
-  useEffect(() => {
-    const escape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (exitIntent) { setExitIntent(null); return; }
-      if (!forced) closeHandler.current("panel");
-    };
-    window.addEventListener("keydown", escape); return () => window.removeEventListener("keydown", escape);
-  }, [exitIntent, forced]);
-  function requestClose(intent: "panel" | "window" | "quit") {
-    if (saving) return;
-    if (dirty) setExitIntent(intent);
-    else void closeSettings(intent);
-  }
-  async function closeSettings(intent: "panel" | "window" | "quit") {
-    await window.xiaowang.settingsDirty(false);
-    if (intent !== "panel") await window.xiaowang.finishSettingsClose(intent);
-    onClose();
-  }
-  async function save(intent: "panel" | "window" | "quit" = "panel") {
-    setSaving(true); setNotice("");
-    try {
-      await onSave(patch);
-      await window.xiaowang.settingsDirty(false);
-      if (intent !== "panel") await window.xiaowang.finishSettingsClose(intent);
-    } catch (reason) { setNotice(plainError(reason)); setExitIntent(null); }
-    finally { setSaving(false); }
-  }
-  const voiceChoices = voicesFor(service, realtimeModel);
-  const modelChoices = modelsFor(service);
-  const needsWorkspace = service === "qwen";
-
-  useEffect(() => {
-    const audio = previewAudio.current;
-    return window.xiaowang.onCall((note) => {
-      if (!note.preview) return;
-      if (note.phase === "live") {
-        setPreviewing(true);
-        audio.stop();
-        void audio.startPlayback(note.outputRate ?? 24_000);
-      }
-      if (note.phase === "audio" && note.audio) audio.play(note.audio, note.serial, note.identity);
-      if (note.phase === "interrupt") {
-        const position = audio.interrupt(note.interruption);
-        if (note.interruption) window.xiaowang.callInterrupted({ callId: note.interruption.callId, playbackEpoch: note.interruption.playbackEpoch, position });
-      }
-      if (note.phase === "closed") {
-        setPreviewing(false);
-        if (note.detail) setNotice(note.detail);
-      }
-    });
-  }, []);
-  useEffect(() => () => previewAudio.current.stop(), []);
-
-  function chooseService(next: RealtimeServiceId) {
-    const profiles = patch.realtimeProfiles!;
-    setProfileDrafts(profiles);
-    const profile = profiles[next] ?? {};
-    const choice = resolveRealtime({ service: next, ...profile });
-    setService(next);
-    setRealtimeModel(choice.model); setVoice(choice.voice); setRegion(choice.region); setWorkspace(choice.workspace);
-    setRealtimeKey(profile.key ?? ""); setClearVoiceKey(profile.clearKey === true);
-  }
-
-  function chooseRealtimeModel(next: string) {
-    setRealtimeModel(next);
-    const nextVoices = voicesFor(service, next);
-    if (!nextVoices.some((item) => item.id === voice)) setVoice(nextVoices[0]?.id ?? "");
-  }
-
-  async function preview() {
-    if (previewing) {
-      await window.xiaowang.callStop();
-      previewAudio.current.interrupt();
-      setPreviewing(false);
-      return;
-    }
-    setNotice("");
-    setPreviewing(true);
-    try {
-      await window.xiaowang.previewVoice(patch);
-    } catch (error) {
-      setPreviewing(false);
-      setNotice(plainError(error));
-    }
-  }
-
-  async function loadModels() {
-    setBusy(true);
-    setNotice("");
-    try {
-      const ids = await window.xiaowang.listModels(patch);
-      setModels(ids);
-      if (ids.length > 0 && !ids.includes(model)) setModel(ids[0] ?? "");
-      setNotice(ids.length > 0 ? `拿到 ${ids.length} 个模型` : "这个接口没有返回模型列表，可以直接填写模型名。");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function check() {
-    setBusy(true);
-    setNotice("");
-    try {
-      setNotice(await window.xiaowang.checkSettings(patch));
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="modal settings-modal" onMouseDown={event => { if (event.target === event.currentTarget && !forced) requestClose("panel"); }}>
-      <form aria-label={copy.settings} onSubmit={(event) => { event.preventDefault(); void save(); }}>
-        <header>
-          <strong>{forced ? copy.connectModel : copy.settings}</strong>
-          <span className="app-version">{locale === "en" ? "Version" : "版本"} {version}</span>
-          <UpdateCheckButton update={update} en={locale === "en"} onResult={setNotice} />
-          <div className="lang" role="group" aria-label={copy.language}>
-            <button type="button" className={locale === "zh" ? "on" : ""} onClick={() => setLocale("zh")}>中文</button>
-            <button type="button" className={locale === "en" ? "on" : ""} onClick={() => setLocale("en")}>English</button>
-          </div>
-          {forced ? null : <button type="button" aria-label={copy.close} onClick={() => requestClose("panel")}><X size={16} strokeWidth={1.75} /></button>}
-        </header>
-        <UpdateProgress update={update} en={locale === "en"} />
-        <div className="columns">
-        <section>
-          <h2><MessageSquareText size={16} strokeWidth={1.75} />{copy.text}</h2>
-          <label>{copy.style}
-            <FieldSelect label={copy.style} value={apiStyle || "auto"} onChange={(value) => setApiStyle(value === "auto" ? "" : value)} options={[
-              { value: "auto", label: copy.auto },
-              { value: "openai", label: copy.openai },
-              { value: "anthropic", label: copy.anthropic },
-            ]} />
-          </label>
-          <label>{copy.baseUrl}<input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.deepseek.com/v1" /></label>
-          <label>{copy.modelKey}<input value={apiKey} type="password" onChange={(event) => setApiKey(event.target.value)} placeholder={settings?.keyHint || "····"} /></label>
-          <div className="row">
-            <button type="button" disabled={busy} onClick={() => void loadModels()}><RefreshCw size={15} strokeWidth={1.75} />{copy.fetchModels}</button>
-            <button type="button" disabled={busy} onClick={() => void check()}><Check size={15} strokeWidth={1.75} />{copy.check}</button>
-          </div>
-          <label>{copy.model}
-            {models.length > 0 ? (
-              <FieldSelect label={copy.model} value={model} onChange={setModel} options={models.map((id) => ({ value: id, label: id }))} />
-            ) : (
-              <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="deepseek-chat" />
-            )}
-          </label>
-
-        </section>
-        <section>
-          <h2><AudioLines size={16} strokeWidth={1.75} />{copy.callSection}</h2>
-          <div className="field-block">
-            <span>{copy.service}</span>
-            <div className="with-action">
-              <FieldSelect label={copy.service} value={service} onChange={(value) => chooseService(value as RealtimeServiceId)} options={realtimeServicesForSettings(settings?.experimentalMossEnabled, settings?.geminiEnabled).map((item) => ({ value: item.id, label: item.name }))} />
-              <button type="button" onClick={() => void window.xiaowang.openKeyPage(service, region)}><ExternalLink size={15} strokeWidth={1.75} />{copy.getKey}</button>
-            </div>
-          </div>
-          {service === "qwen" ? (
-            <label>{copy.region}
-              <FieldSelect label={copy.region} value={region} onChange={(value) => setRegion(value as RealtimeRegion)} options={[
-                { value: "beijing", label: copy.beijing },
-                { value: "singapore", label: copy.singapore },
-              ]} />
-            </label>
-          ) : null}
-          {needsWorkspace ? (
-            <label>{copy.workspace}<input value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder={copy.workspacePlaceholder} /></label>
-          ) : null}
-          <div className="field-block"><div className="voice-key-heading"><label htmlFor="realtime-key">{copy.key}</label>{(settings?.realtimeProfiles?.[service]?.keyHint || (service === saved.service && settings?.realtimeKeyHint)) ? <button className="clear-voice-key" type="button" onClick={() => { setClearVoiceKey(!clearVoiceKey); setRealtimeKey(""); }}>{clearVoiceKey ? locale === "en" ? "Undo key removal" : "撤销密钥清除" : locale === "en" ? "Remove saved key" : "清除已保存密钥"}</button> : null}</div>
-          <input id="realtime-key" data-testid="voice-key" value={realtimeKey} type="password" onChange={(event) => { setRealtimeKey(event.target.value); setClearVoiceKey(false); }} placeholder={clearVoiceKey ? "" : settings?.realtimeProfiles?.[service]?.keyHint || (service === saved.service ? settings?.realtimeKeyHint : "") || (locale === "en" ? "Not configured" : "未配置")} />
-          {clearVoiceKey ? <small>{locale === "en" ? "Saving will remove this provider’s key." : "保存后将清除此服务的密钥。"}</small> : null}</div>
-          <label>{copy.model}
-            <FieldSelect label={copy.model} value={realtimeModel} onChange={chooseRealtimeModel} options={modelChoices.map((item) => ({ value: item.id, label: `${item.name} · ${item.id}` }))} />
-          </label>
-          <div className="field-block">
-            <span>{copy.voice}</span>
-            <div className="with-action">
-              {service === "moss" ? <MossVoicePicker value={voice} onChange={setVoice} patch={patch} keyHint={clearVoiceKey ? "" : settings?.realtimeProfiles?.moss?.keyHint || (saved.service === "moss" ? settings?.realtimeKeyHint ?? "" : "")} en={locale === "en"} /> : <FieldSelect label={copy.voice} value={voice} onChange={setVoice} options={voiceChoices.map((item) => ({ value: item.id, label: item.name === item.id ? item.name : `${item.name} · ${item.id}` }))} />}
-              <button className="voice-preview" type="button" aria-label={previewing ? copy.stopPreview : copy.preview} title={previewing ? copy.stopPreview : copy.preview} onClick={() => void preview()}>{previewing ? <Square size={14} strokeWidth={1.75} /> : <Play size={15} strokeWidth={1.75} />}</button>
-            </div>
-          </div>
-        </section>
-        </div>
-        <footer>
-          {notice ? <p>{notice}</p> : null}
-          <button className="primary" type="submit" disabled={saving}>{saving ? (locale === "en" ? "Saving…" : "正在保存…") : copy.save}</button>
-        </footer>
-      </form>
-      {exitIntent ? <ModalDialog className="unsaved-dialog" label={locale === "en" ? "Save your changes?" : "保存设置更改？"} onCancel={() => { if (!saving) setExitIntent(null); }}><div role="alertdialog" aria-labelledby="unsaved-title" aria-describedby="unsaved-description">
-        <h2 id="unsaved-title">{locale === "en" ? "Save your changes?" : "保存设置更改？"}</h2>
-        <p id="unsaved-description">{locale === "en" ? "Your settings have unsaved changes. You can save them before leaving, or keep editing." : "设置中有尚未保存的更改。你可以保存后退出，或返回继续编辑。"}</p>
-        <div><button autoFocus type="button" disabled={saving} onClick={() => setExitIntent(null)}>{locale === "en" ? "Keep editing" : "继续编辑"}</button><button type="button" disabled={saving} onClick={() => void closeSettings(exitIntent)}>{locale === "en" ? "Discard changes" : "放弃修改"}</button><button className="primary" type="button" disabled={saving} onClick={() => void save(exitIntent)}>{locale === "en" ? "Save and close" : "保存并关闭"}</button></div>
-      </div></ModalDialog> : null}
-    </div>
-  );
 }
 
 function ProfileStage({

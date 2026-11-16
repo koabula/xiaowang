@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, FileText, LoaderCircle, Minus, Plus, Search, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, LoaderCircle, Minus, Plus, Search, X } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { AnnotationMode, GlobalWorkerOptions, getDocument, type PDFDocumentLoadingTask, type PDFDocumentProxy } from "pdfjs-dist";
@@ -25,7 +25,7 @@ function ImageReader({ slug, file }: { slug: string; file: ReaderFile }) {
     if (file.requestId) void window.xiaowang.stageAck(slug, file.requestId, { page: 1, totalPages: 1, error: error || undefined });
     if (!error) void window.xiaowang.stagePosition(slug, { path: file.id, page: 1, totalPages: 1, mode: "file" });
   }, [slug, file.id, file.requestId, loaded, error]);
-  return <div className="document-reader image-reader"><div className="reader-toolbar"><FileText size={14} /><span>{file.filename}</span></div>{error ? <p className="reader-error" role="alert">{error}</p> : url ? <div className="image-scroll"><img src={url} alt={file.filename} onLoad={() => setLoaded(true)} onError={() => setError("图片无法显示。")} /></div> : <Loading />}</div>;
+  return <div className="document-reader image-reader" aria-label={file.filename}>{error ? <p className="reader-error" role="alert">{error}</p> : url ? <div className="image-scroll"><img src={url} alt={file.filename} onLoad={() => setLoaded(true)} onError={() => setError("图片无法显示。")} /></div> : <Loading />}</div>;
 }
 
 function TextReader({ slug, file }: { slug: string; file: ReaderFile }) {
@@ -40,7 +40,7 @@ function TextReader({ slug, file }: { slug: string; file: ReaderFile }) {
     if (file.requestId) void window.xiaowang.stageAck(slug, file.requestId, { page: 1, totalPages: 1, error: error || undefined });
     if (!error) void window.xiaowang.stagePosition(slug, { path: file.id, page: 1, totalPages: 1, mode: "file" });
   }, [slug, file.id, file.requestId, error, loading]);
-  return <div className="document-reader"><div className="reader-toolbar"><FileText size={14} /><span>{file.filename}</span></div>{loading ? <Loading /> : null}{error ? <p className="reader-error" role="alert">{error}</p> : null}{/\.(md|markdown)$/i.test(file.filename) ? <div className="prose"><Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown></div> : <pre className="plain">{text}</pre>}</div>;
+  return <div className="document-reader" aria-label={file.filename}>{loading ? <Loading /> : null}{error ? <p className="reader-error" role="alert">{error}</p> : null}{/\.(md|markdown)$/i.test(file.filename) ? <div className="prose"><Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown></div> : <pre className="plain">{text}</pre>}</div>;
 }
 function Loading() { return <div className="reader-loading" role="status" aria-label="Loading document / 正在载入文档"><LoaderCircle size={18} className="spin" /></div>; }
 

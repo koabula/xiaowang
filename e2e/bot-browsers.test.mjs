@@ -95,19 +95,20 @@ test('desktop bots browse concurrently and switching restores scoped UI and cont
   await until(() => page.evaluate(async () => (await window.xiaowang.library('child')).some(ref => ref.filename === 'child-source.txt')));
   assert.equal((await page.evaluate(() => window.xiaowang.library('xiaowang'))).length, 0, 'A background download must not land in the foreground bot library');
   await page.evaluate(() => window.xiaowang.setActive('child'));
-  await page.getByRole('button', { name: '浏览器', exact: true }).click();
+  await page.getByRole('tab', { name: '浏览器', exact: true }).click();
   await page.locator('.capsule').filter({ hasText: '观看' }).waitFor();
   assert.equal((await page.evaluate(() => window.xiaowang.getState())).browser.holder, 'bot');
   await assert.rejects(page.evaluate(url => window.xiaowang.browserGo(url), `${base}/forbidden`), /取得浏览器控制权/);
   await page.evaluate(() => window.xiaowang.setActive('xiaowang'));
   await page.locator('.capsule').filter({ hasText: '你正在控制' }).waitFor();
   assert.equal((await page.evaluate(() => window.xiaowang.getState())).browser.url, `${base}/parent`);
-  // Workspace navigation is compact and evenly sized, with accessible controls.
+  // One resource row replaces the old content modes and nested file strip.
   const metrics = await page.locator('.stage').evaluate(el => {
-    const tabs = [...el.querySelectorAll('.stage-modes button')].map(b => b.getBoundingClientRect());
-    return { widths: tabs.map(r => r.width), gaps: [tabs[1].x - tabs[0].right, tabs[2].x - tabs[1].right], height: el.querySelector('.stage-tabs').getBoundingClientRect().height, scrollbar: getComputedStyle(document.querySelector('.messages')).scrollbarWidth };
+    const tabs = [...el.querySelectorAll('[role="tab"]')].map(button => button.getBoundingClientRect());
+    return { count: tabs.length, height: el.querySelector('.workspace-header').getBoundingClientRect().height, top: tabs.map(rect => rect.top), scrollbar: getComputedStyle(document.querySelector('.messages')).scrollbarWidth };
   });
-  assert.ok(Math.max(...metrics.widths) - Math.min(...metrics.widths) < 1); assert.ok(Math.abs(metrics.gaps[0] - metrics.gaps[1]) < 1);
+  assert.ok(metrics.count >= 3);
+  assert.ok(Math.max(...metrics.top) - Math.min(...metrics.top) < 1);
   assert.ok(metrics.height <= 44); assert.equal(metrics.scrollbar, 'thin');
   await page.reload(); await page.waitForSelector('.composer');
   assert.equal((await page.evaluate(() => window.xiaowang.getState())).browser.holder, 'user');
