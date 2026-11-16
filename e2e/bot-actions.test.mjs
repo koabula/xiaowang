@@ -1,11 +1,10 @@
+import { electron, closeTestApp } from './launch.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { _electron as electron } from 'playwright';
-import { closeTestApp } from './launch.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check) { for (let n = 0; n < 200; n++) { const value = await check(); if (value) return value; await sleep(30); } throw Error('Condition timed out'); }

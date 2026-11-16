@@ -23,7 +23,8 @@
     "dist:mac": "npm run build && electron-builder --mac --publish never",
     "dist:win": "npm run build && electron-builder --win --publish never",
     "dist:linux": "npm run build && electron-builder --linux --publish never",
-    "test:desktop": "node --test --test-timeout=60000 e2e/*.test.mjs"
+    "test:desktop": "node --test --test-concurrency=1 --test-timeout=60000 e2e/*.test.mjs",
+    "test:desktop:native": "node --test --test-concurrency=1 --test-timeout=180000 e2e/native/*.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

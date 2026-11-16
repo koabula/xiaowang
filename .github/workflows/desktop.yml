@@ -43,7 +43,10 @@ jobs:
           pactl set-default-source xiaowang_ci.monitor
       - name: Exercise the desktop app with local model fixtures
         timeout-minutes: 5
-        run: xvfb-run --auto-servernum node --test --test-concurrency=1 --test-reporter=tap --test-timeout=60000 e2e/*.test.mjs
+        run: xvfb-run --auto-servernum npm run test:desktop
+      - name: Exercise native focus and clipboard on a dedicated virtual desktop
+        timeout-minutes: 5
+        run: xvfb-run --auto-servernum npm run test:desktop:native
 
   package:
     name: Package ${{ matrix.name }}
@@ -90,7 +93,7 @@ jobs:
         if: matrix.name == 'macOS'
         env:
           XIAOWANG_MAC_RELEASE_DIR: release
-        run: node --test --test-concurrency=1 --test-timeout=180000 e2e/mac-release.test.mjs
+        run: node --test --test-concurrency=1 --test-timeout=180000 e2e/native/mac-release.test.mjs
       - name: Write SHA-256 checksums
         run: node desktop/scripts/checksums.mjs
       - name: Upload installers

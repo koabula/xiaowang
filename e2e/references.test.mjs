@@ -1,12 +1,11 @@
+import { electron, closeTestApp } from './launch.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { electron } from './launch.mjs';
 import { Runtime } from '../src/runtime.ts';
 import { executeTool } from '../src/tools.ts';
-import { closeTestApp } from './launch.mjs';
 
 function paper(marker) {
   const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];

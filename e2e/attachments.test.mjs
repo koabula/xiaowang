@@ -1,11 +1,10 @@
+import { electron, closeTestApp } from './launch.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { _electron as electron } from 'playwright';
-import { closeTestApp } from './launch.mjs';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check) { for (let n = 0; n < 200; n++) { const value = await check(); if (value) return value; await sleep(30); } throw Error('Attachment condition timed out'); }
 
@@ -25,7 +24,7 @@ function tinyPdf(sentence, pages = 3) {
   return Buffer.from(pdf+`trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
 }
 
-test('actual clipboard paste, attachments, vision payloads, bot isolation, errors and restart', { timeout: 60000 }, async t => {
+test('attachments: paste handler, files, vision payloads, bot isolation, errors and restart', { timeout: 60000 }, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'xw-attachment-')), profile = path.join(root, 'profile'); await mkdir(profile);
   const requests = []; let failure = false;
   const server = createServer(async (req, res) => {
@@ -49,17 +48,17 @@ test('actual clipboard paste, attachments, vision payloads, bot isolation, error
   t.after(async () => { await closeTestApp(app); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true, maxRetries: 10 }); });
   let page = await app.firstWindow(); page.setDefaultTimeout(10000); await page.waitForSelector('.composer textarea');
   const errors = []; page.on('pageerror', error => errors.push(error.message));
-  await app.evaluate(async ({ clipboard }) => clipboard.writeText('plain clipboard'));
-  await page.locator('.composer textarea').focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
-  assert.equal(await page.locator('.composer textarea').inputValue(), 'plain clipboard'); await page.locator('.composer textarea').fill('');
   const slug = await page.evaluate(() => window.xiaowang.createBot('Attachment research', 'Separate attachments'));
   await until(async () => (await page.evaluate(() => window.xiaowang.getState())).activeSlug === slug);
   await until(async () => await page.locator('.bot-title-name').innerText() === 'Attachment research');
-  await page.evaluate(() => { window.pasteTrace = []; document.addEventListener('keydown', e => window.pasteTrace.push({ type: 'key', key: e.key, control: e.ctrlKey, meta: e.metaKey, target: e.target.tagName })); document.addEventListener('paste', e => window.pasteTrace.push({ type: 'paste', files: e.clipboardData.files.length, formats: [...e.clipboardData.types], target: e.target.tagName })); window.xiaowang.onPasteShortcut(() => window.pasteTrace.push({ type: 'native', target: document.activeElement?.tagName })); });
-  const png = await app.evaluate(async ({ nativeImage, clipboard, ClipboardItem }) => { const image = nativeImage.createFromBitmap(Buffer.from([0,0,255,255,0,255,0,255,255,0,0,255,255,255,255,255]), { width: 2, height: 2 }).resize({ width: 256, height: 192 }); await clipboard.write([new ClipboardItem({ 'image/png': new Blob([new Uint8Array(image.toPNG())], { type: 'image/png' }) })]); return image.toPNG().toString('base64'); });
+  const png = await app.evaluate(({ nativeImage }) => nativeImage.createFromBitmap(Buffer.from([0,0,255,255,0,255,0,255,255,0,0,255,255,255,255,255]), { width: 2, height: 2 }).resize({ width: 256, height: 192 }).toPNG().toString('base64'));
   const textarea = () => page.locator('.composer textarea');
-  await textarea().focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
-  try { await page.locator('.pending-attachments .attachment-chip img').waitFor(); } catch (error) { console.log('Clipboard failure diagnostic', { platform: process.platform, clipboard: await app.evaluate(async ({ clipboard }) => (await clipboard.read()).map(item => item.types)), pending: await page.locator('.pending-attachments').allTextContents(), draft: await textarea().inputValue(), trace: await page.evaluate(() => window.pasteTrace), library: await page.evaluate(slug => window.xiaowang.library(slug), slug) }); throw error; }
+  await textarea().evaluate((node, encoded) => {
+    const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0)), data = new DataTransfer();
+    data.items.add(new File([bytes], 'pasted.png', { type: 'image/png' }));
+    node.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }));
+  }, png);
+  await page.locator('.pending-attachments .attachment-chip img').waitFor();
   assert.equal(await page.locator('.pending-attachments .attachment-chip').count(), 1);
   await page.evaluate(() => window.xiaowang.setActive('xiaowang')); await page.locator('.pending-attachments').waitFor({ state: 'detached' });
   await page.evaluate(slug => window.xiaowang.setActive(slug), slug); await page.locator('.pending-attachments img').waitFor();
@@ -67,7 +66,7 @@ test('actual clipboard paste, attachments, vision payloads, bot isolation, error
   await page.locator('.bubble.assistant').filter({ hasText: 'VISION-OK' }).waitFor();
   const imageBlock = requests[0].messages.findLast(m => m.role === 'user').content.find(p => p.type === 'image_url');
   assert.ok(imageBlock.image_url.url.startsWith('data:image/png;base64,'));
-  assert.equal(await app.evaluate(({ nativeImage }, { url, png }) => nativeImage.createFromDataURL(url).toBitmap().equals(nativeImage.createFromBuffer(Buffer.from(png, 'base64')).toBitmap()), { url: imageBlock.image_url.url, png }), true, 'System clipboard may re-encode PNG, but model pixels must match exactly');
+  assert.equal(await app.evaluate(({ nativeImage }, { url, png }) => nativeImage.createFromDataURL(url).toBitmap().equals(nativeImage.createFromBuffer(Buffer.from(png, 'base64')).toBitmap()), { url: imageBlock.image_url.url, png }), true, 'The model must receive the exact fixture pixels');
   const attached = (await page.evaluate(slug => window.xiaowang.events(slug), slug)).find(item => item.kind === 'user').attachments[0];
   await page.locator('.message-attachments .attachment-open').click(); await page.locator('.image-reader .image-scroll img').waitFor();
   assert.equal(await page.locator('.image-reader img').evaluate(img => img.complete && img.naturalWidth === 256), true);
@@ -121,10 +120,6 @@ test('actual clipboard paste, attachments, vision payloads, bot isolation, error
   await page.locator('.attachment-picker').setInputFiles({ name: 'blocked.exe', mimeType: 'application/octet-stream', buffer: Buffer.from('not supported') });
   await page.locator('.pending-attachments [role="alert"]').waitFor(); assert.equal(await page.getByRole('button', { name: '发送消息', exact: true }).isDisabled().catch(() => true), true);
   await page.getByRole('button', { name: '移除 blocked.exe', exact: true }).click();
-  // Exercise the native fallback even where Chromium normally exposes clipboard files.
-  await textarea().evaluate(node => node.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: new DataTransfer() })));
-  await page.locator('.pending-attachments img').waitFor();
-  await page.locator('.pending-attachments .attachment-remove').click();
   // Verify Anthropic's native image blocks, then verify unsupported-model errors preserve the draft.
   await page.evaluate(() => window.xiaowang.saveSettings({ apiStyle: 'anthropic' }));
   await page.locator('.attachment-picker').setInputFiles({ name: 'again.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') });

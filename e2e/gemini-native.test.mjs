@@ -1,13 +1,12 @@
+import { electron, closeTestApp } from './launch.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { _electron as electron } from 'playwright';
 import { WebSocketServer } from 'ws';
 import { Runtime } from '../src/runtime.ts';
-import { closeTestApp } from './launch.mjs';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, label = 'Gemini desktop condition timed out') { for (let n = 0; n < 400; n++) { const value = await check(); if (value) return value; await sleep(25); } throw Error(label); }
 function tone(ms) { const pcm = Buffer.alloc(ms * 48); for (let n = 0; n < pcm.length / 2; n++) pcm.writeInt16LE(Math.round(Math.sin(2 * Math.PI * 440 * n / 24000) * 7000), n * 2); return pcm.toString('base64'); }

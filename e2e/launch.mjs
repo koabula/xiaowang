@@ -7,18 +7,20 @@ async function until(predicate, timeout=15000) {const end=Date.now()+timeout;whi
 /** Background is the default even for direct execution of an individual test file. */
 export const electron = {
   launch(options = {}) {
-    return _electron.launch({ ...options, env: { ...process.env, ...options.env, XIAOWANG_E2E_MODE: "background" } });
+    const env = { ...(options.env ?? process.env), XIAOWANG_E2E_MODE: "background" }; delete env.ELECTRON_RUN_AS_NODE;
+    return _electron.launch({ ...options, env });
   },
 };
 
 export function launchNative(options = {}) {
-  return _electron.launch({ ...options, env: { ...process.env, ...options.env, XIAOWANG_E2E_MODE: "native" } });
+  const env = { ...(options.env ?? process.env), XIAOWANG_E2E_MODE: "native" }; delete env.ELECTRON_RUN_AS_NODE;
+  return _electron.launch({ ...options, env });
 }
 
-export async function launchPackaged(executablePath, args, env) {
+export async function launchPackaged(executablePath, args, env, { native = false } = {}) {
   // Packaged executables do not install Playwright's development-only Electron hook.
   // Attach to their real renderer over CDP and exercise the same public IPC surface.
-  env = { ...env, XIAOWANG_E2E_MODE: "native", XIAOWANG_DISABLE_UPDATES: env.XIAOWANG_UPDATE_TEST_FEED ? "0" : "1" };
+  env = { ...env, XIAOWANG_E2E_MODE: native ? "native" : "background", XIAOWANG_DISABLE_UPDATES: env.XIAOWANG_UPDATE_TEST_FEED ? "0" : "1" };
   const child = spawn(executablePath, ["--remote-debugging-port=0", "--use-mock-keychain", ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
   let log = "";
   const endpoint = await new Promise((resolve, reject) => {

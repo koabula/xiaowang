@@ -1,3 +1,4 @@
+import { electron, launchPackaged, closeTestApp } from './launch.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
@@ -5,9 +6,7 @@ import { mkdtemp, mkdir, copyFile, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { build } from 'esbuild';
-import { _electron as electron } from 'playwright';
 import { Runtime } from '../src/runtime.ts';
-import { launchPackaged, closeTestApp } from './launch.mjs';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, timeout = 12000) { const end = Date.now() + timeout; while (Date.now() < end) { const value = await check(); if (value) return value; await sleep(40); } throw new Error('Bot browser condition timed out'); }
 async function listen(server) { await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); return `http://127.0.0.1:${server.address().port}`; }
@@ -22,7 +21,7 @@ test('per-bot native pages share sign-ins, isolate history/control, route header
   }); const base = await listen(server);
   await copyFile('desktop/main/browser-preload.cjs', path.join(root, 'browser-preload.cjs'));
   const main = path.join(root, 'main.mjs');
-  await build({ stdin: { contents: `import {app,BrowserWindow,session} from 'electron';import {BotBrowsers} from './desktop/main/browser.ts';app.setPath('userData',${JSON.stringify(path.join(root, 'profile'))});app.whenReady().then(async()=>{const win=new BrowserWindow({width:900,height:740});await win.loadURL('data:text/html,host');globalThis.saved=[];globalThis.downloads=[];globalThis.browsers=new BotBrowsers(()=>{},(slug,filename,bytes)=>{globalThis.saved.push({slug,filename,bytes:bytes.length});return{id:slug,filename}});browsers.attach(win);browsers.activate('a');browsers.forBot('a');browsers.forBot('b');session.fromPartition('persist:xiaowang').on('will-download',(event,item,wc)=>{downloads.push(browsers.slugForContents(wc.id));event.preventDefault()});});`, resolveDir: process.cwd() }, bundle: true, format: 'esm', platform: 'node', external: ['electron'], outfile: main, logLevel: 'silent' });
+  await build({ stdin: { contents: `import {app,BrowserWindow,session} from 'electron';import {testWindowOptions} from './desktop/main/test-mode.ts';import {BotBrowsers} from './desktop/main/browser.ts';app.setPath('userData',${JSON.stringify(path.join(root, 'profile'))});app.whenReady().then(async()=>{const win=new BrowserWindow({...testWindowOptions(),width:900,height:740});await win.loadURL('data:text/html,host');globalThis.saved=[];globalThis.downloads=[];globalThis.browsers=new BotBrowsers(()=>{},(slug,filename,bytes)=>{globalThis.saved.push({slug,filename,bytes:bytes.length});return{id:slug,filename}});browsers.attach(win);browsers.activate('a');browsers.forBot('a');browsers.forBot('b');session.fromPartition('persist:xiaowang').on('will-download',(event,item,wc)=>{downloads.push(browsers.slugForContents(wc.id));event.preventDefault()});});`, resolveDir: process.cwd() }, bundle: true, format: 'esm', platform: 'node', external: ['electron'], outfile: main, logLevel: 'silent' });
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await electron.launch({ args: ['--no-sandbox', main], env });
   t.after(async () => { await closeTestApp(app); await closeServer(server); await rm(root, { recursive: true, force: true }); });

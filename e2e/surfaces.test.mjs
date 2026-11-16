@@ -1,10 +1,9 @@
-import { closeTestApp } from "./launch.mjs";
+import { closeTestApp, electron } from './launch.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { _electron as electron } from 'playwright';
 import { build } from 'esbuild';
 import { withCanvasPager } from '../desktop/renderer/canvas-pager.ts';
 
@@ -14,7 +13,7 @@ function tone(ms = 2000) {
 test('real renderer: Canvas adapters and interrupted audio never reopen old playback', {timeout:60000}, async t => {
   const root=await mkdtemp(path.join(os.tmpdir(),'xw-surfaces-'));
   const main=path.join(root,'main.cjs');
-  await writeFile(main, `const {app,BrowserWindow}=require('electron');app.setPath('userData',${JSON.stringify(root)});app.whenReady().then(()=>{const w=new BrowserWindow({width:900,height:700,webPreferences:{contextIsolation:true,nodeIntegration:false}});w.loadURL('data:text/html,<html><body></body></html>');});`);
+  await build({stdin:{contents:`import {testWindowOptions} from './desktop/main/test-mode.ts';const {app,BrowserWindow}=require('electron');app.setPath('userData',${JSON.stringify(root)});app.whenReady().then(()=>{const w=new BrowserWindow({...testWindowOptions(),width:900,height:700,webPreferences:{...testWindowOptions().webPreferences,contextIsolation:true,nodeIntegration:false}});w.loadURL('data:text/html,<html><body></body></html>');});`,resolveDir:process.cwd()},bundle:true,format:'cjs',platform:'node',external:['electron'],outfile:main,logLevel:'silent'});
   const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
   const app=await electron.launch({args:['--no-sandbox','--autoplay-policy=no-user-gesture-required',main],env});
   t.after(async()=>{await closeTestApp(app);await rm(root,{recursive:true,force:true});});

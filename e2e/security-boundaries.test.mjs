@@ -1,11 +1,10 @@
+import { electron, closeTestApp } from './launch.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { _electron as electron } from 'playwright';
-import { closeTestApp } from './launch.mjs';
 
 const args = ['--no-sandbox', '--use-fake-device-for-media-stream', 'desktop/dist/main.js'];
 async function until(check) { const end = Date.now() + 10000; while (Date.now() < end) { if (await check()) return; await new Promise(resolve => setTimeout(resolve, 25)); } throw new Error('Native event did not arrive'); }

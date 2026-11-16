@@ -1,12 +1,11 @@
+import { electron, closeTestApp } from './launch.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { _electron as electron } from 'playwright';
 import { WebSocketServer } from 'ws';
-import { closeTestApp } from './launch.mjs';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function until(check, label) { for (let n=0;n<250;n++) {const value=await check();if(value)return value;await sleep(30);}throw Error(label); }
 function coloredPdf() {

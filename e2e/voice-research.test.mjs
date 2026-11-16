@@ -1,3 +1,4 @@
+import { electron, launchPackaged, closeTestApp } from './launch.mjs';
 import { modelText } from './fixtures/model-content.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -5,10 +6,8 @@ import { createServer } from 'node:http';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { _electron as electron } from 'playwright';
 import { WebSocketServer } from 'ws';
 import { Runtime } from '../src/runtime.ts';
-import { launchPackaged, closeTestApp } from './launch.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };

@@ -3,7 +3,7 @@ import {test} from 'node:test';
 import {mkdtemp,mkdir,rm,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {_electron as electron} from 'playwright';
+import { electron } from './launch.mjs';
 import {WebSocketServer} from 'ws';
 import {launchPackaged, closeTestApp} from './launch.mjs';
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));

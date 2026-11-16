@@ -1,12 +1,11 @@
+import { electron, closeTestApp } from './launch.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { _electron as electron } from 'playwright';
 import { WebSocketServer } from 'ws';
-import { closeTestApp } from './launch.mjs';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function until(check, message) { const deadline = Date.now() + 12000; while (Date.now() < deadline) { if (await check()) return; await sleep(25); } throw Error(message); }
 function tone(ms) { const pcm = Buffer.alloc(ms * 48); for (let i = 0; i < pcm.length / 2; i++) pcm.writeInt16LE(Math.round(Math.sin(i / 9) * 8000), i * 2); return pcm; }

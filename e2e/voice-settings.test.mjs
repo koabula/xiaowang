@@ -1,12 +1,11 @@
+import { electron, closeTestApp } from './launch.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { _electron as electron } from 'playwright';
 import { WebSocketServer } from 'ws';
-import { closeTestApp } from './launch.mjs';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, message = 'Voice settings did not reach the expected state') { const end = Date.now() + 15000; while (Date.now() < end) { if (await check()) return; await sleep(30); } throw Error(message); }
 const D = 'fixture-doubao-1111', A = 'fixture-moss-A-2222', B = 'fixture-moss-B-2222';

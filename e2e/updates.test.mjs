@@ -1,3 +1,4 @@
+import { electron, launchPackaged, closeTestApp } from './launch.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
@@ -5,8 +6,6 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { _electron as electron } from 'playwright';
-import { launchPackaged, closeTestApp } from './launch.mjs';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check) { const deadline = Date.now() + 15000; while (Date.now() < deadline) { const value = await check(); if (value) return value; await sleep(40); } throw new Error('Update UI did not reach the expected state'); }
 
