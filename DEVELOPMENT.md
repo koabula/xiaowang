@@ -35,6 +35,8 @@ Use `npm run preview` for a UI-only browser preview or `npm run xiaowang -- help
 
 ## Desktop tests without taking over your workspace
 
+For the fixed-data history/PDF and bounded-download benchmarks, see [third-batch measurements and reproduction](technical/performance-batch3.md).
+
 `npm run test:desktop` runs the regular suite sequentially in hidden, non-focusable Electron windows. PDF and UI rendering continue in the background, audio output is muted, and system clipboard reads/writes are blocked before accessing user data. Each app's cleanup checks that no window was shown or focused and no clipboard operation was attempted. Playwright's DOM focus and keyboard events still exercise the rendered UI; these do not establish OS-level focus or shortcut behavior.
 
 All regular tests import `electron` from `e2e/launch.mjs`, including restarts. Temporary Electron fixtures also use `testWindowOptions()` from `desktop/main/test-mode.ts`. The launcher supplies an internal process flag; it is not a user preference and is never saved. `npm run desktop` and normal app startup retain their existing behavior.
