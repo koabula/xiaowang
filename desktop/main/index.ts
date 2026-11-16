@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { configurePagePermissions, isAppPage, protectAppWindow } from "./page-policy.ts";
+import { backgroundTest, testWindowOptions } from "./test-mode.ts";
 import { UpdateController } from "./update-state.ts";
 import { createUpdateEngine } from "./updates.ts";
 import { LiveCall, type InterruptionReceipt, type PlaybackPosition, type VoiceState } from "./call.ts";
@@ -706,6 +707,7 @@ async function createWindow(): Promise<void> {
   const icon = appIcon();
   if (process.platform === "darwin" && !icon.isEmpty()) app.dock?.setIcon(icon);
   window = new BrowserWindow({
+    ...testWindowOptions(),
     width: 1280,
     height: 840,
     minWidth: 760,
@@ -715,6 +717,7 @@ async function createWindow(): Promise<void> {
     trafficLightPosition: { x: 16, y: 16 },
     backgroundColor: "#F6F6F7",
     webPreferences: {
+      ...testWindowOptions().webPreferences,
       preload: path.join(here, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
@@ -963,6 +966,7 @@ function openCall(
 
 app.on("second-instance", () => {
   if (window && !window.isDestroyed()) {
+    if (backgroundTest) return;
     if (window.isMinimized()) window.restore();
     window.show();
     window.focus();

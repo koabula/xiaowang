@@ -1,4 +1,5 @@
 import { BrowserWindow, ipcMain, session, WebContentsView } from "electron";
+import { testWindowOptions } from "./test-mode.ts";
 import { fileURLToPath } from "node:url";
 import type { BrowserDriver } from "../../src/stage.ts";
 import { assertHttpUrl, USER_HAS_BROWSER } from "../../src/stage.ts";
@@ -69,6 +70,7 @@ export class BrowserPane {
     }
     this.view = new WebContentsView({
       webPreferences: {
+        ...testWindowOptions().webPreferences,
         preload: fileURLToPath(new URL("./browser-preload.cjs", import.meta.url)),
         // Run the isolated input guard in iframes too. sandbox keeps their
         // preload API restricted; Node remains unavailable to page scripts.
