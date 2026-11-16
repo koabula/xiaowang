@@ -150,14 +150,9 @@ function importAttachment(slug: string, filename: string, data: Uint8Array): Att
 }
 
 function previewOf(botId: string): string {
-  const events = runtime.store.getEvents(botId);
-  for (let i = events.length - 1; i >= 0; i -= 1) {
-    const event = events[i]?.event;
-    if (!event) continue;
-    if ((event.type === "user_text" || event.type === "assistant_turn") && (event.text.trim() || event.type === "user_text" && event.attachments?.length)) {
-      return messagePreview(event.text) || (event.type === "user_text" && event.attachments?.length ? event.attachments.map(a => a.filename).join("、") : "还没有对话");
-    }
-  }
+  const event = runtime.store.latestMessage(botId)?.event;
+  if (event?.type === "user_text" || event?.type === "assistant_turn")
+    return messagePreview(event.text) || (event.type === "user_text" && event.attachments?.length ? event.attachments.map(a => a.filename).join("、") : "还没有对话");
   return "还没有对话";
 }
 

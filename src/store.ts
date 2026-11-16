@@ -78,6 +78,8 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS idx_session_events_bot
         ON session_events (bot_id, id);
+      CREATE INDEX IF NOT EXISTS idx_session_events_message
+        ON session_events (bot_id, id) WHERE type IN ('user_text', 'assistant_turn');
       CREATE TABLE IF NOT EXISTS library_files (
         id TEXT PRIMARY KEY,
         sha256 TEXT NOT NULL UNIQUE,
@@ -312,6 +314,25 @@ export class Store {
     const row = this.db.prepare("SELECT * FROM session_events WHERE bot_id = ? AND id = ?").get(botId, eventId) as EventRow | undefined;
     if (!row || !(MEMORY_TYPES as readonly string[]).includes(row.type)) throw new Error("当前 bot 没有可读取的这条历史事件。");
     return { id: row.id, botId: row.bot_id, createdAt: row.created_at, event: JSON.parse(row.payload_json) as SessionEvent };
+  }
+
+  /** Walk recent message rows only; stop as soon as the existing preview rule matches. */
+  latestMessage(botId: string): StoredEvent | undefined {
+    this.requireBot(botId);
+    const rows = this.db.prepare("SELECT * FROM session_events WHERE bot_id = ? AND type IN ('user_text', 'assistant_turn') ORDER BY id DESC").iterate(botId);
+    for (const raw of rows) {
+      const row = raw as unknown as EventRow, event = JSON.parse(row.payload_json) as SessionEvent;
+      if ((event.type === "user_text" || event.type === "assistant_turn") && (event.text.trim() || event.type === "user_text" && event.attachments?.length))
+        return { id: Number(row.id), botId: row.bot_id, createdAt: row.created_at, event };
+    }
+  }
+
+  eventsByIds(botId: string, ids: readonly number[]): StoredEvent[] {
+    this.requireBot(botId);
+    if (!ids.length) return [];
+    const rows = this.db.prepare("SELECT * FROM session_events WHERE bot_id = ? AND id IN (SELECT value FROM json_each(?)) ORDER BY id ASC")
+      .all(botId, JSON.stringify(ids)) as unknown as EventRow[];
+    return rows.map(row => ({ id: Number(row.id), botId: row.bot_id, createdAt: row.created_at, event: JSON.parse(row.payload_json) as SessionEvent }));
   }
 
   searchMemory(botId: string, query: string, options: { types?: string[]; afterId?: number; limit?: number } = {}) {

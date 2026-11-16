@@ -111,8 +111,8 @@ export class JobQueue {
 
   updates(id: string): { events: import("./types.ts").StoredEvent[]; sharedContext?: TaskJob["sharedContext"] } {
     const job = this.get(id);
-    const ids = new Set(job.supplementEventIds ?? []);
-    return { events: this.store.getEvents(job.botId).filter(event => ids.has(event.id)), sharedContext: job.sharedContext };
+    const ids = job.supplementEventIds ?? [];
+    return { events: ids.length ? this.store.eventsByIds(job.botId, ids) : [], sharedContext: job.sharedContext };
   }
 
   list(botId?: string): TaskJob[] {

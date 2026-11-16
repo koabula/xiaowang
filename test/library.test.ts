@@ -8,6 +8,7 @@ import { projectLlmContext } from "../src/project.ts";
 import { Runtime } from "../src/runtime.ts";
 import { executeTool } from "../src/tools.ts";
 import type { CompletionResult, LlmProvider } from "../src/types.ts";
+import { readReferencedDocument } from "../src/documents.ts";
 
 function openRuntime(): { runtime: Runtime; home: string; close: () => void } {
   const home = mkdtempSync(path.join(tmpdir(), "xiaowang-lib-"));
@@ -192,5 +193,17 @@ test("legacy library labels resolve only the exact id and filename of this works
     assert.equal(runtime.store.resolveLibraryRef(bot.id, `${ref.id}\t${ref.filename}`).id, ref.id);
     assert.throws(() => runtime.store.resolveLibraryRef(bot.id, `${ref.id} wrong.pdf`), /没有这份/);
     assert.throws(() => runtime.store.resolveLibraryRef(other.id, `${ref.id} ${ref.filename}`), /没有这份/);
+  } finally { close(); }
+});
+
+test("PDF header recognition still reads misnamed originals and cancelled requests stay cancelled", async () => {
+  const { runtime, close } = openRuntime();
+  try {
+    const ref = runtime.store.addLibraryBytes(runtime.activeBot().id, "original.bin", tinyPdf("HEADER-RECOGNITION")).ref;
+    const first = await readReferencedDocument(ref);
+    assert.match(first, /HEADER-RECOGNITION/);
+    assert.equal(await readReferencedDocument(ref), first);
+    const controller = new AbortController(); controller.abort();
+    await assert.rejects(readReferencedDocument(ref, { signal: controller.signal }), /aborted/i);
   } finally { close(); }
 });
