@@ -126,6 +126,14 @@ try {
     let state = await page.evaluate(() => window.xiaowang.getState());
     assert.equal(state.version, version); assert.equal(state.settings.ready, false); await page.getByRole('form', { name: '设置', exact: true }).waitFor();
     await closeTestApp(app); app = undefined; checked(variant + ': fresh installation launches with a clean profile');
+    if (variant === 'mac' && process.arch === 'arm64') {
+      report.stage = 'mac: packaged voice conversation';
+      const voice = await run(process.execPath, ['--test', 'e2e/voice-research.test.mjs'], {
+        env: { ...nativeEnv, XIAOWANG_E2E_EXECUTABLE: activeBinary },
+      });
+      console.log(voice.stdout);
+      checked('Packaged voice: PDF follow-ups, conversation during background work, and replies after success and failure');
+    }
 
     report.stage = variant + ': seed original installation';
     activeBinary = await install(old, path.join(root, variant + '-installed'));
@@ -169,9 +177,17 @@ try {
       app = await launchPackaged(activeBinary, ['--no-sandbox'], { ...nativeEnv, XIAOWANG_DISABLE_UPDATES: '1' }, { native: true }); page = await app.firstWindow();
     }
     await page.waitForFunction(() => Boolean(window.xiaowang)); state = await page.evaluate(() => window.xiaowang.getState());
-    if (state.settings.pendingMigration) {
+    if (variant === 'mac') {
+      const local = path.join(profile, 'settings.local.json');
+      assert.equal(state.settings.pendingMigration, true, 'Encrypted old settings must remain pending on startup');
+      assert.equal(await exists(local), false, 'Startup must not migrate old keys');
+      await page.waitForSelector('.composer');
+      assert.equal(await page.locator('.settings-modal').count(), 0);
       await page.evaluate(() => window.xiaowang.restoreSettings());
       state = await page.evaluate(() => window.xiaowang.getState());
+      assert.equal(state.settings.pendingMigration, false);
+      assert.equal((await stat(local)).mode & 0o777, 0o600);
+      checked('mac: upgraded workspace opens before migration; on-demand restore creates owner-only settings');
     }
     assert.equal(state.version, version); assert.equal(state.settings.ready, true); assert.equal(state.settings.model, 'fixture');
     assert.match(state.settings.keyHint, /0120/); assert.match(state.settings.realtimeKeyHint, /0120/);
