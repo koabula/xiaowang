@@ -6,6 +6,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Existing successful build run to verify without rebuilding installers
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -17,6 +22,7 @@ concurrency:
 jobs:
   check:
     name: Check and test
+    if: ${{ !inputs.candidate_run_id }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -121,6 +127,78 @@ jobs:
             release/*.blockmap
             release/latest*.yml
             release/SHA256SUMS.txt
+
+  candidate-acceptance:
+    name: Accept candidate ${{ matrix.name }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_run_id != '' }}
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS-arm64
+            os: macos-latest
+            artifact: macOS
+          - name: macOS-Intel
+            os: macos-15-intel
+            artifact: macOS
+          - name: Windows
+            os: windows-latest
+            artifact: Windows
+          - name: Linux
+            os: ubuntu-latest
+            artifact: Linux
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          pattern: XiaoWang-${{ matrix.artifact }}-*
+          merge-multiple: true
+          path: candidate
+      - name: Download original previous release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/download-previous-installers.mjs
+      - name: Prepare isolated Linux desktop
+        if: runner.os == 'Linux'
+        run: |
+          npx --no-install playwright install-deps chromium
+          sudo apt-get install -y dbus-x11 gnome-keyring
+      - name: Verify actual installation, update and retained data
+        timeout-minutes: 12
+        shell: bash
+        env:
+          XIAOWANG_CANDIDATE_DIR: candidate
+          XIAOWANG_PREVIOUS_DIR: previous
+          XIAOWANG_QA_REPORT_DIR: qa-report
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            dbus-run-session -- xvfb-run --auto-servernum bash -euc '
+              export XDG_CURRENT_DESKTOP=GNOME
+              printf "%s" "xiaowang-ci" | gnome-keyring-daemon --unlock --components=secrets
+              node scripts/verify-candidate-install.mjs
+            '
+          else
+            node scripts/verify-candidate-install.mjs
+          fi
+      - name: Retain acceptance reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Candidate-acceptance-${{ matrix.name }}-${{ github.run_id }}
+          path: qa-report/
+          retention-days: 14
 
   release:
     name: Publish complete GitHub Release
