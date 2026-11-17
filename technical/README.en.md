@@ -162,7 +162,7 @@ The desktop acquires a single-instance lock before opening the database or resto
 
 PDF excerpts include an `xwref` link for each page, identifying the original file and page number. Chat and Markdown notes share link handling. The file picker and workspace opening path share preview-format rules.
 
-Text credentials and unsaved key drafts are scoped to service origins (scheme, host, and port). Environment values apply only to the running session; saving ordinary preferences does not persist them. Explicitly entered keys are saved with their service. When system encryption is unavailable, only non-secret preferences are stored and keys remain session-only. Legacy credentials migrate to their original service.
+Text credentials and unsaved key drafts are scoped to service origins (scheme, host, and port). Environment values apply only to the running session; saving ordinary preferences does not persist them. Explicitly entered keys are saved with their service. macOS stores keys in an owner-only local file and migrates legacy keys on demand. On other platforms, when system encryption is unavailable, only non-secret preferences are stored and keys remain session-only. Legacy credentials migrate to their original service.
 
 Native calls accept only the trusted main document in the application window. External navigation is blocked there; HTTP links open in the system browser. Microphone access is limited to audio requests from the app document. The embedded web session denies device permissions.
 

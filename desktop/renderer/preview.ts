@@ -50,6 +50,7 @@ export function installPreviewBridge(): void {
   };
   const publish = () => listeners.state.forEach((callback) => callback(state));
   window.xiaowang = {
+    async restoreSettings() { return state.settings; },
     async getState() {
       return state;
     },

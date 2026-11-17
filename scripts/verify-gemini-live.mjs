@@ -9,11 +9,10 @@ import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
 import { build } from 'esbuild';
-import { _electron as electron } from 'playwright';
 import { GeminiLive } from '../src/gemini-live.ts';
 import { JobQueue } from '../src/jobs.ts';
 import { Runtime } from '../src/runtime.ts';
-import { closeTestApp } from '../e2e/launch.mjs';
+import { electron, closeTestApp } from '../e2e/launch.mjs';
 
 const key = process.env.GEMINI_API_KEY;
 assert.ok(key, 'Configure GEMINI_API_KEY before running this opt-in check.');

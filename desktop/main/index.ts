@@ -35,7 +35,7 @@ import { listCanvasPages, resolveInsideWorkspace } from "../../src/workspace.ts"
 import { browseBotFiles, type BrowseOptions } from "../../src/file-browser.ts";
 import { filePreview } from "../../src/file-preview.ts";
 import { BotBrowsers } from "./browser.ts";
-import { loadSecrets, mergeSecrets, publicSettings, type SecretPatch, type SecretRecord } from "./secrets.ts";
+import { loadSecrets, migrateLegacySecrets, needsKeyMigration, mergeSecrets, publicSettings, type SecretPatch, type SecretRecord } from "./secrets.ts";
 import { availableRealtimeSettings, mergeSettings, settingsPatchForSave, contextEnvironment } from "../../src/settings.ts";
 import { MossVoiceCatalog } from "./moss-voices.ts";
 import { GeminiCall } from "./gemini-call.ts";
@@ -72,7 +72,7 @@ let updateNotice = "";
 const mossVoices = new MossVoiceCatalog();
 const experimentalMossEnabled = process.env.XIAOWANG_ENABLE_MOSS === "1";
 const geminiEnabled = true;
-function settingsView() { return { ...publicSettings(secrets, savedSecrets), experimentalMossEnabled, geminiEnabled }; }
+function settingsView() { return { ...publicSettings(secrets, savedSecrets), pendingMigration: needsKeyMigration(), experimentalMossEnabled, geminiEnabled }; }
 function assertRealtimeAvailable(service: string): void {
   if (service === "moss" && !experimentalMossEnabled) throw new Error("MOSS Live 支持已暂时停用，请选择其他语音服务。");
 }
@@ -110,6 +110,24 @@ let secrets: SecretRecord = {
   locale: "zh",
 };
 let savedSecrets = secrets;
+function applyEnvironment(): void {
+  // Environment configuration stays in memory and never rewrites stored keys.
+  const overrides: Array<[Exclude<keyof SecretPatch, "realtimeProfiles">, string]> = [
+    ["model", "XIAOWANG_MODEL"], ["baseUrl", "XIAOWANG_BASE_URL"], ["apiStyle", "XIAOWANG_API_STYLE"], ["apiKey", "XIAOWANG_API_KEY"],
+    ["realtimeService", "XIAOWANG_REALTIME_SERVICE"], ["realtimeModel", "XIAOWANG_REALTIME_MODEL"], ["realtimeKey", "XIAOWANG_REALTIME_KEY"],
+  ];
+  const environmentPatch: SecretPatch = {};
+  for (const [field, variable] of overrides) if (process.env[variable]?.trim()) environmentPatch[field] = process.env[variable]!.trim();
+  secrets = availableRealtimeSettings(mergeSettings(savedSecrets, environmentPatch), experimentalMossEnabled);
+}
+
+function useSavedCredentials(): void {
+  if (!needsKeyMigration()) return;
+  savedSecrets = migrateLegacySecrets();
+  applyEnvironment();
+  publish();
+  jobs.start();
+}
 const activeDownloads = new Set<DownloadTask>();
 let closingDownloads = false;
 
@@ -392,7 +410,7 @@ function registerIpc(): void {
   handle("state:get", () => {
     // Start only after a renderer is mounted, independently of the first
     // navigation promise (a reload can abort that promise).
-    jobs.start();
+    if (!needsKeyMigration()) jobs.start();
     startUpdateChecks();
     return {
     version: app.getVersion(), update: updates.snapshot(), updateNotice,
@@ -543,6 +561,7 @@ function registerIpc(): void {
     return null;
   });
   handle("chat:ask", async (_event, slug: string, text: string, ids: string[] = [], queueNew = false) => {
+    useSavedCredentials();
     const bot = runtime.store.requireBot(slug);
     if (typeof text !== "string") throw new Error("消息格式无效。");
     const attachments = resolveAttachments(runtime.store, bot.id, ids);
@@ -561,7 +580,7 @@ function registerIpc(): void {
     for (const job of jobs.list(bot.id)) if (job.status === "running") jobs.cancel(job.id);
   });
   handle("job:cancel", (_event, id: string) => jobs.cancel(id));
-  handle("job:retry", (_event, id: string) => jobs.retry(id));
+  handle("job:retry", (_event, id: string) => { useSavedCredentials(); return jobs.retry(id); });
   handle("stage:ack", (_event, slug: string, requestId: string, receipt: { page: number; totalPages: number; title?: string; error?: string }) => stages.acknowledge(slug, requestId, receipt));
   handle("stage:position", (_event, slug: string, position: { path: string; page: number; totalPages: number; mode: "canvas" | "file" }) => {
     const bot = runtime.store.getBot(slug);
@@ -615,11 +634,17 @@ function registerIpc(): void {
     assertRealtimeAvailable(service);
     return shell.openExternal(realtimeKeyPage(typeof service === "string" ? service : "", typeof region === "string" ? region : ""));
   });
+  handle("settings:restore", () => { useSavedCredentials(); return settingsView(); });
   handle("settings:save", (_event, patch: SecretPatch) => {
+    if (needsKeyMigration() && !patch.apiKey?.trim() && !patch.realtimeKey?.trim()
+      && !Object.values(patch.realtimeProfiles ?? {}).some(profile => profile.key?.trim())) {
+      throw new Error("旧密钥尚未读取。请重新打开设置恢复旧密钥，或填写新密钥后保存。");
+    }
     const draft = mergeSettings(secrets, patch);
     assertRealtimeAvailable(draft.realtimeService);
     savedSecrets = mergeSecrets(savedSecrets, settingsPatchForSave(secrets, patch));
     secrets = draft;
+    jobs.start();
     publish();
     return settingsView();
   });
@@ -636,6 +661,7 @@ function registerIpc(): void {
     else if (intent === "window") window?.close();
   });
   handle("call:start", (_event, slug: string) => {
+    useSavedCredentials();
     startCall(slug);
   });
   handle("call:preview", (_event, patch: SecretPatch) => {
@@ -813,9 +839,9 @@ function startCall(slug: string): void {
     onTranscript(who, text) {
       if (who !== "user") return;
       if (endpoint.family === "moss") return;
-      const accepted = voiceTasks.userText(text, endpoint.family !== "gemini");
-      const job = accepted || voiceTasks.latest();
-      live?.updateContext("currentVoiceTask", job ? voiceJobReceipt(job) : "没有已受理的后台任务。需要分析、梳理或调研时调用 delegate_task；口头承诺不代表已经开始。");
+      voiceTasks.userText(text);
+      const job = voiceTasks.latest();
+      live?.updateContext("currentVoiceTask", job ? voiceJobReceipt(job) : "没有已受理的后台任务。");
     },
     delegate(task) {
       const focus = focusedFiles.get(slug);
@@ -855,7 +881,7 @@ function startCall(slug: string): void {
       // A research turn is already owned by the background LLM. Realtime can
       // still locate/open sources, but must not run a second competing workflow.
       const accepted = voiceTasks.current();
-      if (accepted && !["list_library", "list_files", "show_stage"].includes(name)) return voiceJobReceipt(accepted);
+      if (accepted && !["list_library", "list_files", "show_stage", "read_document", "read_file"].includes(name)) return voiceJobReceipt(accepted);
       let input: unknown = {};
       try {
         input = args.trim() ? JSON.parse(args) : {};
@@ -997,14 +1023,7 @@ app.whenReady().then(async () => {
   savedSecrets = loadSecrets();
   secrets = savedSecrets;
   try { const outcome = JSON.parse(readFileSync(path.join(app.getPath("userData"), "update-outcome.json"), "utf8")); if (typeof outcome.error === "string") updateNotice = outcome.error.slice(0, 180); } catch { /* No failed installation to report. */ }
-  // Environment configuration stays in memory and never rewrites stored keys.
-  const overrides: Array<[Exclude<keyof SecretPatch, "realtimeProfiles">, string]> = [
-    ["model", "XIAOWANG_MODEL"], ["baseUrl", "XIAOWANG_BASE_URL"], ["apiStyle", "XIAOWANG_API_STYLE"], ["apiKey", "XIAOWANG_API_KEY"],
-    ["realtimeService", "XIAOWANG_REALTIME_SERVICE"], ["realtimeModel", "XIAOWANG_REALTIME_MODEL"], ["realtimeKey", "XIAOWANG_REALTIME_KEY"],
-  ];
-  const environmentPatch: SecretPatch = {};
-  for (const [field, variable] of overrides) if (process.env[variable]?.trim()) environmentPatch[field] = process.env[variable]!.trim();
-  secrets = availableRealtimeSettings(mergeSettings(secrets, environmentPatch), experimentalMossEnabled);
+  applyEnvironment();
   attachDownloads();
   browser = new BotBrowsers(
     (slug, state) => { if (slug === runtime.activeBot().slug) send("browser", { ...state, slug }); },

@@ -18,12 +18,13 @@ async function until(check, timeout = 12000) {
 }
 function pdf() {
   const content = 'BT /F1 18 Tf 72 720 Td (RESEARCH-EVIDENCE-42) Tj ET';
-  const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>', '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>', `<< /Length ${content.length} >>\nstream\n${content}\nendstream`, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+  const intro = 'BT /F1 18 Tf 72 720 Td (INTRODUCTION-ONLY) Tj ET';
+  const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [6 0 R 3 0 R] /Count 2 >>', '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>', `<< /Length ${content.length} >>\nstream\n${content}\nendstream`, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 7 0 R /Resources << /Font << /F1 5 0 R >> >> >>', `<< /Length ${intro.length} >>\nstream\n${intro}\nendstream`];
   let result = '%PDF-1.4\n'; const offsets = [0];
   objects.forEach((value, i) => { offsets.push(Buffer.byteLength(result)); result += `${i + 1} 0 obj\n${value}\nendobj\n`; });
-  const xref = Buffer.byteLength(result); result += 'xref\n0 6\n0000000000 65535 f \n';
+  const xref = Buffer.byteLength(result); result += 'xref\n0 8\n0000000000 65535 f \n';
   offsets.slice(1).forEach(offset => { result += `${String(offset).padStart(10, '0')} 00000 n \n`; });
-  return Buffer.from(`${result}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return Buffer.from(`${result}trailer\n<< /Size 8 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
 }
 function tone(ms = 400) {
   const pcm = Buffer.alloc(ms * 48);
@@ -40,6 +41,9 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
     if (request.url?.endsWith("/models")) { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ data: [] })); return; }
     let raw = ''; for await (const chunk of request) raw += chunk;
     const input = JSON.parse(raw);
+    if (modelText(input.messages.findLast(message => message.role === 'user')).includes('FAIL-ON-PURPOSE')) {
+      response.writeHead(400, { 'content-type': 'application/json' }); response.end(JSON.stringify({ error: { message: 'fixture failure' } })); return;
+    }
     assert.ok(input.tools?.some(tool => (tool.function?.name ?? tool.name) === "inspect_event"), "Only task requests are sent; history lookup is available");
     const index = input.messages.findLastIndex(message => message.role === 'user' && /你去分析一下|文字分析测试/.test(modelText(message)));
     assert.ok(index >= 0); const task = modelText(input.messages[index]);
@@ -52,13 +56,13 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
     const chunk = (delta, finish_reason) => response.write(`data: ${JSON.stringify({ choices: [{ delta, finish_reason }] })}\n\n`);
     if (!source) {
       chunk({ content: '我先通读全文，再给出结构化的梳理结果。' });
-      chunk({ tool_calls: [{ index: 0, id: `read-${kind}`, function: { name: 'read_document', arguments: JSON.stringify({ file: `${ref.id} ${ref.filename}` }) } }] }, 'tool_calls');
+      chunk({ tool_calls: [{ index: 0, id: `read-${kind}`, function: { name: 'read_document', arguments: JSON.stringify({ file: ref.id, start_page: 2 }) } }] }, 'tool_calls');
     } else if (!written) {
       waiting.add(kind);
       chunk({ content: '尚未完成的中途说明。' });
       await gates[kind].promise;
       chunk({ tool_calls: [{ index: 0, id: `write-${kind}`, function: { name: 'write_file', arguments: JSON.stringify({ path: 'notes/research.md', content: '原文证据：RESEARCH-EVIDENCE-42。分析结果已保存。' }) } }] }, 'tool_calls');
-    } else chunk({ content: `${kind === 'text' ? '文字分析结果' : '论文分析结果'}：基于原文 RESEARCH-EVIDENCE-42，已完成梳理并保存笔记。[原文，第1页](xwref://${ref.id}?page=1)` }, 'stop');
+    } else chunk({ content: `${kind === 'text' ? '文字分析结果' : '论文分析结果'}：基于原文 RESEARCH-EVIDENCE-42，已完成梳理并保存笔记。[原文，第1页](xwref://${ref.id}?page=2)` }, 'stop');
     response.end('data: [DONE]\n\n');
   });
   await new Promise(resolve => model.listen(0, '127.0.0.1', resolve));
@@ -85,6 +89,11 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
       if (event.type === 'speech_text_buffer.commit') { notices.push(event.text); speak(`notice-${notices.length}`, event.text); }
       if (event.items?.[0]?.role === 'tool') {
         const item = event.items[0]; returned.push(item);
+        if (['quick', 'followup', 'while-working', 'after-failure'].includes(item.call_id)) {
+          assert.match(item.content[0].text, /RESEARCH-EVIDENCE-42/);
+          assert.doesNotMatch(item.content[0].text, /INTRODUCTION-ONLY/);
+          speak(item.call_id, '这页给出的证据是 RESEARCH-EVIDENCE-42。', 700);
+        }
         if (item.call_id === 'lookup') speak('lookup-reply', '后台正在分析，你可以继续说。');
         if (item.call_id === 'status') speak('status-reply', '正在阅读原文，还没有完成。');
         if (item.call_id === 'open') speak('open-reply', '原文已打开。');
@@ -103,10 +112,23 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
   await page.evaluate(() => window.xiaowang.callStart('xiaowang')); await until(() => mic > 0);
   const user = (id, text) => { emit({ type: 'conversation.item.input_audio_transcription.started', item_id: id }); emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: id, text }); };
   const tool = (id, name, args = {}) => emit({ type: 'response.function_call_arguments.done', question_id: id, items: [{ call_id: id, name, arguments: args }] });
-  user('research', '你去分析一下刚刚这篇文章。');
+  tool('open-first', 'show_stage', { mode: 'file', file: ref.id, page: 2 });
+  await until(() => returned.some(item => item.call_id === 'open-first'));
+  await page.waitForFunction(() => document.querySelector('.pdf-scroll canvas')?.width > 0);
+  async function discussPage(id, question) {
+    user(id, question);
+    tool(id, 'read_document', { file: ref.id, start_page: 2 });
+    await until(() => returned.some(item => item.call_id === id));
+    await until(async () => await energy() > .05);
+    await until(async () => await energy() < .001);
+  }
+  await discussPage('quick', '好，你给我分析一下。');
+  await discussPage('followup', '为什么得出这个结论？');
+  assert.equal((await state()).jobs.length, 0);
+  user('research', '请后台核对这篇论文并保存笔记。');
   // Reproduce the problematic provider order: function call, then preface, with no
   // audio completion until the app has returned the tool's result.
-  tool('lookup', 'list_library');
+  tool('lookup', 'delegate_task', { task: '你去分析一下刚刚这篇文章并保存笔记' });
   emit({ type: 'response.output_text.delta', question_id: 'research', response_id: 'preface', delta: '我先找到论文。' });
   emit({ type: 'response.output_text.done', question_id: 'research', response_id: 'preface', text: '我先找到论文。' });
   await until(() => returned.some(item => item.call_id === 'lookup'));
@@ -117,6 +139,8 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
   assert.equal((await state()).jobs.length, 1);
   assert.equal(await page.locator('.bubble.assistant').count(), 0, 'Intermediate streamed prefaces must not become completed answer bubbles');
   await page.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-research-working.png') });
+  await discussPage('while-working', '先给我讲讲这页的证据。');
+  assert.equal((await state()).jobs[0].status, 'running');
   speak('long-before-progress', '正在阅读原文。', 2500);
   await until(async () => await energy() > .05);
   user('progress', '梳理了吗？'); tool('status', 'get_task');
@@ -162,7 +186,8 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
   gates.voice = deferred(); waiting.delete('voice');
   const previousMic = mic;
   await page.evaluate(() => window.xiaowang.callStart('xiaowang')); await until(() => mic > previousMic);
-  user('late-research', '你去分析一下刚刚这篇文章。');
+  user('late-research', '请后台核验并保存结果。');
+  tool('late-delegate', 'delegate_task', { task: '你去分析一下刚刚这篇文章并保存结果。' });
   await until(() => waiting.has('voice'));
   const lateJob = (await state()).jobs.find(job => job.channel === 'voice' && job.id !== voiceJob.id);
   assert.ok(lateJob?.originCallId && lateJob.originCallId !== voiceJob.originCallId);
@@ -179,6 +204,14 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
   await lateCall.locator(`[data-job-id="${lateJob.id}"] .call-task-result summary`).click();
   await lateCall.locator('.call-task-result').getByText('论文分析结果：', { exact: false }).waitFor();
   assert.equal(await sourceCall.locator('.task-item').count(), 0, 'Earlier calls do not absorb later work');
+  await page.evaluate(() => window.xiaowang.callStart('xiaowang'));
+  await until(async () => (await state()).call?.state?.phase === 'listening');
+  user('error-turn', '请在后台写一份报告。');
+  tool('error-job', 'delegate_task', { task: 'FAIL-ON-PURPOSE' });
+  await until(() => notices.some(text => text.includes('没有完成')));
+  await until(async () => await energy() > .05); await until(async () => await energy() < .001);
+  await discussPage('after-failure', '我们接着说这一页。');
+  await page.evaluate(() => window.xiaowang.callStop());
   await page.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-research-complete.png') });
   assert.deepEqual(errors, []);
   console.log('Verified analysis acceptance, visible progress, no duplicate jobs after interruption/status, native result return during preface, actual PDF reading, saved notes, spoken result, source display receipt and baseline text progress.');

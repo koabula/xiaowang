@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-const args = ['--no-sandbox', '--use-fake-device-for-media-stream', 'desktop/dist/main.js'];
+const args = ['--no-sandbox', '--use-mock-keychain', '--use-fake-device-for-media-stream', 'desktop/dist/main.js'];
 async function until(check) { const end = Date.now() + 10000; while (Date.now() < end) { if (await check()) return; await new Promise(resolve => setTimeout(resolve, 25)); } throw new Error('Native event did not arrive'); }
 function cleanEnv(home, profile) {
   const env = { ...process.env, XIAOWANG_HOME: home, XIAOWANG_USER_DATA: profile, XIAOWANG_DISABLE_UPDATES: '1' };
@@ -55,9 +55,10 @@ test('credentials stay with their service; environment overrides and session-onl
     const { settings } = await window.xiaowang.getState();
     await window.xiaowang.saveSettings({ ...settings, apiKey: '', realtimeKey: '', locale: 'en', realtimeProfiles: Object.fromEntries(Object.entries(settings.realtimeProfiles).map(([id, value]) => [id, { ...value, key: '' }])) });
   });
+  const storedFile = process.platform === 'darwin' ? 'settings.local.json' : 'secrets.bin';
   const disk = async () => app.evaluate(({ safeStorage }, data) => {
     const bytes = Buffer.from(data, 'base64'); try { return JSON.parse(bytes.toString()); } catch { return JSON.parse(safeStorage.decryptString(bytes)); }
-  }, (await readFile(path.join(profile, 'secrets.bin'))).toString('base64'));
+  }, (await readFile(path.join(profile, storedFile))).toString('base64'));
   let saved = await disk(); assert.equal(saved.locale, 'en'); assert.equal(saved.model, 'stored-model');
   assert.ok(!JSON.stringify(saved).includes('temporary-'));
   await page.evaluate(baseUrl => window.xiaowang.saveSettings({ baseUrl, apiKey: 'stored-B' }), b.url + '/v1');
@@ -70,14 +71,17 @@ test('credentials stay with their service; environment overrides and session-onl
   assert.deepEqual(captured.map(item => item.key), ['Bearer stored-A', 'Bearer stored-B']);
   await app.evaluate(({ safeStorage }) => { safeStorage.isEncryptionAvailable = () => false; });
   await page.evaluate(() => window.xiaowang.saveSettings({ apiKey: 'session-text', realtimeKey: 'session-voice' }));
-  saved = await disk(); assert.equal(saved.apiKey, ''); assert.deepEqual(saved.textKeys, {});
-  assert.ok(!JSON.stringify(saved).includes('stored-A')); assert.ok(!JSON.stringify(saved).includes('session-'));
+  saved = await disk();
+  const localMac = process.platform === 'darwin';
+  assert.equal(saved.apiKey, localMac ? 'session-text' : '');
+  if (!localMac) { assert.deepEqual(saved.textKeys, {}); assert.ok(!JSON.stringify(saved).includes('session-')); }
   const session = (await page.evaluate(() => window.xiaowang.getState())).settings;
-  assert.match(session.keyHint, /仅本次使用/); assert.match(session.realtimeKeyHint, /仅本次使用/);
+  assert.match(session.keyHint, localMac ? /已保存/ : /仅本次使用/);
+  assert.match(session.realtimeKeyHint, localMac ? /已保存/ : /仅本次使用/);
   captured.length = 0; await page.evaluate(() => window.xiaowang.listModels({}));
   assert.equal(captured[0].key, 'Bearer session-text');
   await closeTestApp(app); app = await electron.launch({ args, env }); page = await app.firstWindow(); await page.waitForSelector('.composer');
-  assert.equal((await page.evaluate(() => window.xiaowang.getState())).settings.keyHint, '');
+  assert.equal(Boolean((await page.evaluate(() => window.xiaowang.getState())).settings.keyHint), localMac);
 });
 
 test('only the app document can invoke native actions or use microphone; remote pages cannot navigate the app or use devices', { timeout: 60000 }, async t => {
@@ -124,4 +128,53 @@ test('only the app document can invoke native actions or use microphone; remote 
     return view.executeJavaScript(`navigator.mediaDevices.getUserMedia({audio:true}).then(stream => { stream.getTracks().forEach(t => t.stop()); return false; }, () => true)`);
   });
   assert.equal(browserDenied, true); assert.equal(page.url(), entry);
+});
+
+test('Mac legacy profile opens without decryption and migrates on the first user action', { skip: process.platform !== 'darwin' }, async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'xw-migration-'));
+  const profile = path.join(root, 'profile');
+  const env = cleanEnv(path.join(root, 'home'), profile);
+  const launch = () => electron.launch({ args, env });
+  let app = await launch();
+  t.after(async () => { await closeTestApp(app); await rm(root, { recursive: true, force: true }); });
+  const raw = await app.evaluate(({ safeStorage }) => safeStorage.encryptString(JSON.stringify({ model: 'old-model', apiKey: 'old-key-0120' })).toString('base64'));
+  await closeTestApp(app);
+  const oldFile = path.join(profile, 'secrets.bin'), newFile = path.join(profile, 'settings.local.json');
+  await writeFile(oldFile, Buffer.from(raw, 'base64'));
+  app = await launch();
+  const page = await app.firstWindow();
+  await page.waitForSelector('.composer');
+  assert.equal(await page.locator('.settings-modal').count(), 0);
+  assert.equal((await page.evaluate(() => window.xiaowang.getState())).settings.pendingMigration, true);
+  await assert.rejects(readFile(newFile), { code: 'ENOENT' });
+  await app.evaluate(({ safeStorage }) => {
+    globalThis.restoreDecrypt = safeStorage.decryptString.bind(safeStorage);
+    safeStorage.decryptString = () => { throw Error('denied'); };
+  });
+  await assert.rejects(page.evaluate(() => window.xiaowang.restoreSettings()), /旧密钥/);
+  await assert.rejects(page.evaluate(() => window.xiaowang.saveSettings({ locale: 'en' })), /旧密钥/);
+  assert.equal((await readFile(oldFile)).toString('base64'), raw);
+  await assert.rejects(readFile(newFile), { code: 'ENOENT' });
+  await app.evaluate(({ safeStorage }) => { safeStorage.decryptString = globalThis.restoreDecrypt; });
+  await page.locator('button.settings').click();
+  await page.getByPlaceholder('deepseek-chat').waitFor();
+  assert.equal(await page.getByPlaceholder('deepseek-chat').inputValue(), 'old-model');
+  assert.equal(JSON.parse(await readFile(newFile)).apiKey, 'old-key-0120');
+  const { stat } = await import('node:fs/promises');
+  assert.equal((await stat(newFile)).mode & 0o777, 0o600);
+  await closeTestApp(app); app = await launch();
+  const restored = await (await app.firstWindow()).evaluate(() => window.xiaowang.getState());
+  assert.equal(restored.settings.pendingMigration, false); assert.match(restored.settings.keyHint, /0120/);
+
+  // Return this disposable profile to its pre-migration state and replace the key manually.
+  await closeTestApp(app); await rm(newFile); app = await launch();
+  await app.evaluate(({ safeStorage }) => { safeStorage.decryptString = () => { throw Error('denied'); }; });
+  const replacement = await app.firstWindow();
+  await replacement.locator('button.settings').click();
+  await replacement.getByPlaceholder('deepseek-chat').fill('new-model');
+  await replacement.getByLabel('模型密钥', { exact: true }).fill('replacement-4321');
+  await replacement.getByRole('button', { name: '保存并进入' }).click();
+  await replacement.locator('.settings-modal').waitFor({ state: 'detached' });
+  assert.match((await replacement.evaluate(() => window.xiaowang.getState())).settings.keyHint, /4321/);
+  assert.equal((await readFile(oldFile)).toString('base64'), raw);
 });

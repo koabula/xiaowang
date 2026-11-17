@@ -5,21 +5,8 @@ export function isVoiceProgressRequest(text: string): boolean {
   return /进度|梳理了吗|梳理了么|(?:分析|总结|整理|处理|做|查|写|研究).{0,8}(?:好了吗|完了吗|了吗|了么|如何了|怎么样)|(?:结果|梳理|分析).{0,8}(?:出来了吗|出来了没)|\b(?:status|progress|finished|done yet)\b/i.test(text);
 }
 
-/** Only unambiguous work requests are started locally. Other intent stays with realtime. */
-export function isVoiceWorkRequest(text: string): boolean {
-  if (/不要|不用|不必|别(?:再|去|分析|梳理|总结|研究|做|写)|暂停|停止|取消|先不|不需要|\b(?:don't|do not|stop|cancel|no need)\b/i.test(text)) return false;
-  if (isVoiceProgressRequest(text)) return false;
-  return /^(?:(?:嗯|哦|好|好的|那|现在|请|麻烦|帮我|给我|你|您|去|先|一下|我们|再|继续)[，,。\s]*)*(?:分析|梳理|总结|调研|研究一下|比较|对比|整理|撰写|写一|制作|做一)/.test(text.trim())
-    || /^(?:(?:请|帮我|你|现在)[，,\s]*)*(?:把|将).{1,100}(?:分析|梳理|总结|整理|比较|对比)/.test(text.trim())
-    || /^(?:(?:please|can you|could you|would you|help me|now|go ahead and)\s+)*(?:analy[sz]e|summari[sz]e|research|investigate|compare|review|write|create|prepare)\b/i.test(text.trim());
-}
-
 export function isQueuedVoiceTask(text: string): boolean {
   return /排队|独立任务|单独.{0,5}任务|separate (?:task|job)|new task|(?:做完|完成|结束).{0,10}(?:再|之后)|另(?:开|起|建).{0,6}任务|queue (?:a |this |the )?(?:new )?task|after (?:this|you finish)/i.test(text);
-}
-
-function isVoiceSupplement(text: string): boolean {
-  return /补充|重点(?:看|关注|放在)|简短一点|详细一点|改成|改为|刚才.{0,12}(?:任务|研究|分析)|supplement|focus on|make it (?:shorter|longer)|instead/i.test(text);
 }
 
 /** One accepted user turn owns one durable job, regardless of subsequent tool choices. */
@@ -37,18 +24,10 @@ export class VoiceTasks {
     this.callId = callId; this.snapshot = snapshot;
   }
 
-  userText(text: string, startWork = true): TaskJob | null {
+  userText(text: string): void {
     this.turn += 1;
-    this.accepted = null;
-    const supplement = this.queue.active(this.botId) && isVoiceSupplement(text);
-    const work = supplement || startWork && text.split(/[。！？!?；;]/).some(clause => isVoiceWorkRequest(clause.trim()));
-    if (!work) {
-      if (isVoiceProgressRequest(text)) this.accepted = this.latest()?.id ?? null;
-      return null;
-    }
-    const job = this.queue.submit({ botId: this.botId, task: this.queue.active(this.botId) && !isQueuedVoiceTask(text) ? text : this.handoff(text), sharedContext: this.snapshot?.(), channel: "voice", notify: "when_idle", sourceCallId: `${this.sessionId}:user:${this.turn}`, originCallId: this.callId?.() }, isQueuedVoiceTask(text));
-    this.accepted = job.id;
-    return job;
+    const clauses = text.split(/[。！？!?；;]/).map(part => part.trim()).filter(Boolean);
+    this.accepted = clauses.length > 0 && clauses.every(isVoiceProgressRequest) ? this.latest()?.id ?? null : null;
   }
 
   delegate(task: string, callId: string | undefined, notify: TaskJob["notify"], queueNew = false): TaskJob {
@@ -66,5 +45,5 @@ export class VoiceTasks {
 
 export function voiceJobReceipt(job: TaskJob): string {
   return JSON.stringify({ id: job.id, task: job.task.slice(0, 400), status: job.status, activity: job.activity, result: job.result.slice(0, 2400), error: job.error, artifacts: job.artifacts, notify: job.notify,
-    message: "这是应用确认的后台任务状态。同一任务不要重复分析或再次排队；用户提出不同的新任务时调用 delegate_task。未完成时告知真实进度；完成后依据 result 回答。打开原文需要调用 show_stage，成功后才能说已打开。" });
+    message: "这是应用确认的后台任务状态。同一任务不要重复分析或再次排队；当前资料的简析和追问由你直接阅读并回答。未完成时告知真实进度；完成后依据 result 回答。打开原文需要调用 show_stage，成功后才能说已打开。" });
 }

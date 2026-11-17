@@ -38,8 +38,13 @@ export async function launchPackaged(executablePath, args, env, { native = false
     firstWindow: () => until(() => browser.contexts().flatMap(context => context.pages()).find(page => page.url().includes("/renderer/index.html")), 15000),
     async close() {
       const exited = new Promise(resolve => { if (child.exitCode !== null) resolve(); else child.once("exit", resolve); });
-      await browser.close().catch(() => {}); child.kill("SIGTERM");
-      await Promise.race([exited, sleep(3000).then(() => child.kill("SIGKILL"))]);
+      try {
+        await browser.close().catch(() => {}); child.kill("SIGTERM");
+        await Promise.race([exited, sleep(3000).then(() => child.kill("SIGKILL"))]);
+      } finally {
+        // Updater descendants can inherit the original process's pipes after it exits.
+        child.stdout.destroy(); child.stderr.destroy();
+      }
     },
   };
 }

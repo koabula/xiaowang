@@ -12,9 +12,8 @@ import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
 import WebSocket, { WebSocketServer } from 'ws';
-import { _electron as electron } from 'playwright';
 import { Runtime } from '../src/runtime.ts';
-import { closeTestApp } from '../e2e/launch.mjs';
+import { electron, launchPackaged, closeTestApp } from '../e2e/launch.mjs';
 
 const key = process.env.GEMINI_API_KEY; assert.ok(key, 'GEMINI_API_KEY is required');
 const root = await mkdtemp(path.join(os.tmpdir(), 'xw-gemini-acceptance-'));
@@ -111,7 +110,10 @@ async function feed(pcm) {
 async function drained() { await until(async () => Date.now() - lastPacket > 500 && await page.evaluate(() => window.geminiCheck?.sources === 0), 'Real speaker did not drain'); }
 const env = { ...process.env, XIAOWANG_GEMINI_DIAGNOSTICS: '1', XIAOWANG_HOME: home, XIAOWANG_USER_DATA: profile, XIAOWANG_DISABLE_UPDATES: '1', XIAOWANG_ENABLE_GEMINI: '1', XIAOWANG_REALTIME_URL: `ws://127.0.0.1:${relay.address().port}` };
 for (const name of Object.keys(env)) if (/GEMINI_API_KEY|GOOGLE_API_KEY|MOSS_API_KEY|ELECTRON_RUN_AS_NODE/.test(name)) delete env[name];
-const args = ['--no-sandbox', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${path.join(root, 'silence.wav')}`, '--autoplay-policy=no-user-gesture-required', 'desktop/dist/main.js'];
+const args = ['--no-sandbox', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${path.join(root, 'silence.wav')}`, '--autoplay-policy=no-user-gesture-required'];
+const launch = () => process.env.XIAOWANG_E2E_EXECUTABLE
+  ? launchPackaged(process.env.XIAOWANG_E2E_EXECUTABLE, args, env)
+  : electron.launch({ args: [...args, 'desktop/dist/main.js'], env });
 try { acceptance: {
   const [remember, recall, task, question, walkthrough] = await Promise.all([
     voice('你好，请记住本次通话的暗号是红色苹果。只回答记住了。', 'remember'),
@@ -120,7 +122,7 @@ try { acceptance: {
     voice('后台继续工作。你先回答二加二等于几。', 'question'),
     voice('工作区有 lesson.html，请完整逐页讲解三页，每页只讲一句话。每页讲完等待播放完成再翻页，不要等我说继续。最后结束讲解，不要挂断。', 'walkthrough'),
   ]);
-  app = await electron.launch({ args, env }); page = await app.firstWindow(); page.setDefaultTimeout(15000); await page.waitForSelector('.composer');
+  app = await launch(); page = await app.firstWindow(); page.setDefaultTimeout(15000); await page.waitForSelector('.composer');
   let stderr = ''; app.process().stderr.on('data', chunk => { stderr += chunk; let end; while ((end = stderr.indexOf('\n')) >= 0) { const line = stderr.slice(0, end); stderr = stderr.slice(end + 1); if (line.startsWith('XW_GEMINI_STATE ')) { try { diagnostic.push(JSON.parse(line.slice('XW_GEMINI_STATE '.length))); if (diagnostic.length > 50) diagnostic.shift(); } catch {} } } });
   await page.evaluate(() => {
     window.geminiCheck = { sources: 0, started: 0, peak: 0, micStarts: 0 };
@@ -257,7 +259,7 @@ try { acceptance: {
   if (!walkthroughOnly) assert.match(JSON.stringify(calls[0].lines), /红色苹果/);
   assert.equal((await page.evaluate(() => window.xiaowang.getState())).jobs.filter(item => item.channel === 'voice').length, job ? 1 : 0);
   await closeTestApp(app); app = null;
-  app = await electron.launch({ args, env }); page = await app.firstWindow(); await page.waitForSelector('.composer');
+  app = await launch(); page = await app.firstWindow(); await page.waitForSelector('.composer');
   events = await page.evaluate(() => window.xiaowang.events('xiaowang'));
   assert.equal(events.filter(item => item.kind === 'call').length, 1); if (!walkthroughOnly) assert.match(JSON.stringify(events.find(item => item.kind === 'call').lines), /红色苹果/);
   await page.locator(`[data-call-id="${currentCallId}"] > button`).click();
