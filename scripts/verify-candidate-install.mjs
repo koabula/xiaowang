@@ -209,4 +209,5 @@ finally {
   if (feed) await new Promise(resolve => { feed.close(resolve); feed.closeAllConnections(); });
   await writeFile(path.join(reportDir, process.platform + '-' + process.arch + '.json'), JSON.stringify(report, null, 2) + '\n');
   await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  console.log('Acceptance cleanup complete:', report.status, process.getActiveResourcesInfo());
 }
