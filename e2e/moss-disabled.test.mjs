@@ -28,9 +28,9 @@ test('desktop: MOSS is hidden and blocked by default, saved profiles survive mig
   await page.locator('button.settings').click(); let settings = page.getByRole('form', { name: '设置', exact: true }); await settings.waitFor();
   assert.match(await settings.getByRole('combobox', { name: '服务', exact: true }).innerText(), /豆包/);
   await settings.getByRole('combobox', { name: '服务', exact: true }).click();
-  assert.equal(await page.getByRole('option').count(), 3);
-  for (const name of ['MOSS Live', '通义千问']) assert.equal(await page.getByRole('option', { name, exact: true }).count(), 0);
-  for (const name of ['OpenAI', '豆包全双工', 'Gemini Live']) assert.equal(await page.getByRole('option', { name, exact: true }).count(), 1);
+  assert.equal(await page.getByRole('option').count(), 4);
+  assert.equal(await page.getByRole('option', { name: 'MOSS Live', exact: true }).count(), 0);
+  for (const name of ['通义千问', 'OpenAI', '豆包全双工', 'Gemini Live']) assert.equal(await page.getByRole('option', { name, exact: true }).count(), 1);
   await page.keyboard.press('Escape'); await page.getByRole('listbox').waitFor({ state: 'detached' });
   assert.equal(await settings.getByRole('searchbox', { name: '搜索音色' }).count(), 0);
   await assert.rejects(page.evaluate(() => window.xiaowang.previewVoice({ realtimeService: 'moss' })), /暂时停用/);
@@ -50,9 +50,9 @@ test('desktop: MOSS is hidden and blocked by default, saved profiles survive mig
   await writeFile(path.join(profile, process.platform === 'darwin' ? 'settings.local.json' : 'secrets.bin'), JSON.stringify({ model: 'fixture', apiKey: 'text-fixture', realtimeService: 'qwen', realtimeKey: 'qwen-private-6666', realtimeProfiles: { openai: { key: 'openai-private-5555' } } }));
   await launch(); settings = page.getByRole('form', { name: '设置', exact: true });
   await page.locator('button.settings').click(); await settings.waitFor();
-  assert.equal(await settings.getByRole('combobox', { name: '服务', exact: true }).innerText(), 'OpenAI');
-  assert.match(await page.getByTestId('voice-key').getAttribute('placeholder'), /5555/);
-  assert.equal(await settings.getByRole('combobox', { name: '地域', exact: true }).count(), 0);
+  assert.equal(await settings.getByRole('combobox', { name: '服务', exact: true }).innerText(), '通义千问');
+  assert.match(await page.getByTestId('voice-key').getAttribute('placeholder'), /6666/);
+  assert.equal(await settings.getByRole('combobox', { name: '地域', exact: true }).count(), 1);
   await settings.getByRole('button', { name: '关闭', exact: true }).click(); await settings.waitFor({ state: 'detached' });
   state = await page.evaluate(() => window.xiaowang.getState());
   assert.equal(state.settings.realtimeService, 'qwen', 'Opening settings alone must not rewrite the saved provider');
@@ -60,7 +60,7 @@ test('desktop: MOSS is hidden and blocked by default, saved profiles survive mig
   await page.locator('button.settings').click(); await settings.waitFor();
   await settings.getByRole('button', { name: '保存并进入', exact: true }).click(); await settings.waitFor({ state: 'detached' });
   await closeTestApp(app); await launch(); state = await page.evaluate(() => window.xiaowang.getState());
-  assert.equal(state.settings.realtimeService, 'openai'); assert.match(state.settings.realtimeKeyHint, /5555/);
-  assert.match(state.settings.realtimeProfiles.qwen.keyHint, /6666/, 'Hiding the provider must preserve its saved profile');
+  assert.equal(state.settings.realtimeService, 'qwen'); assert.match(state.settings.realtimeKeyHint, /6666/);
+  assert.match(state.settings.realtimeProfiles.openai.keyHint, /5555/, 'Saving Qwen must preserve other providers’ profiles');
   assert.deepEqual(errors, []);
 });
