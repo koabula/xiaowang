@@ -64,10 +64,11 @@ async function profileForApp() {
   assert.equal(matches.length, 1, 'The disposable runner must have exactly one seeded app profile'); return matches[0];
 }
 async function killRestarted(profile, binary, oldPid) {
+  const canonicalBinary = process.platform === 'win32' ? await realpath(binary) : binary;
   const pid = await until(async () => {
     if (process.platform === 'win32') {
       const script = '$p=Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $env:XW_QA_BINARY -and $_.CommandLine -notmatch "--type=" }; @($p.ProcessId) | ConvertTo-Json -Compress';
-      const value = (await run('powershell.exe', ['-NoProfile', '-Command', script], { env: { ...process.env, XW_QA_BINARY: binary } })).stdout.trim();
+      const value = (await run('powershell.exe', ['-NoProfile', '-Command', script], { env: { ...process.env, XW_QA_BINARY: canonicalBinary } })).stdout.trim();
       return (value ? [].concat(JSON.parse(value)) : []).find(value => value && value !== oldPid);
     }
     try { const lock = await readlink(path.join(profile, 'SingletonLock')); const value = Number(lock.slice(lock.lastIndexOf('-') + 1)); if (value !== oldPid && value > 0) { process.kill(value, 0); return value; } } catch {}
@@ -209,5 +210,5 @@ finally {
   if (feed) await new Promise(resolve => { feed.close(resolve); feed.closeAllConnections(); });
   await writeFile(path.join(reportDir, process.platform + '-' + process.arch + '.json'), JSON.stringify(report, null, 2) + '\n');
   await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-  console.log('Acceptance cleanup complete:', report.status, process.getActiveResourcesInfo());
+  console.log('Acceptance cleanup complete:', report.status);
 }
