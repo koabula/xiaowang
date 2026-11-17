@@ -43,6 +43,7 @@ declare global {
       stageHide: (slug: string) => Promise<void>;
       stageVisual: (slug: string, frame: { refId: string; page: number; revision: number; data: string; callId?: string }) => Promise<boolean>;
       stagePosition: (slug: string, position: { path: string; page: number; totalPages: number; mode: "canvas" | "file" }) => Promise<number>;
+      restoreSettings: () => Promise<SettingsView>;
       saveSettings: (patch: SettingsPatch) => Promise<SettingsView>;
       settingsDirty: (dirty: boolean) => Promise<void>;
       finishSettingsClose: (intent: "window" | "quit") => Promise<void>;
@@ -125,6 +126,7 @@ export interface CanvasPage {
 }
 
 export interface SettingsView extends ContextSettings {
+  pendingMigration?: boolean;
   experimentalMossEnabled?: boolean;
   geminiEnabled?: boolean;
   realtimeProfiles?: Partial<Record<RealtimeServiceId, VoiceProfileView>>;

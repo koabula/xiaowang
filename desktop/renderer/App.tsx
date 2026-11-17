@@ -116,7 +116,15 @@ export function App() {
   const botBusy = (bot: BotRow) => Boolean(busyBySlug[bot.slug]) || Boolean(state?.jobs?.some(job => job.botId === bot.id && ["queued", "running"].includes(job.status)));
   const steward = state?.bots.find((bot) => bot.slug === "xiaowang");
   const ink = current?.avatarInk || inkFor(active || "xiaowang");
-  const covered = resourceMenuOpen || Boolean(fileBrowser) || Boolean(botMenu) || settingsOpen || (state !== null && !state.settings.ready);
+  const needsSetup = state !== null && !state.settings.ready && !state.settings.pendingMigration;
+  async function openSettings() {
+    if (state?.settings.pendingMigration) {
+      try { const settings = await window.xiaowang.restoreSettings(); setState(current => current && ({ ...current, settings })); }
+      catch (error) { setToast(plainError(error)); }
+    }
+    setSettingsOpen(true);
+  }
+  const covered = resourceMenuOpen || Boolean(fileBrowser) || Boolean(botMenu) || settingsOpen || needsSetup;
 
 
   function openBotMenu(event: React.MouseEvent<HTMLButtonElement>, bot: BotRow) {
@@ -487,7 +495,7 @@ export function App() {
           ))}
         </nav>
         <footer>
-          <button className="settings" type="button" onClick={() => setSettingsOpen(true)}>
+          <button className="settings" type="button" onClick={() => void openSettings()}>
             <Settings size={16} />
             {copy.settings}
           </button>
@@ -587,12 +595,12 @@ export function App() {
         } else await window.xiaowang.openArtifact(fileBrowser.slug, entry.path);
       }} /> : null}
 
-      {settingsOpen || (state !== null && !state.settings.ready) ? (
+      {settingsOpen || needsSetup ? (
         <SettingsPanel
           settings={state?.settings}
           version={state?.version || ""}
           update={state?.update}
-          forced={state !== null && !state.settings.ready}
+          forced={needsSetup}
           onClose={() => setSettingsOpen(false)}
           onSave={async (patch) => {
             const next = await window.xiaowang.saveSettings(patch);

@@ -279,7 +279,7 @@ test("desktop: voice interruption, PDF Viewer, bot files, settings and saved sta
   await page.getByRole('button',{name:'保存并关闭',exact:true}).click();await settings.waitFor({state:'detached'});
   assert.equal((await page.evaluate(()=>window.xiaowang.getState())).settings.model,'saved-model');
   await page.locator('button.settings').click();await settings.waitFor();await modelInput.fill('save-failure-draft');
-  const secretFile=path.join(userData,'secrets.bin');await rename(secretFile,`${secretFile}.backup`);await mkdir(secretFile);
+  const secretFile=path.join(userData,process.platform === 'darwin' ? 'settings.local.json' : 'secrets.bin');await rename(secretFile,`${secretFile}.backup`);await mkdir(secretFile);
   await settings.getByRole('button',{name:'保存并进入',exact:true}).click();
   await settings.locator('footer p').waitFor();assert.equal(await modelInput.inputValue(),'save-failure-draft');
   await rm(secretFile,{recursive:true,force:true});await rename(`${secretFile}.backup`,secretFile);

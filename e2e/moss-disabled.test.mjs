@@ -41,13 +41,13 @@ test('desktop: MOSS is hidden and blocked by default, saved profiles survive mig
   await closeTestApp(app); await launch(); state = await page.evaluate(() => window.xiaowang.getState());
   assert.equal(state.settings.realtimeService, 'doubao'); assert.match(state.settings.realtimeKeyHint, /3333/); assert.match(state.settings.realtimeProfiles.moss.keyHint, /2222/);
   await closeTestApp(app); app = null;
-  await writeFile(path.join(profile, 'secrets.bin'), JSON.stringify({ model: 'fixture', baseUrl: 'http://127.0.0.1:1/v1', apiKey: 'text-fixture', realtimeService: 'moss', realtimeKey: 'moss-only-4444' }));
+  await writeFile(path.join(profile, process.platform === 'darwin' ? 'settings.local.json' : 'secrets.bin'), JSON.stringify({ model: 'fixture', baseUrl: 'http://127.0.0.1:1/v1', apiKey: 'text-fixture', realtimeService: 'moss', realtimeKey: 'moss-only-4444' }));
   await launch(); state = await page.evaluate(() => window.xiaowang.getState());
   assert.equal(state.settings.realtimeService, 'qwen'); assert.equal(state.settings.realtimeKeyHint, ''); assert.match(state.settings.realtimeProfiles.moss.keyHint, /4444/);
   await assert.rejects(page.evaluate(() => window.xiaowang.callStart('xiaowang')), /密钥/);
   assert.equal(requests, 0); assert.deepEqual(errors, []);
   await closeTestApp(app); app = null;
-  await writeFile(path.join(profile, 'secrets.bin'), JSON.stringify({ model: 'fixture', apiKey: 'text-fixture', realtimeService: 'qwen', realtimeKey: 'qwen-private-6666', realtimeProfiles: { openai: { key: 'openai-private-5555' } } }));
+  await writeFile(path.join(profile, process.platform === 'darwin' ? 'settings.local.json' : 'secrets.bin'), JSON.stringify({ model: 'fixture', apiKey: 'text-fixture', realtimeService: 'qwen', realtimeKey: 'qwen-private-6666', realtimeProfiles: { openai: { key: 'openai-private-5555' } } }));
   await launch(); settings = page.getByRole('form', { name: '设置', exact: true });
   await page.locator('button.settings').click(); await settings.waitFor();
   assert.equal(await settings.getByRole('combobox', { name: '服务', exact: true }).innerText(), 'OpenAI');

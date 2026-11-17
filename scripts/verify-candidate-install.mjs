@@ -169,6 +169,10 @@ try {
       app = await launchPackaged(activeBinary, ['--no-sandbox'], { ...nativeEnv, XIAOWANG_DISABLE_UPDATES: '1' }, { native: true }); page = await app.firstWindow();
     }
     await page.waitForFunction(() => Boolean(window.xiaowang)); state = await page.evaluate(() => window.xiaowang.getState());
+    if (state.settings.pendingMigration) {
+      await page.evaluate(() => window.xiaowang.restoreSettings());
+      state = await page.evaluate(() => window.xiaowang.getState());
+    }
     assert.equal(state.version, version); assert.equal(state.settings.ready, true); assert.equal(state.settings.model, 'fixture');
     assert.match(state.settings.keyHint, /0120/); assert.match(state.settings.realtimeKeyHint, /0120/);
     assert.equal(state.activeSlug, slug); assert.equal(state.jobs.find(job => job.id === originalJob.id).status, 'succeeded');

@@ -7,6 +7,7 @@ const listeners = (channel, callback) => {
 };
 
 contextBridge.exposeInMainWorld("xiaowang", {
+  restoreSettings: () => ipcRenderer.invoke("settings:restore"),
   getState: () => ipcRenderer.invoke("state:get"),
   checkUpdate: () => ipcRenderer.invoke("update:check"),
   updateApp: () => ipcRenderer.invoke("update:download"),
