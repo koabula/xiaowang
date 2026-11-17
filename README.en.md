@@ -41,6 +41,8 @@ XiaoWang checks for updates automatically. When a new version is available, clic
 
 Voice calls support Qwen, OpenAI, Doubao full-duplex, and Gemini Live. XiaoWang remembers the key, model, and voice for each provider when you switch. In our current testing, Doubao offers the best user experience.
 
+For Qwen voice calls, we recommend **3.8 Omni Flash**. In our calls, it followed spoken instructions more reliably than 3.5.
+
 ## Work with XiaoWang
 
 Paste a screenshot or drag a paper or note into the message input to ask about it. Attachments stay in the current bot’s library. Choose a text model with vision support for image analysis.
