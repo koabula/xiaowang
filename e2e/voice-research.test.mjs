@@ -9,6 +9,10 @@ import os from 'node:os';
 import { WebSocketServer } from 'ws';
 import { Runtime } from '../src/runtime.ts';
 
+const tableRequest = '好，嗯，我看看。你开一个后台任务，去把这个他们的这个数据，就最主要的那个实验的数据给它绘成一个表格，然后发给我。';
+const correction = '好好好，我没有说叫你开一个 subbot，我的意思是你直接在这里直接给我发文本就行了。';
+const forward = '你直接发到我们的聊天对话中就行。';
+const table = '| 指标 | 数值 |\n| --- | --- |\n| 样本数 | 42 |';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 async function until(check, timeout = 12000) {
@@ -32,7 +36,7 @@ function tone(ms = 400) {
   return pcm.toString('base64');
 }
 
-test('desktop: paper analysis, visible progress, interruption/status, real result and opening the source', { timeout: 60000 }, async t => {
+test('desktop: PDF discussion and once-only chat delivery during work, after hangup and after failure', { timeout: 60000 }, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'xw-research-'));
   const home = path.join(root, 'home'); const profile = path.join(root, 'profile'); await mkdir(profile);
   const seed = Runtime.open(home); const ref = seed.store.addLibraryBytes(seed.activeBot().id, 'paper.pdf', pdf()).ref; seed.close();
@@ -62,7 +66,7 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
       chunk({ content: '尚未完成的中途说明。' });
       await gates[kind].promise;
       chunk({ tool_calls: [{ index: 0, id: `write-${kind}`, function: { name: 'write_file', arguments: JSON.stringify({ path: 'notes/research.md', content: '原文证据：RESEARCH-EVIDENCE-42。分析结果已保存。' }) } }] }, 'tool_calls');
-    } else chunk({ content: `${kind === 'text' ? '文字分析结果' : '论文分析结果'}：基于原文 RESEARCH-EVIDENCE-42，已完成梳理并保存笔记。[原文，第1页](xwref://${ref.id}?page=2)` }, 'stop');
+    } else chunk({ content: `${kind === 'text' ? '文字分析结果' : '论文分析结果'}：基于原文 RESEARCH-EVIDENCE-42，已完成梳理并保存笔记。\n\n${table}\n\n[原文，第1页](xwref://${ref.id}?page=2)` }, 'stop');
     response.end('data: [DONE]\n\n');
   });
   await new Promise(resolve => model.listen(0, '127.0.0.1', resolve));
@@ -89,7 +93,7 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
       if (event.type === 'speech_text_buffer.commit') { notices.push(event.text); speak(`notice-${notices.length}`, event.text); }
       if (event.items?.[0]?.role === 'tool') {
         const item = event.items[0]; returned.push(item);
-        if (['quick', 'followup', 'while-working', 'after-failure'].includes(item.call_id)) {
+        if (['quick', 'followup', 'while-working', 'before-forward', 'after-failure'].includes(item.call_id)) {
           assert.match(item.content[0].text, /RESEARCH-EVIDENCE-42/);
           assert.doesNotMatch(item.content[0].text, /INTRODUCTION-ONLY/);
           speak(item.call_id, '这页给出的证据是 RESEARCH-EVIDENCE-42。', 700);
@@ -125,7 +129,7 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
   await discussPage('quick', '好，你给我分析一下。');
   await discussPage('followup', '为什么得出这个结论？');
   assert.equal((await state()).jobs.length, 0);
-  user('research', '请后台核对这篇论文并保存笔记。');
+  user('research', tableRequest);
   // Reproduce the problematic provider order: function call, then preface, with no
   // audio completion until the app has returned the tool's result.
   tool('lookup', 'delegate_task', { task: '你去分析一下刚刚这篇文章并保存笔记' });
@@ -141,20 +145,31 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
   await page.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-research-working.png') });
   await discussPage('while-working', '先给我讲讲这页的证据。');
   assert.equal((await state()).jobs[0].status, 'running');
+  assert.equal((await state()).jobs[0].deliverToChat, true, 'Original transcript requests delivery even when the provider omits the destination');
   speak('long-before-progress', '正在阅读原文。', 2500);
   await until(async () => await energy() > .05);
   user('progress', '梳理了吗？'); tool('status', 'get_task');
   const status = await until(() => returned.find(item => item.call_id === 'status'));
   assert.equal(JSON.parse(status.content[0].text).status, 'running');
   assert.equal((await state()).jobs.length, 1);
+  user('request-text', correction);
+  tool('forward-pending', 'post_to_chat', { source: 'job' });
+  await until(() => returned.find(item => item.call_id === 'forward-pending')?.content[0].text.includes('完成后'));
+  assert.equal(notices.filter(text => text.includes('已发到')).length, 0);
+  assert.equal((await state()).bots.length, 1);
   gates.voice.resolve();
   await until(async () => (await state()).jobs[0]?.status === 'succeeded');
-  await page.locator('.voice-panel .call-task-result summary').click();
-  await page.locator('.voice-panel .call-task-result').filter({ hasText: '论文分析结果：' }).waitFor();
-  assert.equal(await page.locator('.bubble.assistant').count(), 0, 'Completed background turns never leak into text chat');
-  await until(() => notices.some(text => text.includes('RESEARCH-EVIDENCE-42')));
+  const tables = page.locator('.bubble.assistant table');
+  await tables.getByText('样本数').waitFor();
+  assert.equal(await tables.count(), 1);
+  assert.equal(await page.locator('.voice-panel .call-task-result').count(), 0);
+  await until(() => notices.includes('完整结果已发到当前聊天。'));
   await until(() => instructions.some(text => text.includes('RESEARCH-EVIDENCE-42')));
   await until(async () => await energy() > .05); await until(async () => await energy() < .001);
+  user('repeat-delivery', forward);
+  tool('repeat-post', 'post_to_chat', { source: 'job' });
+  await until(() => returned.find(item => item.call_id === 'repeat-post')?.content[0].text.includes('已发到'));
+  assert.equal(await tables.count(), 1);
   user('open-request', '现在打开这篇论文。'); tool('open', 'show_stage', { mode: 'file', file: `${ref.id} ${ref.filename}` });
   await until(() => returned.some(item => item.call_id === 'open'));
   await page.waitForFunction(() => document.querySelector('.pdf-scroll canvas')?.width > 0);
@@ -168,9 +183,8 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
   assert.equal(await page.locator('.task-item, .call-tasks').count(), 0, 'Hangup leaves a collapsed call, not standalone task cards');
   await sourceCall.locator(':scope > button').click();
   await sourceCall.locator(`[data-job-id="${voiceJob.id}"]`).waitFor();
-  await sourceCall.locator('.call-task-result summary').click();
-  await sourceCall.locator('.call-task-result').getByText('论文分析结果：', { exact: false }).waitFor();
-  assert.equal(await page.locator('.bubble.assistant').count(), 0);
+  assert.equal(await sourceCall.locator('.call-task-result').count(), 0);
+  assert.equal(await tables.count(), 1);
   await page.locator('.composer textarea').fill('文字分析测试：分析这篇论文'); await page.locator('.composer textarea').press('Enter');
   await until(() => waiting.has('text'));
   await page.locator('.thinking').waitFor();
@@ -186,7 +200,7 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
   gates.voice = deferred(); waiting.delete('voice');
   const previousMic = mic;
   await page.evaluate(() => window.xiaowang.callStart('xiaowang')); await until(() => mic > previousMic);
-  user('late-research', '请后台核验并保存结果。');
+  user('late-research', tableRequest);
   tool('late-delegate', 'delegate_task', { task: '你去分析一下刚刚这篇文章并保存结果。' });
   await until(() => waiting.has('voice'));
   const lateJob = (await state()).jobs.find(job => job.channel === 'voice' && job.id !== voiceJob.id);
@@ -199,20 +213,34 @@ test('desktop: paper analysis, visible progress, interruption/status, real resul
   gates.voice.resolve();
   await until(async () => (await state()).jobs.find(job => job.id === lateJob.id)?.status === 'succeeded');
   assert.equal(await page.locator('.task-item').count(), 0, 'Late completion cannot reopen the call or insert a standalone card');
-  assert.equal(await page.locator('.bubble.assistant').filter({ hasText: '论文分析结果：' }).count(), 0);
+  await until(async () => await page.locator('.bubble.assistant').filter({ hasText: '论文分析结果：' }).count() === 2);
+  assert.equal(notices.filter(text => text.includes('已发到')).length, 1);
   await lateCall.locator(':scope > button').click();
-  await lateCall.locator(`[data-job-id="${lateJob.id}"] .call-task-result summary`).click();
-  await lateCall.locator('.call-task-result').getByText('论文分析结果：', { exact: false }).waitFor();
+  assert.equal(await lateCall.locator('.call-task-result').count(), 0);
   assert.equal(await sourceCall.locator('.task-item').count(), 0, 'Earlier calls do not absorb later work');
   await page.evaluate(() => window.xiaowang.callStart('xiaowang'));
   await until(async () => (await state()).call?.state?.phase === 'listening');
-  user('error-turn', '请在后台写一份报告。');
+  await discussPage('before-forward', '你简单分析一下，给我介绍一下。');
+  user('forward-reply', forward);
+  const forwarded = page.locator('.bubble.assistant').filter({ hasText: '这页给出的证据是 RESEARCH-EVIDENCE-42。' });
+  await forwarded.waitFor();
+  tool('repeat-reply', 'post_to_chat', { source: 'reply' });
+  await until(() => returned.find(item => item.call_id === 'repeat-reply')?.content[0].text.includes('已发到'));
+  await until(() => notices.includes('刚才的回答已发到当前聊天。'));
+  assert.equal(await forwarded.count(), 1);
+  user('error-turn', '请在后台写一份报告，然后发给我。');
   tool('error-job', 'delegate_task', { task: 'FAIL-ON-PURPOSE' });
   await until(() => notices.some(text => text.includes('没有完成')));
   await until(async () => await energy() > .05); await until(async () => await energy() < .001);
+  assert.equal(notices.filter(text => text.includes('已发到')).length, 2);
+  assert.equal((await state()).jobs.at(-1).status, 'failed');
   await discussPage('after-failure', '我们接着说这一页。');
   await page.evaluate(() => window.xiaowang.callStop());
   await page.screenshot({ path: path.join(os.tmpdir(), 'xiaowang-research-complete.png') });
+  await page.reload();
+  await until(async () => await page.locator('.bubble.assistant').filter({ hasText: '论文分析结果：' }).count() === 2);
+  assert.equal(await forwarded.count(), 1);
+  assert.equal((await state()).bots.length, 1);
   assert.deepEqual(errors, []);
-  console.log('Verified analysis acceptance, visible progress, no duplicate jobs after interruption/status, native result return during preface, actual PDF reading, saved notes, spoken result, source display receipt and baseline text progress.');
+
 });

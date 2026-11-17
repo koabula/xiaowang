@@ -23,6 +23,7 @@ export interface ToolOutcome {
 }
 
 export interface ToolHost {
+  allowSpawn?: boolean;
   store: Store;
   bot: Bot;
   enqueueKickoff(job: Kickoff): void;
@@ -38,11 +39,12 @@ const READ_CHAR_CAP = 12_000;
 const WRITE_CHAR_CAP = 200_000;
 const BASELINE_CAP = 12_000;
 
-export function toolSchemas(): ToolSchema[] {
-  return TOOLS.map((tool) => tool.schema);
+export function toolSchemas(allowSpawn = true): ToolSchema[] {
+  return TOOLS.filter(tool => allowSpawn || tool.schema.name !== "spawn_bot").map((tool) => tool.schema);
 }
 
 export async function executeTool(name: string, input: unknown, host: ToolHost): Promise<ToolOutcome> {
+  if (name === "spawn_bot" && host.allowSpawn === false) return { isError: true, output: "请在当前聊天完成任务并返回实际结果。只有用户明确要求新建助手时才能创建独立工作区。" };
   const tool = TOOLS.find((item) => item.schema.name === name);
   if (!tool) {
     const names = TOOLS.map((item) => item.schema.name).join("、");

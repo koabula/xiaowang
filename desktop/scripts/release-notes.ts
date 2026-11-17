@@ -40,7 +40,11 @@ export function releaseBody(release: Release, repository: string): string {
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const tag = process.argv[2], repository = process.argv[3] || process.env.GITHUB_REPOSITORY;
   if (!tag || !repository) throw new Error("Usage: node desktop/scripts/release-notes.ts <tag> <owner/repo>");
-  const release = JSON.parse(execFileSync("gh", ["api", `repos/${repository}/releases/tags/${encodeURIComponent(tag)}`], { encoding: "utf8" })) as Release;
+  // The REST lookup by tag can return 404 while the uploaded release is still a draft.
+  const release = JSON.parse(execFileSync("gh", [
+    "release", "view", tag, "--repo", repository, "--json", "tagName,body,assets",
+    "--jq", "{tag_name: .tagName, body: .body, assets: [.assets[] | {name: .name}]}",
+  ], { encoding: "utf8" })) as Release;
   const directory = mkdtempSync(path.join(tmpdir(), "xiaowang-release-notes-"));
   try {
     const file = path.join(directory, "notes.md");

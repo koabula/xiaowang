@@ -1,3 +1,4 @@
+import { jobPosted } from "../../src/voice-delivery.ts";
 import { GeminiLive, type GeminiSocket, type GeminiTool, type GeminiToolCall, type GeminiToolResult } from "../../src/gemini-live.ts";
 import { Presentation, type PresentationState } from "../../src/presentation.ts";
 import type { TaskJob } from "../../src/types.ts";
@@ -159,8 +160,8 @@ export class GeminiCall {
     if (entry) {
       this.delegations.delete(job.id);
       if (entry.remote) { entry.resolve({ result: { id: job.id, status: job.status, result: job.result.slice(0, 6000), error: job.error, artifacts: job.artifacts }, scheduling: "SILENT" }); this.handlers.onToolOutput?.(entry.remote); }
-      if (entry.notify) this.notify(`${job.id}:${job.attempts}`, JSON.stringify({ status: job.status, result: job.result.slice(0, 3000), error: job.error, artifacts: job.artifacts }));
-    } else if (job.notify === "when_idle" && job.attempts > 1) this.notify(`${job.id}:${job.attempts}`, JSON.stringify({ result: job.result.slice(0, 3000), error: job.error }));
+      if (entry.notify) this.notify(`${job.id}:${job.attempts}`, JSON.stringify({ status: job.status, result: jobPosted(job) ? "完整结果已发到当前聊天。" : job.result.slice(0, 3000), error: job.error, artifacts: job.artifacts }));
+    } else if (job.notify === "when_idle" && job.attempts > 1) this.notify(`${job.id}:${job.attempts}`, JSON.stringify({ result: jobPosted(job) ? "完整结果已发到当前聊天。" : job.result.slice(0, 3000), error: job.error }));
     this.state(); this.schedule();
   }
   hangup(reason = ""): void { this.transport.close(reason); }

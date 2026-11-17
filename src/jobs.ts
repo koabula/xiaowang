@@ -16,6 +16,7 @@ export interface JobInput {
   channel?: Channel;
   notify?: TaskJob["notify"];
   sourceCallId?: string;
+  deliverToChat?: boolean;
   display?: TaskJob["display"];
   title?: string;
   originCallId?: string;
@@ -61,6 +62,7 @@ export class JobQueue {
     }
     const now = new Date().toISOString();
     const job: TaskJob = { id: randomUUID(), botId: input.botId, task, channel: input.channel ?? "text", notify: input.notify ?? "silent", sourceCallId: input.sourceCallId, display: input.display ?? (input.channel && input.channel !== "text" ? "background" : "conversation"), title: taskTitle(input.title || task), originCallId: input.originCallId, status: "queued", createdAt: now, updatedAt: now, activity: "", result: "", error: "", attempts: 0, artifacts: [] };
+    if (input.deliverToChat) job.deliverToChat = true;
     job.queuedAt = now;
     if (input.attachments?.length) job.attachments = input.attachments.map(a => ({ ...a }));
     if (input.messageText !== undefined) job.messageText = input.messageText;
@@ -102,6 +104,7 @@ export class JobQueue {
       jobId: id, ...(input.attachments?.length ? { attachments: structuredClone(input.attachments) } : {}),
     });
     this.change(job, {
+      ...(input.deliverToChat ? { deliverToChat: true } : {}),
       supplementEventIds: [...(job.supplementEventIds ?? []), stored.id],
       ...(input.sourceCallId ? { supplementSourceIds: [...(job.supplementSourceIds ?? []), input.sourceCallId] } : {}),
       ...(input.sharedContext ? { sharedContext: structuredClone(input.sharedContext) } : {}),
@@ -123,6 +126,13 @@ export class JobQueue {
     const job = this.records.get(id);
     if (!job) throw new Error("找不到这个任务。");
     return structuredClone(job);
+  }
+
+  requestChatDelivery(id: string): TaskJob {
+    const job = this.records.get(id);
+    if (!job) throw new Error("找不到这个任务。");
+    if (!job.deliverToChat) this.change(job, { deliverToChat: true });
+    return this.get(id);
   }
 
   linkInput(id: string, eventId: number): void {

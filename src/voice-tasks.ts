@@ -1,4 +1,5 @@
 import type { TaskJob } from "./types.ts";
+import { wantsChatDelivery } from "./voice-delivery.ts";
 import type { JobQueue } from "./jobs.ts";
 
 export function isVoiceProgressRequest(text: string): boolean {
@@ -9,9 +10,23 @@ export function isQueuedVoiceTask(text: string): boolean {
   return /排队|独立任务|单独.{0,5}任务|separate (?:task|job)|new task|(?:做完|完成|结束).{0,10}(?:再|之后)|另(?:开|起|建).{0,6}任务|queue (?:a |this |the )?(?:new )?task|after (?:this|you finish)/i.test(text);
 }
 
+/** Only the actual user's affirmative request can open another workspace. */
+export function requestsSubbot(text: string): boolean {
+  return text.split(/[，,。！？!?；;]/).some(part => {
+    const request = part.trim();
+    const create = /^(?:请|你|帮我|给我|麻烦|再|另|单独|我想让你|我希望你|现在)*(?:新建|创建|建立|开设|开|建)\s*(?:一个|个)?\s*(?:新的|独立的|单独的)?\s*(?:sub[ -]?bot|子助手|工作区|助手)/i;
+    const english = /^(?:please |can you |could you |please could you )*(?:create|open|start|spawn) (?:a |an )?(?:new |separate )?(?:sub[ -]?bot|workspace|assistant)\b/i;
+    if (/(?:什么意思|是什么意思|有什么用|会怎样|会怎么样|了吗|了没|means? what)/i.test(request)) return false;
+    return create.test(request) || english.test(request);
+  });
+}
+
 /** One accepted user turn owns one durable job, regardless of subsequent tool choices. */
 export class VoiceTasks {
   private turn = 0;
+  private userRequest = "";
+  private spawned = false;
+
   private accepted: string | null = null;
   private readonly queue: JobQueue;
   private readonly botId: string;
@@ -24,17 +39,28 @@ export class VoiceTasks {
     this.callId = callId; this.snapshot = snapshot;
   }
 
+  takeSpawnRequest(): boolean {
+    if (this.spawned || !requestsSubbot(this.userRequest)) return false;
+    this.spawned = true;
+    return true;
+  }
+
   userText(text: string): void {
     this.turn += 1;
+    this.userRequest = text;
+    this.spawned = false;
     const clauses = text.split(/[。！？!?；;]/).map(part => part.trim()).filter(Boolean);
     this.accepted = clauses.length > 0 && clauses.every(isVoiceProgressRequest) ? this.latest()?.id ?? null : null;
   }
 
-  delegate(task: string, callId: string | undefined, notify: TaskJob["notify"], queueNew = false): TaskJob {
+  wantsChat(): boolean { return wantsChatDelivery(this.userRequest); }
+
+  delegate(task: string, callId: string | undefined, notify: TaskJob["notify"], queueNew = false, deliverToChat = false): TaskJob {
     const accepted = this.current();
-    if (accepted) return accepted;
+    const deliver = deliverToChat || this.wantsChat();
+    if (accepted) return deliver ? this.queue.requestChatDelivery(accepted.id) : accepted;
     const queued = queueNew || isQueuedVoiceTask(task);
-    const job = this.queue.submit({ botId: this.botId, task: this.queue.active(this.botId) && !queued ? task : this.handoff(task), sharedContext: this.snapshot?.(), channel: "voice", notify, sourceCallId: callId || `${this.sessionId}:user:${this.turn}`, originCallId: this.callId?.() }, queued);
+    const job = this.queue.submit({ botId: this.botId, task: this.queue.active(this.botId) && !queued ? task : this.handoff(task), sharedContext: this.snapshot?.(), channel: "voice", notify, deliverToChat: deliver, sourceCallId: callId || `${this.sessionId}:user:${this.turn}`, originCallId: this.callId?.() }, queued);
     this.accepted = job.id;
     return job;
   }

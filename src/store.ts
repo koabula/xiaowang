@@ -286,6 +286,18 @@ export class Store {
     };
   }
 
+  postVoiceReply(botId: string, callId: string, sourceEventId: number): boolean {
+    const source = this.eventsByIds(botId, [sourceEventId])[0]?.event;
+    if (source?.type !== "voice_line" || source.who !== "assistant" || source.callId !== callId) throw new Error("找不到要发送的语音回答。");
+    const result = this.db.prepare(`
+      INSERT INTO session_events (bot_id, type, payload_json, created_at)
+      SELECT ?, 'voice_chat_post', ?, ? WHERE NOT EXISTS (
+        SELECT 1 FROM session_events WHERE bot_id = ? AND type = 'voice_chat_post'
+          AND json_extract(payload_json, '$.sourceEventId') = ?
+      )`).run(botId, JSON.stringify({ type: "voice_chat_post", sourceEventId }), new Date().toISOString(), botId, sourceEventId);
+    return result.changes === 1;
+  }
+
   getEvents(botId: string, options?: { afterId?: number; limit?: number }): StoredEvent[] {
     this.requireBot(botId);
     const afterId = options?.afterId ?? 0;

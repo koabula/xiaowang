@@ -1,3 +1,4 @@
+import { jobPosted } from "../../src/voice-delivery.ts";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { Presentation, type PresentationState } from "../../src/presentation.ts";
@@ -10,7 +11,7 @@ const text = (value: unknown): string => typeof value === "string" ? value : "";
 const short = (value: string): string => Array.from(value).slice(0, 2000).join("");
 export interface MossDelegation { sessionId: string; id: string; objective: string; context: unknown; purpose: string }
 export interface MossHandlers extends CallHandlers {
-  delegate?: (task: MossDelegation) => TaskJob;
+  delegate?: (task: MossDelegation) => TaskJob | string;
   cancelDelegation?: (jobId: string) => void;
 }
 export interface MossSocket {
@@ -216,6 +217,10 @@ export class MossCall {
       if (!id || this.delegates.has(id) || this.cancelled.has(id)) return;
       if (!this.handlers.delegate) throw new Error("未配置后台执行器");
       const job = this.handlers.delegate({ sessionId: this.sessionId, id, objective: text(data.objective), context: data.context, purpose: text(data.purpose) });
+      if (typeof job === "string") {
+        this.append({ action: "session.commentary.append", delegation_id: id, event_id: `delivery:${id}`, content: job, status: "completed" });
+        return;
+      }
       this.delegates.set(id, job.id); this.jobChanged(job);
     } else if (action === "session.delegation.cancelled") {
       const id = text(data.delegation_id); this.cancelled.add(id);
@@ -353,7 +358,7 @@ export class MossCall {
       if (terminalAttempt === undefined) this.terminalAttempts.set(id, job.attempts);
       for (const [key, append] of this.appends) if (append.delegation_id === id && append.action === "session.thinking.append") this.appends.delete(key);
       const status = job.status === "succeeded" ? "completed" : "failed";
-      const full = job.result || job.error || "后台任务未完成。";
+      const full = jobPosted(job) ? "完整结果已发到当前聊天。" : job.result || job.error || "后台任务未完成。";
       const files = job.artifacts.length ? `\n文件：${Array.from(job.artifacts.join("、")).slice(0, 500).join("")}` : "";
       const budget = 1950 - Array.from(files).length;
       const excerpt = Array.from(full).length > budget;

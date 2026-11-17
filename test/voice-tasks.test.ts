@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Runtime } from "../src/runtime.ts";
 import { JobQueue } from "../src/jobs.ts";
-import { VoiceTasks } from "../src/voice-tasks.ts";
+import { VoiceTasks, requestsSubbot } from "../src/voice-tasks.ts";
 
 test("one research request owns one durable job across duplicate tool choices and interruptions", async t => {
   const root = mkdtempSync(path.join(tmpdir(), "xw-voice-task-"));
@@ -61,4 +61,10 @@ test("voice supplements text work, explicit queue creates another task, and prog
   const separate = session.delegate("Find another paper", "tool-4", "when_idle", true);
   assert.notEqual(separate.id, original.id);
   assert.equal(queue.list().length, 2);
+});
+
+test("only an affirmative user request opens a separate assistant", () => {
+  assert.equal(requestsSubbot("你开一个后台任务，整理表格然后发给我。"), false);
+  assert.equal(requestsSubbot("好好好，我没有说叫你开一个 subbot，我的意思是你直接在这里直接给我发文本就行了。"), false);
+  assert.equal(requestsSubbot("请新建一个独立的子助手"), true);
 });

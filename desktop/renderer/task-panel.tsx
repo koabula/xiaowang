@@ -48,7 +48,7 @@ export function TaskCard({ job, slug, locale, onError }: TaskProps & { job: Task
       {[...new Set(job.artifacts)].map(file => <button className="task-artifact" type="button" key={file} title={file} onClick={() => void action(() => window.xiaowang.openArtifact(slug, file))}><FileText size={13} />{en ? 'Open' : '打开'} {file.split(/[\\/]/).at(-1)}</button>)}
       {active ? <button type="button" onClick={() => void action(() => window.xiaowang.cancelJob(job.id))}><Square size={12} />{en ? 'Stop' : '停止'}</button> : ['failed', 'interrupted', 'cancelled'].includes(job.status) ? <button type="button" onClick={() => void action(() => window.xiaowang.retryJob(job.id))}><RotateCcw size={12} />{en ? 'Retry' : '重试'}</button> : null}
     </div>
-    {job.result.trim() ? <details className="call-task-result"><summary>{en ? 'View result' : '查看结果'}</summary><div className="prose"><RichText slug={slug} text={job.result} /></div></details> : null}
+    {job.result.trim() && !job.deliverToChat ? <details className="call-task-result"><summary>{en ? 'View result' : '查看结果'}</summary><div className="prose"><RichText slug={slug} text={job.result} /></div></details> : null}
   </article>;
 }
 
