@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  group: desktop-${{ github.workflow }}-${{ github.ref }}-${{ inputs.candidate_target || 'all' }}
   cancel-in-progress: true
 
 jobs:

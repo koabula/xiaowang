@@ -48,7 +48,7 @@ async function install(file, destination) {
   if (process.platform === 'darwin') return extractMac(file, destination + '.app');
   if (process.platform === 'win32') { await run(file, ['/S', '/D=' + destination]); return path.join(destination, 'xiaowang.exe'); }
   if (file.endsWith('.AppImage')) { await cp(file, destination); await chmod(destination, 0o755); return destination; }
-  await run('sudo', ['dpkg', '-i', file]);
+  await run('sudo', ['apt-get', 'install', '-y', '--allow-downgrades', file]);
   const pkg = (await run('dpkg-deb', ['--field', file, 'Package'])).stdout.trim();
   const files = (await run('dpkg', ['-L', pkg])).stdout.split('\n');
   const binary = files.find(name => name.startsWith('/opt/') && name.endsWith('/xiaowang'));
@@ -200,12 +200,13 @@ try {
     console.error(JSON.stringify(report.diagnostic));
   }
   console.error(report.error); process.exitCode = 1;
+  await writeFile(path.join(reportDir, process.platform + '-' + process.arch + '.json'), JSON.stringify(report, null, 2) + '\n');
 }
 finally {
   if (restarted) await restarted.close().catch(() => {});
   if (app) await closeTestApp(app);
-  if (model) { model.closeAllConnections(); await new Promise(resolve => model.close(resolve)); }
-  if (feed) { feed.closeAllConnections(); await new Promise(resolve => feed.close(resolve)); }
+  if (model) await new Promise(resolve => { model.close(resolve); model.closeAllConnections(); });
+  if (feed) await new Promise(resolve => { feed.close(resolve); feed.closeAllConnections(); });
   await writeFile(path.join(reportDir, process.platform + '-' + process.arch + '.json'), JSON.stringify(report, null, 2) + '\n');
   await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }
