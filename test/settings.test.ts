@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { availableRealtimeSettings, mergeSettings, readSettings, publicSettings } from "../src/settings.ts";
+import { availableRealtimeSettings, mergeSettings, readSettings, publicSettings, settingsPatchForSave, withoutSecretKeys } from "../src/settings.ts";
 import { realtimeServicesForSettings, resolveRealtime } from "../src/realtime-catalog.ts";
 import { hasUnsavedSettings } from "../desktop/renderer/settings-draft.ts";
 
@@ -69,4 +69,44 @@ test("a MOSS-only account falls back to an unconfigured provider without borrowi
   assert.equal(next.realtimeProfiles?.moss?.key, "M"); assert.equal(publicSettings(next).realtimeKeyHint, "");
   assert.ok(!next.realtimeUrl.includes("mosi"));
   assert.equal(availableRealtimeSettings(next), next);
+});
+
+test("text keys follow normalized service origins across paths, switches, defaults and restart", () => {
+  const a = readSettings({ baseUrl: "https://A.example:443/v1", apiKey: "key-A", model: "fixture" });
+  assert.equal(mergeSettings(a, { baseUrl: "https://a.example/api/v2" }).apiKey, "key-A");
+  const b = mergeSettings(a, { baseUrl: "https://b.example/v1", apiKey: "" });
+  assert.equal(b.apiKey, ""); assert.equal(a.apiKey, "key-A");
+  const saved = readSettings(JSON.parse(JSON.stringify(mergeSettings(b, { apiKey: "key-B" }))));
+  assert.equal(mergeSettings(saved, { baseUrl: "https://a.example/v1" }).apiKey, "key-A");
+  assert.equal(mergeSettings(saved, { baseUrl: "http://b.example/v1" }).apiKey, "");
+  assert.equal(mergeSettings(saved, { baseUrl: "https://b.example:444/v1" }).apiKey, "");
+  const official = readSettings({ apiKey: "openai-key", model: "gpt-fixture" });
+  assert.equal(mergeSettings(official, { model: "claude-fixture" }).apiKey, "");
+  const json = JSON.stringify(publicSettings(saved));
+  for (const key of ["key-A", "key-B", "textKeys"]) assert.ok(!json.includes(key));
+});
+
+test("saving unchanged runtime drafts excludes environment values and all inactive voice keys", () => {
+  const saved = readSettings({ model: "stored", baseUrl: "https://a.example/v1", apiKey: "saved-A", realtimeService: "openai", realtimeKey: "saved-voice" });
+  const runtime = mergeSettings(saved, { model: "temporary-model", apiKey: "temporary-text", realtimeKey: "temporary-voice" });
+  const views = publicSettings(runtime, saved);
+  assert.match(views.keyHint, /仅本次使用/); assert.match(views.realtimeKeyHint, /仅本次使用/);
+  const patch = { model: runtime.model, baseUrl: runtime.baseUrl, apiStyle: runtime.apiStyle, apiKey: "", locale: "en", realtimeService: runtime.realtimeService,
+    realtimeModel: runtime.realtimeModel, realtimeVoice: runtime.realtimeVoice, realtimeKey: "", realtimeProfiles: { openai: { ...runtime.realtimeProfiles!.openai!, key: "" } } };
+  const persisted = mergeSettings(saved, settingsPatchForSave(runtime, patch));
+  assert.equal(persisted.model, "stored"); assert.equal(persisted.locale, "en");
+  assert.equal(persisted.apiKey, "saved-A"); assert.equal(persisted.realtimeKey, "saved-voice");
+  assert.ok(!JSON.stringify(persisted).includes("temporary-"));
+  const edited = mergeSettings(saved, settingsPatchForSave(runtime, { baseUrl: "https://b.example", apiKey: "explicit-key" }));
+  assert.equal(edited.apiKey, "explicit-key"); assert.equal(edited.baseUrl, "https://b.example");
+  const stripped = withoutSecretKeys(runtime);
+  assert.ok(!JSON.stringify(stripped).includes("saved-A")); assert.ok(!JSON.stringify(stripped).includes("temporary-" + "text"));
+  assert.equal(stripped.apiKey, ""); assert.equal(stripped.realtimeProfiles?.openai?.key, "");
+  assert.equal(runtime.apiKey, "temporary-text", "Stripping disk data does not erase the running session");
+  const switched = mergeSettings(saved, { baseUrl: "https://environment.example/v1", realtimeService: "qwen", realtimeKey: "temporary-qwen" });
+  const bound = mergeSettings(saved, settingsPatchForSave(switched, { apiKey: "entered-text", realtimeKey: "entered-qwen" }));
+  assert.equal(bound.baseUrl, "https://environment.example/v1"); assert.equal(bound.apiKey, "entered-text");
+  assert.equal(bound.textKeys?.["https://a.example"], "saved-A");
+  assert.equal(bound.realtimeService, "qwen"); assert.equal(bound.realtimeProfiles?.openai?.key, "saved-voice");
+  assert.equal(bound.realtimeKey, "entered-qwen");
 });

@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { mkdtemp, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { launchPackaged, closeTestApp } from './launch.mjs';
+import { launchPackaged, closeTestApp } from '../launch.mjs';
 const run = promisify(execFile);
 
 // Exercise final distribution artifacts with fresh profiles. Ad-hoc signatures
@@ -14,7 +14,7 @@ test('mac release: both architectures have complete signatures; native ZIP and D
   skip: process.platform !== 'darwin' || !process.env.XIAOWANG_MAC_RELEASE_DIR, timeout: 180000,
 }, async t => {
   const directory = path.resolve(process.env.XIAOWANG_MAC_RELEASE_DIR);
-  const version = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
+  const version = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
   const artifacts = (await readdir(directory)).filter(name => new RegExp(`^XiaoWang-${version.replaceAll('.', '\\.')}\\-mac-(arm64|x64)\\.(zip|dmg)$`).test(name));
   assert.equal(artifacts.length, 4, 'Both ZIP and DMG artifacts are required for arm64 and x64');
   for (const name of artifacts.sort()) await t.test(name, async () => {
@@ -49,7 +49,7 @@ test('mac release: both architectures have complete signatures; native ZIP and D
       const env = { ...process.env, XIAOWANG_HOME: path.join(root, 'home'), XIAOWANG_USER_DATA: path.join(root, 'profile'), XIAOWANG_DISABLE_UPDATES: '1' };
       for (const key of Object.keys(env)) if (key.startsWith('XIAOWANG_') && !['XIAOWANG_HOME', 'XIAOWANG_USER_DATA', 'XIAOWANG_DISABLE_UPDATES'].includes(key)) delete env[key];
       delete env.ELECTRON_RUN_AS_NODE;
-      app = await launchPackaged(binary, [], env);
+      app = await launchPackaged(binary, [], env, { native: true });
       const page = await app.firstWindow();
       await page.waitForFunction(() => Boolean(window.xiaowang));
       const state = await page.evaluate(() => window.xiaowang.getState());

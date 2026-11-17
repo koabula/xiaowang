@@ -2,6 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { resolveInsideWorkspace } from "./workspace.ts";
 import type { LibraryRef } from "./store.ts";
+import { filePreview as preview } from "./file-preview.ts";
 
 export interface FileEntry {
   key: string; name: string; path: string; source: "library" | "workspace";
@@ -13,7 +14,6 @@ export interface BrowseOptions {
   type?: "all" | "canvas"; sort?: "name" | "modified" | "size"; recentKeys?: string[];
 }
 export interface BrowseResult { entries: FileEntry[]; total: number; truncated: boolean }
-const preview = (name: string): FileEntry["preview"] => /\.html?$/i.test(name) ? "canvas" : /\.(pdf|md|markdown|txt|csv|json|jsonl|png|jpe?g|webp|gif)$/i.test(name) ? "file" : "unsupported";
 
 /** One inventory merges referenced originals with generated files, scoped to a single bot. */
 export async function browseBotFiles(root: string, references: LibraryRef[], options: BrowseOptions): Promise<BrowseResult> {

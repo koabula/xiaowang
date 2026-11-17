@@ -1,12 +1,11 @@
+import { electron, closeTestApp } from './launch.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { _electron as electron } from 'playwright';
 import { WebSocketServer } from 'ws';
-import { closeTestApp } from './launch.mjs';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function until(check, label) { for (let n=0;n<250;n++) {const value=await check();if(value)return value;await sleep(30);}throw Error(label); }
 function coloredPdf() {
@@ -14,7 +13,7 @@ function coloredPdf() {
   for (const color of ['1 0 0','0 0 1']) {const id=objects.length+1,content=`${color} rg 0 0 400 500 re f`;objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 500] /Contents ${id+1} 0 R >>`,`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);}
   let pdf='%PDF-1.4\n';const offsets=[0];objects.forEach((o,i)=>{offsets.push(Buffer.byteLength(pdf));pdf+=`${i+1} 0 obj\n${o}\nendobj\n`;});const xref=Buffer.byteLength(pdf);pdf+=`xref\n0 ${objects.length+1}\n0000000000 65535 f \n`;offsets.slice(1).forEach(o=>pdf+=`${String(o).padStart(10,'0')} 00000 n \n`);return Buffer.from(pdf+`trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`);
 }
-for (const service of ['gemini','openai','qwen']) test(`${service}: sent image + current PDF pixels, silent synchronization, stale/bot isolation and floating controls`, {timeout:60000}, async t => {
+for (const service of ['gemini','openai','qwen']) test(`${service}: sent image + current PDF pixels, silent synchronization, stale/bot isolation and aligned controls`, {timeout:60000}, async t => {
   const root=await mkdtemp(path.join(os.tmpdir(),`xw-visual-${service}-`)),profile=path.join(root,'profile');await mkdir(profile);
   const requests=[],packets=[];let socket;
   const model=createServer(async(req,res)=>{if(req.url?.endsWith('/models')){res.setHeader('content-type','application/json');res.end(JSON.stringify({data:[]}));return;}let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);assert.ok(body.tools?.some(tool=>tool.function?.name==='inspect_event'),'No hidden summary request');requests.push(body);res.writeHead(200,{'content-type':'text/event-stream'});res.end(`data: ${JSON.stringify({choices:[{delta:{content:'Background actual result 731'},finish_reason:'stop'}]})}\n\ndata: [DONE]\n\n`);});await new Promise(r=>model.listen(0,'127.0.0.1',r));
@@ -46,8 +45,8 @@ for (const service of ['gemini','openai','qwen']) test(`${service}: sent image +
   assert.ok(current.some(p=>p.image_url.url===`data:image/jpeg;base64,${frames().at(-1)}`),'Background receives the same frozen PDF page pixels');
   assert.equal(packets.some(p=>p.type==='response.create'||p.clientContent?.turnComplete===true),false,'Passive updates cannot request responses');
   if(service==='qwen')assert.ok(packets.findIndex(p=>p.type==='input_audio_buffer.append')<packets.findIndex(p=>p.type==='input_image_buffer.append'));
-  const layout=await page.evaluate(()=>{const h=document.querySelector('.thread > header'),m=document.querySelector('.messages'),title=document.querySelector('.bot-title');return {position:getComputedStyle(h).position,border:getComputedStyle(h).borderBottomWidth,header:h.getBoundingClientRect().top,messages:m.getBoundingClientRect().top,title:title.getBoundingClientRect().width};});
-  assert.equal(layout.position,'absolute');assert.equal(layout.border,'0px');assert.ok(Math.abs(layout.header-layout.messages)<2);assert.ok(layout.title>80);
+  const layout=await page.evaluate(()=>{const h=document.querySelector('.thread > header'),m=document.querySelector('.messages'),title=document.querySelector('.bot-title');return {position:getComputedStyle(h).position,border:getComputedStyle(h).borderBottomWidth,header:h.getBoundingClientRect().bottom,messages:m.getBoundingClientRect().top,title:title.getBoundingClientRect().width};});
+  assert.equal(layout.position,'absolute');assert.equal(layout.border,'0px');assert.equal(layout.header-layout.messages,64);assert.ok(layout.title>80);
   await page.screenshot({path:path.join(os.tmpdir(),`xw-visual-${service}.png`)});
   const other=await page.evaluate(()=>window.xiaowang.createBot('Other'));await page.locator('.thread > header .bot-title').filter({hasText:'Other'}).waitFor();
   assert.equal(await page.evaluate(id=>window.xiaowang.stageVisual('xiaowang',{refId:id,page:2,revision:2,data:'YWJj'}),pdf.refId),false);

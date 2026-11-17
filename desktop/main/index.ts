@@ -2,7 +2,10 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, protocol, 
 import { mkdirSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { configurePagePermissions, isAppPage, protectAppWindow } from "./page-policy.ts";
+import { backgroundTest, testWindowOptions } from "./test-mode.ts";
+import { receiveDownload, type DownloadTask } from "./downloads.ts";
 import { UpdateController } from "./update-state.ts";
 import { createUpdateEngine } from "./updates.ts";
 import { LiveCall, type InterruptionReceipt, type PlaybackPosition, type VoiceState } from "./call.ts";
@@ -10,7 +13,7 @@ import { MossCall, type MossHandlers } from "./moss-call.ts";
 import { mossSession } from "../../src/moss-realtime.ts";
 import { JobQueue, type JobOutput } from "../../src/jobs.ts";
 import { VoiceTasks, voiceJobReceipt } from "../../src/voice-tasks.ts";
-import { backgroundTurnOwners, presentJob } from "../../src/task-presentation.ts";
+import { taskTurnOwners, visibleAnswerIds, presentJob } from "../../src/task-presentation.ts";
 import { StageRequests } from "./stage.ts";
 import type { Attachment, TaskJob } from "../../src/types.ts";
 import type { PresentationState } from "../../src/presentation.ts";
@@ -30,9 +33,10 @@ import { CANVAS_HTML_CAP, assertHttpUrl } from "../../src/stage.ts";
 import type { Channel, SessionEvent } from "../../src/types.ts";
 import { listCanvasPages, resolveInsideWorkspace } from "../../src/workspace.ts";
 import { browseBotFiles, type BrowseOptions } from "../../src/file-browser.ts";
+import { filePreview } from "../../src/file-preview.ts";
 import { BotBrowsers } from "./browser.ts";
 import { loadSecrets, mergeSecrets, publicSettings, type SecretPatch, type SecretRecord } from "./secrets.ts";
-import { availableRealtimeSettings, mergeSettings, contextEnvironment } from "../../src/settings.ts";
+import { availableRealtimeSettings, mergeSettings, settingsPatchForSave, contextEnvironment } from "../../src/settings.ts";
 import { MossVoiceCatalog } from "./moss-voices.ts";
 import { GeminiCall } from "./gemini-call.ts";
 import { geminiSession } from "../../src/gemini-session.ts";
@@ -53,6 +57,10 @@ if (process.env.XIAOWANG_USER_DATA) {
   app.setPath("userData", directory);
 }
 const devUrl = process.env.XIAOWANG_DESKTOP_URL ?? "";
+const appPage = devUrl || pathToFileURL(path.join(here, "renderer/index.html")).href;
+// Acquire before opening the store: a second process must not restore or run jobs.
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) app.quit();
 
 let runtime: Runtime;
 let window: BrowserWindow | null = null;
@@ -64,7 +72,7 @@ let updateNotice = "";
 const mossVoices = new MossVoiceCatalog();
 const experimentalMossEnabled = process.env.XIAOWANG_ENABLE_MOSS === "1";
 const geminiEnabled = true;
-function settingsView() { return { ...publicSettings(secrets), experimentalMossEnabled, geminiEnabled }; }
+function settingsView() { return { ...publicSettings(secrets, savedSecrets), experimentalMossEnabled, geminiEnabled }; }
 function assertRealtimeAvailable(service: string): void {
   if (service === "moss" && !experimentalMossEnabled) throw new Error("MOSS Live 支持已暂时停用，请选择其他语音服务。");
 }
@@ -101,6 +109,9 @@ let secrets: SecretRecord = {
   realtimeWorkspace: "",
   locale: "zh",
 };
+let savedSecrets = secrets;
+const activeDownloads = new Set<DownloadTask>();
+let closingDownloads = false;
 
 interface ChatItem {
   attachments?: Attachment[];
@@ -142,14 +153,9 @@ function importAttachment(slug: string, filename: string, data: Uint8Array): Att
 }
 
 function previewOf(botId: string): string {
-  const events = runtime.store.getEvents(botId);
-  for (let i = events.length - 1; i >= 0; i -= 1) {
-    const event = events[i]?.event;
-    if (!event) continue;
-    if ((event.type === "user_text" || event.type === "assistant_turn") && (event.text.trim() || event.type === "user_text" && event.attachments?.length)) {
-      return messagePreview(event.text) || (event.type === "user_text" && event.attachments?.length ? event.attachments.map(a => a.filename).join("、") : "还没有对话");
-    }
-  }
+  const event = runtime.store.latestMessage(botId)?.event;
+  if (event?.type === "user_text" || event?.type === "assistant_turn")
+    return messagePreview(event.text) || (event.type === "user_text" && event.attachments?.length ? event.attachments.map(a => a.filename).join("、") : "还没有对话");
   return "还没有对话";
 }
 
@@ -167,9 +173,12 @@ function botRows(): BotRow[] {
 function chatItems(slug: string): ChatItem[] {
   const bot = runtime.store.requireBot(slug);
   const events = runtime.store.getEvents(bot.id);
-  const owners = backgroundTurnOwners((jobs?.list(bot.id) ?? []).map(job => presentJob(job, events)), events);
+  const shownJobs = (jobs?.list(bot.id) ?? []).map(job => presentJob(job, events));
+  const owners = taskTurnOwners(shownJobs, events);
+  const answers = visibleAnswerIds(shownJobs, events, owners);
   const items: ChatItem[] = [];
   for (const stored of events) {
+    if (stored.event.type === "assistant_turn" && !answers.has(stored.id)) continue;
     const item = present(stored.id, stored.event);
     if (item) items.push({ ...item, jobId: item.jobId ?? owners.get(stored.id) });
   }
@@ -374,7 +383,13 @@ function browserFor(slug: string): BrowserDriver {
 }
 
 function registerIpc(): void {
-  ipcMain.handle("state:get", () => {
+  const handle: typeof ipcMain.handle = (channel, listener) => ipcMain.handle(channel, (event, ...args) => {
+    if (event.sender !== window?.webContents || !event.senderFrame || event.senderFrame !== event.sender.mainFrame || !isAppPage(event.senderFrame.url, appPage)) {
+      throw new Error("此操作只能从小王应用窗口发起。");
+    }
+    return listener(event, ...args);
+  });
+  handle("state:get", () => {
     // Start only after a renderer is mounted, independently of the first
     // navigation promise (a reload can abort that promise).
     jobs.start();
@@ -388,20 +403,18 @@ function registerIpc(): void {
     browser: browser.viewState(runtime.activeBot().slug),
     };
   });
-  ipcMain.handle("update:check", async event => {
-    if (event.sender !== window?.webContents) throw new Error("只能从应用主窗口检查更新。");
+  handle("update:check", async () => {
     await updates.check(true); return updates.snapshot();
   });
-  ipcMain.handle("update:download", async event => {
-    if (event.sender !== window?.webContents) throw new Error("只能从应用主窗口更新应用。");
+  handle("update:download", async () => {
     await updates.update(); return updates.snapshot();
   });
-  ipcMain.handle("bot:active", (_event, slug: string) => {
+  handle("bot:active", (_event, slug: string) => {
     runtime.store.setActiveBot(runtime.store.requireBot(slug).id);
     browser.activate(slug);
     publish();
   });
-  ipcMain.handle("bot:create", (_event, name: string, baseline: string) => {
+  handle("bot:create", (_event, name: string, baseline: string) => {
     const parent = runtime.activeBot();
     const bot = runtime.store.createBot({
       name,
@@ -414,12 +427,11 @@ function registerIpc(): void {
     publish();
     return bot.slug;
   });
-  ipcMain.handle("bot:rename", (_event, slug: string, name: string) => {
+  handle("bot:rename", (_event, slug: string, name: string) => {
     runtime.store.renameBot(slug, name);
     publish();
   });
-  ipcMain.handle("bot:delete", async (event, slug: string) => {
-    if (event.sender !== window?.webContents) throw new Error("只能从应用主窗口删除 Bot。");
+  handle("bot:delete", async (event, slug: string) => {
     const bot = runtime.store.requireBot(slug);
     if (bot.slug === "xiaowang") throw new Error("不能删除主助手。");
     if (liveSlug === slug) live?.hangup();
@@ -435,25 +447,25 @@ function registerIpc(): void {
     focusedFiles.delete(slug); viewFrames.delete(slug); shared.forget(bot.id);
     publish();
   });
-  ipcMain.handle("bot:avatar", (_event, slug: string, patch: { seed?: string; ink?: string }) => {
+  handle("bot:avatar", (_event, slug: string, patch: { seed?: string; ink?: string }) => {
     runtime.store.setAvatar(slug, patch ?? {});
     publish();
   });
-  ipcMain.handle("library:forget", (_event, slug: string, id: string) => {
+  handle("library:forget", (_event, slug: string, id: string) => {
     const bot = runtime.store.requireBot(slug);
     runtime.store.forgetLibraryRef(bot.id, id);
     if (shared.get(bot.id).view?.path === id) { viewFrames.delete(slug); visualCall(slug)?.clearVisual(); }
     visualCall(slug)?.forgetVisual(id); contextChanged(bot.id, shared.revoke(bot.id, id));
     publish();
   });
-  ipcMain.handle("chat:events", (_event, slug: string) => chatItems(slug));
-  ipcMain.handle("library:list", (_event, slug: string) => libraryOf(slug));
-  ipcMain.handle("workspace:browse", (_event, slug: string, options: BrowseOptions) => {
+  handle("chat:events", (_event, slug: string) => chatItems(slug));
+  handle("library:list", (_event, slug: string) => libraryOf(slug));
+  handle("workspace:browse", (_event, slug: string, options: BrowseOptions) => {
     const bot = runtime.store.requireBot(slug);
     if (!options || !["all", "library", "workspace"].includes(options.source)) throw new Error("无效的资料位置。");
     return browseBotFiles(bot.workspaceDir, runtime.store.listLibrary(bot.id), options);
   });
-  ipcMain.handle("library:openReference", (_event, slug: string, id: string, page: number) => {
+  handle("library:openReference", (_event, slug: string, id: string, page: number) => {
     const bot = runtime.store.requireBot(slug);
     const ref = runtime.store.resolveLibraryRef(bot.id, id);
     if (!Number.isSafeInteger(page) || page < 1) throw new Error("无效的来源页码。");
@@ -465,36 +477,36 @@ function registerIpc(): void {
     }
     send("stage", { slug, mode: "file", id: ref.id, filename: ref.filename, page });
   });
-  ipcMain.handle("link:open", (_event, url: string) => {
+  handle("link:open", (_event, url: string) => {
     const checked = assertHttpUrl(url);
     if (typeof checked !== "string") throw new Error(checked.error);
     return shell.openExternal(checked);
   });
-  ipcMain.handle("library:text", (_event, slug: string, id: string) => {
+  handle("library:text", (_event, slug: string, id: string) => {
     const bot = runtime.store.requireBot(slug);
     const ref = runtime.store.resolveLibraryRef(bot.id, id);
     return readFileSync(ref.storedPath);
   });
-  ipcMain.handle("workspace:pages", (_event, slug: string) => {
+  handle("workspace:pages", (_event, slug: string) => {
     const bot = runtime.store.requireBot(slug);
     return listCanvasPages(bot.workspaceDir);
   });
-  ipcMain.handle("workspace:openArtifact", (_event, slug: string, rel: string) => {
+  handle("workspace:openArtifact", (_event, slug: string, rel: string) => {
     const bot = runtime.store.requireBot(slug);
     const resolved = resolveInsideWorkspace(bot.workspaceDir, rel);
     if (!resolved.ok) throw new Error(resolved.error);
-    if (/\.html?$/i.test(resolved.rel)) {
+    if (filePreview(resolved.rel) === "canvas") {
       const html = readFileSync(resolved.abs, "utf8");
       if (Buffer.byteLength(html) > CANVAS_HTML_CAP) throw new Error("这份页面过大。");
       send("stage", { slug, mode: "canvas", title: resolved.rel, html, page: 1 });
     } else {
-      if (!/\.(pdf|md|markdown|txt|csv|json|jsonl)$/i.test(resolved.rel)) throw new Error("暂时不能预览这种文件。");
+      if (filePreview(resolved.rel) !== "file") throw new Error("暂时不能预览这种文件。");
       const result = runtime.store.addLibraryBytes(bot.id, path.basename(resolved.rel), readFileSync(resolved.abs));
       send("stage", { slug, mode: "file", id: result.ref.id, filename: result.ref.filename, page: 1, restore: true });
     }
     publish();
   });
-  ipcMain.handle("workspace:openPage", (_event, slug: string, rel: string, page = 1) => {
+  handle("workspace:openPage", (_event, slug: string, rel: string, page = 1) => {
     const bot = runtime.store.requireBot(slug);
     const resolved = resolveInsideWorkspace(bot.workspaceDir, typeof rel === "string" ? rel : "");
     if (!resolved.ok) throw new Error(resolved.error);
@@ -505,7 +517,7 @@ function registerIpc(): void {
     send("stage", { slug: bot.slug, ...view });
     return view;
   });
-  ipcMain.handle("library:add", async () => {
+  handle("library:add", async () => {
     if (!window) return;
     const picked = await dialog.showOpenDialog(window, {
       properties: ["openFile", "multiSelections"],
@@ -518,8 +530,8 @@ function registerIpc(): void {
     }
     publish();
   });
-  ipcMain.handle("chat:attach", (_event, slug: string, filename: string, data: Uint8Array) => importAttachment(slug, filename, data));
-  ipcMain.handle("chat:pasteImage", async (_event, slug: string) => {
+  handle("chat:attach", (_event, slug: string, filename: string, data: Uint8Array) => importAttachment(slug, filename, data));
+  handle("chat:pasteImage", async (_event, slug: string) => {
     runtime.store.requireBot(slug);
     for (const item of await clipboard.read()) {
       const mimeType = item.types.find(type => ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(type));
@@ -530,7 +542,7 @@ function registerIpc(): void {
     }
     return null;
   });
-  ipcMain.handle("chat:ask", async (_event, slug: string, text: string, ids: string[] = [], queueNew = false) => {
+  handle("chat:ask", async (_event, slug: string, text: string, ids: string[] = [], queueNew = false) => {
     const bot = runtime.store.requireBot(slug);
     if (typeof text !== "string") throw new Error("消息格式无效。");
     const attachments = resolveAttachments(runtime.store, bot.id, ids);
@@ -544,14 +556,14 @@ function registerIpc(): void {
     if (result.status === "failed") throw new Error(result.error);
     return chatItems(slug);
   });
-  ipcMain.handle("chat:stop", (_event, slug: string) => {
+  handle("chat:stop", (_event, slug: string) => {
     const bot = runtime.store.requireBot(slug);
     for (const job of jobs.list(bot.id)) if (job.status === "running") jobs.cancel(job.id);
   });
-  ipcMain.handle("job:cancel", (_event, id: string) => jobs.cancel(id));
-  ipcMain.handle("job:retry", (_event, id: string) => jobs.retry(id));
-  ipcMain.handle("stage:ack", (_event, slug: string, requestId: string, receipt: { page: number; totalPages: number; title?: string; error?: string }) => stages.acknowledge(slug, requestId, receipt));
-  ipcMain.handle("stage:position", (_event, slug: string, position: { path: string; page: number; totalPages: number; mode: "canvas" | "file" }) => {
+  handle("job:cancel", (_event, id: string) => jobs.cancel(id));
+  handle("job:retry", (_event, id: string) => jobs.retry(id));
+  handle("stage:ack", (_event, slug: string, requestId: string, receipt: { page: number; totalPages: number; title?: string; error?: string }) => stages.acknowledge(slug, requestId, receipt));
+  handle("stage:position", (_event, slug: string, position: { path: string; page: number; totalPages: number; mode: "canvas" | "file" }) => {
     const bot = runtime.store.getBot(slug);
     if (!bot || runtime.activeBot().id !== bot.id) return -1;
     if (!["canvas", "file"].includes(position.mode) || typeof position.path !== "string") return -1;
@@ -570,13 +582,13 @@ function registerIpc(): void {
     }
     return snapshot.viewRevision;
   });
-  ipcMain.handle("stage:hide", (_event, slug: string) => {
+  handle("stage:hide", (_event, slug: string) => {
     const bot = runtime.store.getBot(slug); if (!bot) return; const snapshot = shared.get(bot.id);
     if (!snapshot.view?.visible) return;
     contextChanged(bot.id, shared.view(bot.id, { ...snapshot.view, visible: false }));
     viewFrames.delete(slug); visualCall(slug)?.clearVisual();
   });
-  ipcMain.handle("stage:visual", (_event, slug: string, frame: { refId: string; page: number; revision: number; data: string; callId?: string }) => {
+  handle("stage:visual", (_event, slug: string, frame: { refId: string; page: number; revision: number; data: string; callId?: string }) => {
     const bot = runtime.store.getBot(slug), call = visualCall(slug);
     if (!bot) return false;
     if ((frame.callId && (liveSlug !== slug || live?.id !== frame.callId)) || runtime.activeBot().id !== bot.id || !shared.matches(bot.id, frame.refId, frame.page, frame.revision)) return false;
@@ -589,47 +601,47 @@ function registerIpc(): void {
     // Display receipts confirm local rendering even when this provider has no visual protocol.
     return !call || call instanceof LiveCall && !call.supportsVision() ? true : delivered;
   });
-  ipcMain.handle("settings:models", async (_event, patch: SecretPatch) => {
+  handle("settings:models", async (_event, patch: SecretPatch) => {
     const draft = draftSecrets(patch);
     return listModels({ baseUrl: draft.baseUrl, apiKey: draft.apiKey, apiStyle: draft.apiStyle });
   });
-  ipcMain.handle("settings:check", async (_event, patch: SecretPatch) => {
+  handle("settings:check", async (_event, patch: SecretPatch) => {
     const draft = draftSecrets(patch);
     if (!draft.model) throw new Error("请先选择模型。");
     if (!draft.apiKey && !/localhost|127\.0\.0\.1/.test(draft.baseUrl)) throw new Error("请先填写模型密钥。");
     return checkModel(configFromEnv(envFromRecord(draft)));
   });
-  ipcMain.handle("link:key", (_event, service: string, region: string) => {
+  handle("link:key", (_event, service: string, region: string) => {
     assertRealtimeAvailable(service);
     return shell.openExternal(realtimeKeyPage(typeof service === "string" ? service : "", typeof region === "string" ? region : ""));
   });
-  ipcMain.handle("settings:save", (_event, patch: SecretPatch) => {
+  handle("settings:save", (_event, patch: SecretPatch) => {
     const draft = mergeSettings(secrets, patch);
     assertRealtimeAvailable(draft.realtimeService);
-    secrets = mergeSecrets(secrets, patch);
+    savedSecrets = mergeSecrets(savedSecrets, settingsPatchForSave(secrets, patch));
+    secrets = draft;
     publish();
     return settingsView();
   });
-  ipcMain.handle("settings:voices", async (event, patch: SecretPatch, refresh: boolean) => {
-    if (event.sender !== window?.webContents) throw new Error("只能从应用设置读取音色。");
+  handle("settings:voices", async (event, patch: SecretPatch, refresh: boolean) => {
     const draft = mergeSettings(secrets, patch);
     assertRealtimeAvailable(draft.realtimeService);
     if (draft.realtimeService !== "moss") return [];
     return mossVoices.list(draft.realtimeKey, refresh === true);
   });
-  ipcMain.handle("settings:dirty", (_event, dirty: boolean) => { settingsDirty = dirty === true; });
-  ipcMain.handle("settings:finishClose", (_event, intent: "window" | "quit") => {
+  handle("settings:dirty", (_event, dirty: boolean) => { settingsDirty = dirty === true; });
+  handle("settings:finishClose", (_event, intent: "window" | "quit") => {
     if (settingsDirty) return;
     if (intent === "quit") app.quit();
     else if (intent === "window") window?.close();
   });
-  ipcMain.handle("call:start", (_event, slug: string) => {
+  handle("call:start", (_event, slug: string) => {
     startCall(slug);
   });
-  ipcMain.handle("call:preview", (_event, patch: SecretPatch) => {
+  handle("call:preview", (_event, patch: SecretPatch) => {
     startPreview(patch);
   });
-  ipcMain.handle("call:stop", () => {
+  handle("call:stop", () => {
     live?.hangup();
     live = null;
   });
@@ -640,20 +652,20 @@ function registerIpc(): void {
   ipcMain.on("call:position", (_event, position: PlaybackPosition) => live?.notePlayback(position));
   ipcMain.on("call:chunkPlayed", (_event, position: PlaybackPosition) => { if (live instanceof MossCall) live.noteChunkPlayed(position); });
   ipcMain.on("call:interrupted", (_event, receipt: InterruptionReceipt) => live?.noteInterrupted(receipt));
-  ipcMain.handle("call:control", (_event, action: "pause" | "resume" | "complete") => { if (["pause", "resume", "complete"].includes(action)) live?.control(action); });
+  handle("call:control", (_event, action: "pause" | "resume" | "complete") => { if (["pause", "resume", "complete"].includes(action)) live?.control(action); });
   ipcMain.on("call:mute", (_event, muted: boolean) => live?.setMuted(muted === true));
   ipcMain.on("call:idle", (_event, serial: number, callId?: string) => {
     live?.noteSpeakerIdle(serial, callId);
   });
-  ipcMain.handle("browser:bounds", (_event, bounds: { x: number; y: number; width: number; height: number } | null, slug?: string) => {
+  handle("browser:bounds", (_event, bounds: { x: number; y: number; width: number; height: number } | null, slug?: string) => {
     browser.setBounds(slug || runtime.activeBot().slug, bounds);
   });
-  ipcMain.handle("browser:go", async (_event, url: string) => {
+  handle("browser:go", async (_event, url: string) => {
     return browser.forBot(runtime.activeBot().slug).userNavigate(url);
   });
-  ipcMain.handle("browser:back", () => browser.forBot(runtime.activeBot().slug).userBack());
-  ipcMain.handle("browser:forward", () => browser.forBot(runtime.activeBot().slug).userForward());
-  ipcMain.handle("browser:holder", (_event, holder: "bot" | "user") => {
+  handle("browser:back", () => browser.forBot(runtime.activeBot().slug).userBack());
+  handle("browser:forward", () => browser.forBot(runtime.activeBot().slug).userForward());
+  handle("browser:holder", (_event, holder: "bot" | "user") => {
     browser.forBot(runtime.activeBot().slug).setHolder(holder);
   });
 }
@@ -663,25 +675,25 @@ function attachDownloads(): void {
   partition.on("will-download", (_event, item, contents) => {
     const slug = contents && browser.slugForContents(contents.id);
     const owner = slug ? runtime.store.getBot(slug) : undefined;
-    if (!owner) { item.cancel(); return; }
+    if (!owner || closingDownloads) { item.cancel(); return; }
     const filename = item.getFilename() || "download";
-    const savePath = path.join(app.getPath("temp"), `xiaowang-${randomUUID()}-${filename}`);
-    item.setSavePath(savePath);
-    item.once("done", (_done, state) => {
-      if (state !== "completed") return;
-      try {
-        const bytes = readFileSync(savePath);
+    const task = receiveDownload(item, {
+      temporaryRoot: app.getPath("temp"),
+      onComplete(bytes) {
         const bot = runtime.store.getBot(owner.id);
         if (!bot) return;
         const added = runtime.store.addLibraryBytes(bot.id, filename, bytes);
         send("stage", { slug: bot.slug, mode: "file", id: added.ref.id, filename: added.ref.filename, page: 1 });
         send("download", { slug: bot.slug, id: added.ref.id, filename: added.ref.filename });
         publish();
-      } catch (error) {
+      },
+      onError(error) {
         const message = error instanceof Error ? error.message : String(error);
         send("download", { error: message });
-      }
+      },
     });
+    activeDownloads.add(task);
+    void task.done.then(() => activeDownloads.delete(task));
   });
 }
 
@@ -693,6 +705,7 @@ async function createWindow(): Promise<void> {
   const icon = appIcon();
   if (process.platform === "darwin" && !icon.isEmpty()) app.dock?.setIcon(icon);
   window = new BrowserWindow({
+    ...testWindowOptions(),
     width: 1280,
     height: 840,
     minWidth: 760,
@@ -702,12 +715,14 @@ async function createWindow(): Promise<void> {
     trafficLightPosition: { x: 16, y: 16 },
     backgroundColor: "#F6F6F7",
     webPreferences: {
+      ...testWindowOptions().webPreferences,
       preload: path.join(here, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
     },
   });
+  protectAppWindow(window, appPage, url => shell.openExternal(url));
   browser.attach(window);
   browser.activate(runtime.activeBot().slug);
   // Native edit-menu accelerators can consume Ctrl+V before Chromium dispatches
@@ -947,16 +962,24 @@ function openCall(
   call.start();
 }
 
+app.on("second-instance", () => {
+  if (window && !window.isDestroyed()) {
+    if (backgroundTest) return;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+  } else if (runtime && browser) void createWindow();
+});
+
 app.whenReady().then(async () => {
+  if (!primaryInstance) return;
   runtime = Runtime.open(resolveHome());
   for (const bot of runtime.store.listBots()) {
     const events = runtime.store.getEvents(bot.id), saved = events.findLast(item => item.event.type === "workspace_context")?.event;
     if (saved?.type === "workspace_context") shared.restore(bot.id, saved.state);
     else { const message = events.findLast(item => item.event.type === "user_text" && item.event.channel === "text")?.event; if (message?.type === "user_text") shared.message(bot.id, message.text, message.attachments ?? []); }
   }
-  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    callback(permission === "media");
-  });
+  configurePagePermissions(session.defaultSession, session.fromPartition("persist:xiaowang"), () => window, appPage);
   protocol.handle("xwlib", (request) => {
     try {
       const url = new URL(request.url);
@@ -971,7 +994,8 @@ app.whenReady().then(async () => {
       return new Response("找不到这份资料。", { status: 404 });
     }
   });
-  secrets = loadSecrets();
+  savedSecrets = loadSecrets();
+  secrets = savedSecrets;
   try { const outcome = JSON.parse(readFileSync(path.join(app.getPath("userData"), "update-outcome.json"), "utf8")); if (typeof outcome.error === "string") updateNotice = outcome.error.slice(0, 180); } catch { /* No failed installation to report. */ }
   // Environment configuration stays in memory and never rewrites stored keys.
   const overrides: Array<[Exclude<keyof SecretPatch, "realtimeProfiles">, string]> = [
@@ -1009,6 +1033,14 @@ app.on("window-all-closed", () => {
 });
 app.on("before-quit", event => {
   if (settingsDirty && window && !window.isDestroyed()) { event.preventDefault(); send("settings:closeRequested", "quit"); return; }
+  if (activeDownloads.size) {
+    event.preventDefault();
+    if (!closingDownloads) {
+      closingDownloads = true;
+      void Promise.all([...activeDownloads].map(task => task.cancel())).then(() => app.quit());
+    }
+    return;
+  }
   for (const timer of updateTimers) clearInterval(timer);
   live?.hangup();
   jobs?.shutdown();

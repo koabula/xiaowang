@@ -1,0 +1,89 @@
+{
+  "readingBefore": {
+    "fixture": {
+      "bots": 10,
+      "historyEvents": 10000,
+      "pdfPages": 40,
+      "pdfHash": "5e56ad4b37c836ce65d5282227319762a5b2a333a71769a8df3643cd8d295c73"
+    },
+    "sidebar": {
+      "medianMs": 13.267875000000004,
+      "eventsReturned": 10008
+    },
+    "supplements": {
+      "none": {
+        "medianMs": 1.128458000000137,
+        "eventsReturned": 1008
+      },
+      "two": {
+        "medianMs": 1.1871249999999236,
+        "eventsReturned": 1008
+      }
+    },
+    "pdf": {
+      "medianMs": 0.791374999999789,
+      "mainThreadFullReads": 40,
+      "mainThreadBytesRead": 335999680,
+      "outputHash": "411010edb07b8462270464b9155593a162f35f78f6062e11c4460b35e356b059"
+    }
+  },
+  "readingAfter": {
+    "fixture": {
+      "bots": 10,
+      "historyEvents": 10000,
+      "pdfPages": 40,
+      "pdfHash": "5e56ad4b37c836ce65d5282227319762a5b2a333a71769a8df3643cd8d295c73"
+    },
+    "sidebar": {
+      "medianMs": 0.632125000000002,
+      "eventsReturned": 10
+    },
+    "supplements": {
+      "none": {
+        "medianMs": 0.0013339999999999463,
+        "eventsReturned": 0
+      },
+      "two": {
+        "medianMs": 0.03333299999999895,
+        "eventsReturned": 2
+      }
+    },
+    "pdf": {
+      "medianMs": 0.016041000000001304,
+      "mainThreadFullReads": 0,
+      "mainThreadBytesRead": 0,
+      "outputHash": "411010edb07b8462270464b9155593a162f35f78f6062e11c4460b35e356b059"
+    }
+  },
+  "downloads": {
+    "fileBytes": 100663296,
+    "limitBytes": 83886080,
+    "chunkBytes": 1048576,
+    "results": {
+      "declaredLength": {
+        "before": {
+          "bodyBytesRead": 100663296,
+          "cancelled": false,
+          "elapsedMs": 64.357583
+        },
+        "after": {
+          "bodyBytesRead": 0,
+          "cancelled": true,
+          "elapsedMs": 0.1482910000000004
+        }
+      },
+      "unknownLength": {
+        "before": {
+          "bodyBytesRead": 100663296,
+          "cancelled": false,
+          "elapsedMs": 30.700500000000005
+        },
+        "after": {
+          "bodyBytesRead": 84934656,
+          "cancelled": true,
+          "elapsedMs": 6.492500000000007
+        }
+      }
+    }
+  }
+}

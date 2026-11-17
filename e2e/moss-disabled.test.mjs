@@ -1,11 +1,10 @@
+import { electron, closeTestApp } from './launch.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { _electron as electron } from 'playwright';
-import { closeTestApp } from './launch.mjs';
 
 test('desktop: MOSS is hidden and blocked by default, saved profiles survive migration, save and restart', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'xw-moss-disabled-')), profile = path.join(root, 'profile'); await mkdir(profile);

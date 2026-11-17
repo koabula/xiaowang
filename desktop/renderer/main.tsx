@@ -4,6 +4,9 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { installPreviewBridge } from "./preview.ts";
 import "./styles.css";
+import "./workspace.css";
+import "./message-composer.css";
+import "./controls.css";
 
 installPreviewBridge();
 

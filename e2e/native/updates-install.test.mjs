@@ -10,8 +10,8 @@ import path from 'node:path';
 import os from 'node:os';
 import asar from '@electron/asar';
 import { chromium } from 'playwright';
-import { Runtime } from '../src/runtime.ts';
-import { launchPackaged, closeTestApp } from './launch.mjs';
+import { Runtime } from '../../src/runtime.ts';
+import { launchPackaged, closeTestApp } from '../launch.mjs';
 const run = promisify(execFile);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, timeout = 30000) { const end = Date.now() + timeout; while (Date.now() < end) { try { const value = await check(); if (value) return value; } catch {} await sleep(80); } throw new Error('Installed update did not restart successfully'); }
@@ -19,7 +19,7 @@ async function until(check, timeout = 30000) { const end = Date.now() + timeout;
 // This test replaces only a disposable copy of the packaged app. User profiles
 // and the real installed application are never selected as update targets.
 test('packaged mac: click updates, replaces and restarts the app while preserving its isolated data', { skip: process.platform !== 'darwin' || !process.env.XIAOWANG_E2E_EXECUTABLE, timeout: 120000 }, async t => {
-  const currentVersion = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
+  const currentVersion = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
   const nextVersion = currentVersion.replace(/\d+$/, value => String(Number(value) + 1));
   const root = await mkdtemp(path.join(os.tmpdir(), "xw-real-update's-"));
   const profile = path.join(root, 'profile'); const home = path.join(root, 'home'); await mkdir(profile);
@@ -47,7 +47,7 @@ test('packaged mac: click updates, replaces and restarts the app while preservin
   }); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const env = { ...process.env, XIAOWANG_HOME: home, XIAOWANG_USER_DATA: profile, XIAOWANG_UPDATE_TEST_FEED: `http://127.0.0.1:${server.address().port}/` }; delete env.ELECTRON_RUN_AS_NODE;
   const executable = path.join(installed, 'Contents/MacOS/xiaowang');
-  const app = await launchPackaged(executable, ['--no-sandbox'], env); let restarted;
+  const app = await launchPackaged(executable, ['--no-sandbox'], env, { native: true }); let restarted;
   const cache = path.join(os.homedir(), 'Library/Caches', `xiaowang-test-${createHash('sha256').update(profile).digest('hex').slice(0, 16)}`);
   t.after(async () => {
     if (restarted) {

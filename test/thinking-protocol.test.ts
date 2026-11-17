@@ -137,7 +137,7 @@ test("reasoning is counted as input, kept whole during deterministic projection,
 test("output exhaustion records reasoning/usage but never executes truncated tool calls", async t => {
   const { runtime } = fixture(t), bot = runtime.activeBot();
   t.mock.method(globalThis, "fetch", async () => Response.json({ choices: [{ finish_reason: "length", message: { content: "", reasoning_content: "unfinished", tool_calls: [{ id: "bad", function: { name: "write_file", arguments: '{"path":"unsafe"}' } }] } }], usage: { prompt_tokens: 100, completion_tokens: 4096 } }));
-  await assert.rejects(runTurn(runtime, { botId: bot.id, input: "test", provider: createProvider(config) }), /输出预算/);
+  await assert.rejects(runTurn(runtime, { botId: bot.id, input: "test", provider: createProvider(config) }), /达到长度上限/);
   const events = runtime.store.getEvents(bot.id);
   assert.equal(events.some(({ event }) => event.type === "tool_result"), false);
   assert.ok(events.some(({ event }) => event.type === "assistant_turn" && event.stopReason === "length" && event.protocol?.reasoningContent === "unfinished"));

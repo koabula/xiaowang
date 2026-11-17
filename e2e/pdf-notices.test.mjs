@@ -1,11 +1,10 @@
+import { electron, closeTestApp } from './launch.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { _electron as electron } from 'playwright';
 import { Runtime } from '../src/runtime.ts';
-import { closeTestApp } from './launch.mjs';
 
 // Real PDF annotation borders, including a quadrilateral SVG border, and enough
 // links for PDF.js's annotation z-index to exceed the settings overlay's level.

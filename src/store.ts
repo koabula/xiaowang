@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { STEWARD_SLUG, stewardPrompt } from "./persona.ts";
 import { APP_ICON_INK, APP_ICON_NAME } from "./beam.ts";
 import { MEMORY_TYPES } from "./memory.ts";
+import { LIBRARY_BYTE_CAP, librarySizeError } from "./library-limits.ts";
 import type { Bot, SessionEvent, StoredEvent, Term } from "./types.ts";
 
 interface BotRow {
@@ -78,6 +79,8 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS idx_session_events_bot
         ON session_events (bot_id, id);
+      CREATE INDEX IF NOT EXISTS idx_session_events_message
+        ON session_events (bot_id, id) WHERE type IN ('user_text', 'assistant_turn');
       CREATE TABLE IF NOT EXISTS library_files (
         id TEXT PRIMARY KEY,
         sha256 TEXT NOT NULL UNIQUE,
@@ -314,6 +317,25 @@ export class Store {
     return { id: row.id, botId: row.bot_id, createdAt: row.created_at, event: JSON.parse(row.payload_json) as SessionEvent };
   }
 
+  /** Walk recent message rows only; stop as soon as the existing preview rule matches. */
+  latestMessage(botId: string): StoredEvent | undefined {
+    this.requireBot(botId);
+    const rows = this.db.prepare("SELECT * FROM session_events WHERE bot_id = ? AND type IN ('user_text', 'assistant_turn') ORDER BY id DESC").iterate(botId);
+    for (const raw of rows) {
+      const row = raw as unknown as EventRow, event = JSON.parse(row.payload_json) as SessionEvent;
+      if ((event.type === "user_text" || event.type === "assistant_turn") && (event.text.trim() || event.type === "user_text" && event.attachments?.length))
+        return { id: Number(row.id), botId: row.bot_id, createdAt: row.created_at, event };
+    }
+  }
+
+  eventsByIds(botId: string, ids: readonly number[]): StoredEvent[] {
+    this.requireBot(botId);
+    if (!ids.length) return [];
+    const rows = this.db.prepare("SELECT * FROM session_events WHERE bot_id = ? AND id IN (SELECT value FROM json_each(?)) ORDER BY id ASC")
+      .all(botId, JSON.stringify(ids)) as unknown as EventRow[];
+    return rows.map(row => ({ id: Number(row.id), botId: row.bot_id, createdAt: row.created_at, event: JSON.parse(row.payload_json) as SessionEvent }));
+  }
+
   searchMemory(botId: string, query: string, options: { types?: string[]; afterId?: number; limit?: number } = {}) {
     this.requireBot(botId);
     query = query.trim();
@@ -383,7 +405,7 @@ export class Store {
   addLibraryBytes(botId: string, filename: string, bytes: Buffer): LibraryAddResult {
     this.requireBot(botId);
     if (bytes.length > LIBRARY_BYTE_CAP) {
-      throw new Error(`文件有 ${bytes.length} 字节，超过 ${LIBRARY_BYTE_CAP} 字节。`);
+      throw new Error(librarySizeError(bytes.length));
     }
     const display = displayFilename(filename);
     if (isSensitiveName(display)) throw new Error(`拒绝把 ${display} 放进资料库。`);
@@ -563,8 +585,6 @@ interface LibraryFileRow {
 interface LibraryRow extends LibraryFileRow {
   filename: string;
 }
-
-const LIBRARY_BYTE_CAP = 80 * 1024 * 1024;
 
 function rowToLibraryRef(row: LibraryRow): LibraryRef {
   return {

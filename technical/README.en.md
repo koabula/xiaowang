@@ -158,6 +158,14 @@ The renderer reports actual playback position, segment completion, and idle stat
 
 Queued jobs resume after restart. Work active during shutdown returns as `interrupted`; users can inspect artifacts and retry. Tool errors return to the model as tool results. Model-request failures are recorded by the queue.
 
+The desktop acquires a single-instance lock before opening the database or restoring jobs. A second launch shows the existing window without starting another worker. Manual retries still require checking existing artifacts.
+
+PDF excerpts include an `xwref` link for each page, identifying the original file and page number. Chat and Markdown notes share link handling. The file picker and workspace opening path share preview-format rules.
+
+Text credentials and unsaved key drafts are scoped to service origins (scheme, host, and port). Environment values apply only to the running session; saving ordinary preferences does not persist them. Explicitly entered keys are saved with their service. When system encryption is unavailable, only non-secret preferences are stored and keys remain session-only. Legacy credentials migrate to their original service.
+
+Native calls accept only the trusted main document in the application window. External navigation is blocked there; HTTP links open in the system browser. Microphone access is limited to audio requests from the app document. The embedded web session denies device permissions.
+
 [Call scheduling](../desktop/main/call.ts) · [Gemini calls](../desktop/main/gemini-call.ts) · [Browser](../desktop/main/browser.ts) · [Job recovery](../src/jobs.ts)
 
 ## Stack and verification
@@ -167,3 +175,5 @@ The desktop uses Electron, React, and TypeScript, with PDF.js for reading and HT
 [Context tests](../test/context-manager.test.ts) cover prefixes, budgets, deterministic checkpoints, cancellation, restart, supplements, and state retention. [History tests](../test/memory.test.ts) cover Chinese search, pagination, access control, original text, and tool ownership. [Provider tests](../test/context-provider.test.ts) cover actual cache-usage parsing.
 
 [Automatic budget tests](../test/research-budget.test.ts) cover watermarks, metadata discovery, cache isolation, and legacy-setting removal. [Desktop regression](../e2e/research-budget.test.mjs) covers migration, restart, and real thinking/tool requests against fixtures.
+
+[References and previews](../e2e/references.test.mjs), [single-instance ownership](../e2e/single-instance.test.mjs), and [credential and page boundaries](../e2e/security-boundaries.test.mjs) cover exact-page links, reopened notes, duplicate launches, provider switches, temporary keys, native-call isolation, and microphone permissions.

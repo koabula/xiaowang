@@ -1,11 +1,10 @@
+import { electron, closeTestApp } from './launch.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { _electron as electron } from 'playwright';
-import { closeTestApp } from './launch.mjs';
 
 test('legacy budgets disappear and automatic limits apply to the desktop thinking/tool loop', { timeout: 60000 }, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'xw-research-budget-'));

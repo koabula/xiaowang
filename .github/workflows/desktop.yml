@@ -36,14 +36,27 @@ jobs:
         run: npx --no-install playwright install-deps chromium
       - name: Prepare virtual audio for desktop voice tests
         run: |
-          sudo apt-get install -y pulseaudio
+          sudo apt-get install -y pulseaudio dbus-x11 gnome-keyring
           pulseaudio --start --exit-idle-time=-1
           pactl load-module module-null-sink sink_name=xiaowang_ci
           pactl set-default-sink xiaowang_ci
           pactl set-default-source xiaowang_ci.monitor
       - name: Exercise the desktop app with local model fixtures
         timeout-minutes: 5
-        run: xvfb-run --auto-servernum node --test --test-concurrency=1 --test-reporter=tap --test-timeout=60000 e2e/*.test.mjs
+        run: |
+          dbus-run-session -- xvfb-run --auto-servernum bash -euc '
+            export XDG_CURRENT_DESKTOP=GNOME
+            printf "%s" "xiaowang-ci" | gnome-keyring-daemon --unlock --components=secrets
+            node --test --test-reporter=tap --test-concurrency=1 --test-timeout=60000 e2e/*.test.mjs
+          '
+      - name: Exercise native focus and clipboard on a dedicated virtual desktop
+        timeout-minutes: 5
+        run: |
+          dbus-run-session -- xvfb-run --auto-servernum bash -euc '
+            export XDG_CURRENT_DESKTOP=GNOME
+            printf "%s" "xiaowang-ci" | gnome-keyring-daemon --unlock --components=secrets
+            node --test --test-reporter=tap --test-concurrency=1 --test-timeout=180000 e2e/native/*.test.mjs
+          '
 
   package:
     name: Package ${{ matrix.name }}
@@ -90,7 +103,7 @@ jobs:
         if: matrix.name == 'macOS'
         env:
           XIAOWANG_MAC_RELEASE_DIR: release
-        run: node --test --test-concurrency=1 --test-timeout=180000 e2e/mac-release.test.mjs
+        run: node --test --test-concurrency=1 --test-timeout=180000 e2e/native/mac-release.test.mjs
       - name: Write SHA-256 checksums
         run: node desktop/scripts/checksums.mjs
       - name: Upload installers

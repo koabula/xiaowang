@@ -1,3 +1,4 @@
+import { electron, launchPackaged, closeTestApp } from './launch.mjs';
 import { modelText } from './fixtures/model-content.mjs';
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -5,10 +6,8 @@ import { createServer } from "node:http";
 import { mkdtemp, mkdir, writeFile, rm, rename } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { _electron as electron } from "playwright";
 import { WebSocketServer } from "ws";
 import { Runtime } from "../src/runtime.ts";
-import { launchPackaged, closeTestApp } from "./launch.mjs";
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(predicate, timeout = 12000) {
@@ -206,7 +205,7 @@ test("desktop: voice interruption, PDF Viewer, bot files, settings and saved sta
   await page.getByRole('combobox',{name:'PDF zoom / PDF缩放',exact:true}).selectOption('125');
   const pdfZoom = page.getByRole('combobox', { name: 'PDF zoom / PDF缩放', exact: true });
   const pageWidth = await page.locator('.pdfViewer .page').first().evaluate(node => node.getBoundingClientRect().width);
-  const appZoom = await app.evaluate(({ webContents }) => webContents.getAllWebContents().find(item => item.getType() === 'window').getZoomFactor());
+  const appPixelRatio = await page.evaluate(() => window.devicePixelRatio);
   await page.locator('.pdf-scroll').evaluate(node => {
     const rect = node.getBoundingClientRect();
     const event = new WheelEvent('wheel', { ctrlKey: true, deltaY: -24, clientX: rect.x + 100, clientY: rect.y + 100, bubbles: true, cancelable: true });
@@ -221,7 +220,7 @@ test("desktop: voice interruption, PDF Viewer, bot files, settings and saved sta
     await page.locator('.pdf-scroll').evaluate((node, deltaY) => { for (let n = 0; n < 20; n++) node.dispatchEvent(new WheelEvent('wheel', { ctrlKey: true, deltaY, bubbles: true, cancelable: true })); }, deltaY);
     assert.equal(await pdfZoom.inputValue(), expected);
   }
-  assert.equal(await app.evaluate(({ webContents }) => webContents.getAllWebContents().find(item => item.getType() === 'window').getZoomFactor()), appZoom);
+  assert.equal(await page.evaluate(() => window.devicePixelRatio), appPixelRatio, 'PDF gestures must not zoom the application viewport');
   await page.waitForTimeout(100);
   await page.getByRole('combobox',{name:'PDF zoom / PDF缩放',exact:true}).selectOption('page-width');
   await page.evaluate(id=>window.xiaowang.openReference('xiaowang',id,1),reference.id);
