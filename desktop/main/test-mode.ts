@@ -3,6 +3,11 @@ import { app, clipboard, type BrowserWindowConstructorOptions } from "electron";
 // Set only by the desktop test launcher; normal and development launches are unchanged.
 export const backgroundTest = process.env.XIAOWANG_E2E_MODE === "background";
 if (backgroundTest && process.platform === "darwin") app.setActivationPolicy("accessory");
+if (backgroundTest && process.platform === "linux") {
+  // Xvfb has no display-driven GPU frame clock for an unmapped native window.
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("disable-frame-rate-limit");
+}
 // Playwright's Electron loader forces basic_text on Linux. Exercise the CI
 // session's real keyring so persistence tests retain the production guarantees.
 if (process.platform === "linux" && (backgroundTest || process.env.XIAOWANG_E2E_MODE === "native")) {
@@ -14,11 +19,6 @@ declare global {
 }
 if (backgroundTest) {
   const audit = globalThis.__xwBackgroundAudit = { shown: [] as number[], focused: [] as number[], clipboard: [] as string[] };
-  app.on("web-contents-created", (_event, contents) => {
-    // The constructor option does not reactivate a renderer already hidden at
-    // its first commit. Keep frames running without showing the native window.
-    contents.on("did-finish-load", () => contents.setBackgroundThrottling(false));
-  });
   app.on("browser-window-created", (_event, window) => {
     if (window.isVisible()) audit.shown.push(window.id);
     if (window.isFocused()) audit.focused.push(window.id);
