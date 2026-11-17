@@ -21,6 +21,7 @@ export interface CallHandlers {
   onPhase: (phase: "connecting" | "live" | "closed", detail?: string) => void;
   onState?: (state: VoiceState) => void;
   onVisual?: (state: VisualShare) => void;
+  fitQwenImage?: (jpeg: string) => string;
   onAudio: (pcm: Buffer, serial: number, identity?: AudioIdentity) => void;
   onInterrupt: (interruption: PlaybackInterruption) => void;
   onLine: (who: "user" | "assistant", text: string, partial: boolean, itemId?: string, order?: number) => void;
@@ -135,6 +136,19 @@ export class LiveCall {
   supportsVision(): boolean { return this.family !== "doubao"; }
   shareVisual(images: VisualInput[]): Promise<boolean> {
     if (this.family === "doubao") { this.handlers.onVisual?.({ phase: "unavailable", detail: "豆包当前直连接口未确认支持视觉，请交给后台分析。" }); return Promise.resolve(false); }
+    if (this.family === "qwen") {
+      try {
+        images = images.map(image => {
+          if (image.data.length <= 256 * 1024) return image;
+          const data = this.handlers.fitQwenImage?.(image.data);
+          if (!data || data.length > 256 * 1024) throw new Error("图片超过千问实时接口的大小限制。");
+          return { ...image, data };
+        });
+      } catch (error) {
+        this.handlers.onVisual?.({ phase: "error", detail: error instanceof Error ? error.message : String(error) });
+        return Promise.resolve(false);
+      }
+    }
     return this.visuals.add(images);
   }
   clearVisual(): void { this.visuals.clearView(); this.handlers.onVisual?.({ phase: "idle" }); }
@@ -260,6 +274,8 @@ export class LiveCall {
       this.pendingUserLine = { who: "user", text: "" }; this.lines.push(this.pendingUserLine); this.openWho = "user";
       if (notice.itemId) { this.itemTurns.set(notice.itemId, this.userTurn); this.itemLines.set(`user:${notice.itemId}`, this.pendingUserLine); }
       this.userTalking = true; this.waitingForInput = true; this.userReplyPending = false; this.sealUser = false;
+      // Qwen associates image buffers with the audio turn that contains them.
+      if (this.family === "qwen") this.visuals.replayForSpeech();
       this.clearLoop(); this.ending = false; this.goodbyeReady = false;
       this.interrupt(); this.state("listening"); return;
     }

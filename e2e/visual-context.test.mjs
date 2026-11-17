@@ -27,12 +27,23 @@ for (const service of ['gemini','openai','qwen']) test(`${service}: sent image +
   const page=await app.firstWindow();page.setDefaultTimeout(12000);await page.waitForSelector('.composer');
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.evaluate(()=>{window.visualNotes=[];window.xiaowang.onCall(n=>{if(n.phase==='visual')window.visualNotes.push(n);});});
-  const png=await app.evaluate(({nativeImage})=>nativeImage.createFromBitmap(Buffer.from([0,255,0,255,0,255,0,255,0,255,0,255,0,255,0,255]),{width:2,height:2}).toPNG().toString('base64'));
-  const image=await page.evaluate(data=>window.xiaowang.attach('xiaowang','image.png',Uint8Array.from(atob(data),c=>c.charCodeAt(0))),png);
+  const png=await app.evaluate(({nativeImage}, large)=>{
+    const size=large?900:2, pixels=Buffer.alloc(size*size*4);
+    let seed=7;
+    for(let i=0;i<pixels.length;i+=4){
+      seed=(Math.imul(seed,1664525)+1013904223)>>>0;
+      const green=!large||i<size*4*20;
+      pixels[i]=green?0:seed>>>24;pixels[i+1]=green?255:seed>>>16;pixels[i+2]=green?0:seed>>>8;pixels[i+3]=255;
+    }
+    const image=nativeImage.createFromBitmap(pixels,{width:size,height:size});
+    return {data:image.toPNG().toString('base64'),jpegSize:image.toJPEG(85).toString('base64').length};
+  },service==='qwen');
+  const image=await page.evaluate(data=>window.xiaowang.attach('xiaowang','image.png',Uint8Array.from(atob(data),c=>c.charCodeAt(0))),png.data);
   await page.evaluate(()=>window.xiaowang.callStart('xiaowang'));await page.locator('.voice-panel.phase-listening').waitFor();
   const frames=()=>packets.flatMap(p=>p.realtimeInput?.video?[p.realtimeInput.video.data]:p.type==='input_image_buffer.append'?[p.image]:p.item?.content?.filter(c=>c.type==='input_image').map(c=>c.image_url.split(',')[1])??[]);
   await sleep(300);assert.equal(frames().length,0,'Imported but unsent draft stays private');
   await page.evaluate(id=>window.xiaowang.ask('xiaowang','看看这张图',[id]),image.refId);await until(()=>frames().length===1,'Sent image not shared');
+  if(service==='qwen'){assert.ok(png.jpegSize>256*1024);assert.ok(frames()[0].length<=256*1024);}
   assert.equal(await app.evaluate(({nativeImage},data)=>{const img=nativeImage.createFromBuffer(Buffer.from(data,'base64')),p=img.toBitmap();return p[1]>220&&p[0]<30&&p[2]<30;},frames()[0]),true);
   const pdf=await page.evaluate(bytes=>window.xiaowang.attach('xiaowang','pages.pdf',new Uint8Array(bytes)),[...coloredPdf()]);
   await page.evaluate(id=>window.xiaowang.openReference('xiaowang',id,1),pdf.refId);await until(()=>frames().length>=2,'First PDF page not shared');

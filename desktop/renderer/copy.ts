@@ -64,6 +64,7 @@ export interface Copy {
   singapore: string;
   workspace: string;
   workspacePlaceholder: string;
+  optionalWorkspacePlaceholder: string;
   key: string;
   voice: string;
   preview: string;
@@ -141,7 +142,8 @@ const zh: Copy = {
   beijing: "北京",
   singapore: "新加坡",
   workspace: "工作空间",
-  workspacePlaceholder: "工作空间 ID，或完整 wss 地址",
+  workspacePlaceholder: "必填：工作空间 ID 或完整 wss 地址",
+  optionalWorkspacePlaceholder: "可留空，使用所选地域的公共端点",
   key: "密钥",
   voice: "音色",
   preview: "试听",
@@ -219,7 +221,8 @@ const en: Copy = {
   beijing: "Beijing",
   singapore: "Singapore",
   workspace: "Workspace",
-  workspacePlaceholder: "Workspace ID, or a full wss URL",
+  workspacePlaceholder: "Required workspace ID or full wss URL",
+  optionalWorkspacePlaceholder: "Optional, defaults to the regional endpoint",
   key: "Key",
   voice: "Voice",
   preview: "Preview",

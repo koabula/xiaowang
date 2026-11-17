@@ -72,9 +72,6 @@ export function SettingsPanel({
     workspace: settings?.realtimeWorkspace,
     url: settings?.realtimeUrl,
   });
-  const initialVoice = saved.service === "qwen"
-    ? resolveRealtime({ service: "openai", ...settings?.realtimeProfiles?.openai })
-    : saved;
   const [model, setModel] = useState(settings?.model ?? "");
   const [models, setModels] = useState<string[]>([]);
   const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? "");
@@ -83,11 +80,11 @@ export function SettingsPanel({
   const textOrigin = textServiceOrigin({ baseUrl, apiStyle, model });
   const apiKey = textKeyDrafts[textOrigin] ?? "";
   const setApiKey = (value: string) => setTextKeyDrafts(previous => ({ ...previous, [textOrigin]: value }));
-  const [service, setService] = useState<RealtimeServiceId>(initialVoice.service);
-  const [realtimeModel, setRealtimeModel] = useState(initialVoice.model);
-  const [voice, setVoice] = useState(initialVoice.voice);
-  const [region, setRegion] = useState<RealtimeRegion>(initialVoice.region);
-  const [workspace, setWorkspace] = useState(initialVoice.workspace);
+  const [service, setService] = useState<RealtimeServiceId>(saved.service);
+  const [realtimeModel, setRealtimeModel] = useState(saved.model);
+  const [voice, setVoice] = useState(saved.voice);
+  const [region, setRegion] = useState<RealtimeRegion>(saved.region);
+  const [workspace, setWorkspace] = useState(saved.workspace);
   const [realtimeKey, setRealtimeKey] = useState("");
   const [clearVoiceKey, setClearVoiceKey] = useState(false);
   const [profileDrafts, setProfileDrafts] = useState<Partial<Record<RealtimeServiceId, VoiceProfilePatch>>>(() => Object.fromEntries(REALTIME_SERVICES.map(({ id }) => {
@@ -155,7 +152,6 @@ export function SettingsPanel({
   }
   const voiceChoices = voicesFor(service, realtimeModel);
   const modelChoices = modelsFor(service);
-  const needsWorkspace = service === "qwen";
 
   useEffect(() => {
     const audio = previewAudio.current;
@@ -283,7 +279,7 @@ export function SettingsPanel({
           <div className="field-block">
             <span>{copy.service}</span>
             <div className="with-action">
-              <FieldSelect label={copy.service} value={service} onChange={(value) => chooseService(value as RealtimeServiceId)} options={realtimeServicesForSettings(settings?.experimentalMossEnabled, settings?.geminiEnabled).filter(item => item.id !== "qwen").map((item) => ({ value: item.id, label: item.name }))} />
+              <FieldSelect label={copy.service} value={service} onChange={(value) => chooseService(value as RealtimeServiceId)} options={realtimeServicesForSettings(settings?.experimentalMossEnabled, settings?.geminiEnabled).map((item) => ({ value: item.id, label: item.name }))} />
               <button type="button" onClick={() => void window.xiaowang.openKeyPage(service, region)}><ExternalLink size={15} strokeWidth={1.75} />{copy.getKey}</button>
             </div>
           </div>
@@ -295,8 +291,8 @@ export function SettingsPanel({
               ]} />
             </label>
           ) : null}
-          {needsWorkspace ? (
-            <label>{copy.workspace}<input value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder={copy.workspacePlaceholder} /></label>
+          {service === "qwen" ? (
+            <label>{copy.workspace}<input value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder={realtimeModel.startsWith("qwen3.8") ? copy.workspacePlaceholder : copy.optionalWorkspacePlaceholder} /></label>
           ) : null}
           <div className="field-block"><div className="voice-key-heading"><label htmlFor="realtime-key">{copy.key}</label>{(settings?.realtimeProfiles?.[service]?.keyHint || (service === saved.service && settings?.realtimeKeyHint)) ? <button className="clear-voice-key" type="button" onClick={() => { setClearVoiceKey(!clearVoiceKey); setRealtimeKey(""); }}>{clearVoiceKey ? locale === "en" ? "Undo key removal" : "撤销密钥清除" : locale === "en" ? "Remove saved key" : "清除已保存密钥"}</button> : null}</div>
           <input id="realtime-key" data-testid="voice-key" value={realtimeKey} type="password" onChange={(event) => { setRealtimeKey(event.target.value); setClearVoiceKey(false); }} placeholder={clearVoiceKey ? "" : settings?.realtimeProfiles?.[service]?.keyHint || (service === saved.service ? settings?.realtimeKeyHint : "") || (locale === "en" ? "Not configured" : "未配置")} />

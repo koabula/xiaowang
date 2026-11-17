@@ -298,5 +298,14 @@ test("OpenAI images are passive conversation items; Qwen waits for audio then ap
   qwen.call.sendAudio(Buffer.alloc(640)); assert.equal(await sending, true);
   assert.ok(qwen.sent.findIndex(p => p.type === "input_audio_buffer.append") < qwen.sent.findIndex(p => p.type === "input_image_buffer.append"));
   assert.equal(qwen.sent.find(p => p.type === "input_image_buffer.append")?.image, "REAL-PIXELS"); assert.equal(qwen.creates().length, 0);
+  qwen.emit({ type: "input_audio_buffer.speech_started" });
+  await delay(1100);
+  assert.equal(qwen.sent.filter(p => p.type === "input_image_buffer.append").length, 2);
+  qwen.call.clearVisual();
+  qwen.emit({ type: "input_audio_buffer.speech_stopped" });
+  qwen.emit({ type: "input_audio_buffer.speech_started" });
+  await delay(1100);
+  assert.equal(qwen.sent.filter(p => p.type === "input_image_buffer.append").length, 2);
+  assert.equal(qwen.creates().length, 0);
   const doubao = fixture(t, undefined, DOUBAO_REALTIME_URL); assert.equal(await doubao.call.shareVisual([image]), false); assert.equal(doubao.sent.some(p => p.type === "input_image_buffer.append" || p.item), false);
 });

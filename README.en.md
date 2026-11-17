@@ -39,7 +39,9 @@ XiaoWang checks for updates automatically. When a new version is available, clic
 2. For calls, separately choose a **voice** service, model, and voice, and enter that provider's key. Voice is optional; text and voice can use different providers.
 3. Create a topic workspace and add a paper or document, or start by typing a question. Click the **voice button on the right of the message input** to begin a call.
 
-Voice calls support OpenAI, Doubao full-duplex, and Gemini Live. XiaoWang remembers the key, model, and voice for each provider when you switch. In our current testing, Doubao offers the best user experience.
+Voice calls support Qwen, OpenAI, Doubao full-duplex, and Gemini Live. XiaoWang remembers the key, model, and voice for each provider when you switch. In our current testing, Doubao offers the best user experience.
+
+For Qwen voice calls, we recommend **3.8 Omni Flash**. In our calls, it followed spoken instructions more reliably than 3.5.
 
 ## Work with XiaoWang
 
