@@ -835,9 +835,9 @@ function startCall(slug: string): void {
     onTranscript(who, text) {
       if (who !== "user") return;
       if (endpoint.family === "moss") return;
-      const accepted = voiceTasks.userText(text, endpoint.family !== "gemini");
-      const job = accepted || voiceTasks.latest();
-      live?.updateContext("currentVoiceTask", job ? voiceJobReceipt(job) : "没有已受理的后台任务。需要分析、梳理或调研时调用 delegate_task；口头承诺不代表已经开始。");
+      voiceTasks.userText(text);
+      const job = voiceTasks.latest();
+      live?.updateContext("currentVoiceTask", job ? voiceJobReceipt(job) : "没有已受理的后台任务。");
     },
     delegate(task) {
       const focus = focusedFiles.get(slug);
@@ -877,7 +877,7 @@ function startCall(slug: string): void {
       // A research turn is already owned by the background LLM. Realtime can
       // still locate/open sources, but must not run a second competing workflow.
       const accepted = voiceTasks.current();
-      if (accepted && !["list_library", "list_files", "show_stage"].includes(name)) return voiceJobReceipt(accepted);
+      if (accepted && !["list_library", "list_files", "show_stage", "read_document", "read_file"].includes(name)) return voiceJobReceipt(accepted);
       let input: unknown = {};
       try {
         input = args.trim() ? JSON.parse(args) : {};

@@ -53,7 +53,8 @@ test("rapid text and voice supplements join one turn after an in-flight answer, 
   const revision = queue.submit({ botId, task: "Focus on the experiments" });
   assert.equal(revision.id, first.id);
   const voice = new VoiceTasks(queue, botId, "phone", text => text);
-  voice.userText("补充，简短一点", false);
+  voice.userText("补充，简短一点");
+  voice.delegate("补充，简短一点", "supplement", "when_idle");
   const separate = queue.submit({ botId, task: "SEPARATE-TRANSLATION" }, true);
   assert.equal(queue.list().length, 2);
   assert.equal(separate.status, "queued");
