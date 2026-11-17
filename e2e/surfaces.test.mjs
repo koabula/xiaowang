@@ -37,7 +37,7 @@ test('real renderer: Canvas adapters and interrupted audio never reopen old play
   }
   // Legacy native controls and the external pager share one cursor.
   await page.evaluate(html=>{document.querySelector('iframe').srcdoc=html;window.reports=[];},withCanvasPager(legacy));
-  await page.frameLocator('iframe').locator('.s.on').click();
+  await page.frameLocator('iframe').locator('.s.on').evaluate(node => node.click());
   await page.waitForFunction(()=>window.reports.some(r=>r.page===2&&!r.error));
   await page.evaluate(()=>document.body.innerHTML='');
   const bundle=await build({entryPoints:['desktop/renderer/call-audio.ts'],bundle:true,platform:'browser',format:'iife',globalName:'AudioModule',write:false});

@@ -3,6 +3,11 @@ import { app, clipboard, type BrowserWindowConstructorOptions } from "electron";
 // Set only by the desktop test launcher; normal and development launches are unchanged.
 export const backgroundTest = process.env.XIAOWANG_E2E_MODE === "background";
 if (backgroundTest && process.platform === "darwin") app.setActivationPolicy("accessory");
+// Playwright's Electron loader forces basic_text on Linux. Exercise the CI
+// session's real keyring so persistence tests retain the production guarantees.
+if (process.platform === "linux" && (backgroundTest || process.env.XIAOWANG_E2E_MODE === "native")) {
+  app.commandLine.appendSwitch("password-store", "gnome-libsecret");
+}
 
 declare global {
   var __xwBackgroundAudit: { shown: number[]; focused: number[]; clipboard: string[] } | undefined;
