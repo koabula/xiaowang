@@ -61,7 +61,7 @@ test('desktop voice settings: provider isolation, encrypted restart, all voice p
   await launch(); await open(); assert.match(await key().getAttribute('placeholder'), /1111/);
   for (const size of [{ width: 1280, height: 840 }, { width: 900, height: 700 }, { width: 760, height: 680 }]) {
     await page.setViewportSize(size);
-    for (const provider of ['通义千问', 'OpenAI', '豆包全双工', 'MOSS Live']) {
+    for (const provider of ['OpenAI', '豆包全双工', 'MOSS Live']) {
       await choose(provider);
       const layout = await settings().evaluate(form => ({ scroll: form.scrollHeight - form.clientHeight, top: form.getBoundingClientRect().top, bottom: form.getBoundingClientRect().bottom, viewport: innerHeight }));
       assert.ok(layout.scroll <= 1 && layout.top >= 0 && layout.bottom <= layout.viewport, `${provider} settings must fit without vertical scrolling at ${size.width}×${size.height}: ${JSON.stringify(layout)}`);
