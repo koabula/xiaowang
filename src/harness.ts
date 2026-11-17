@@ -134,7 +134,8 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
   }));
   options.onInput?.(context.at(-1)!.id);
 
-  const tools = toolSchemas();
+  const allowSpawn = options.channel !== "voice";
+  const tools = toolSchemas(allowSpawn);
   const manager = runtime.modelContext(bot, stableLlmSystem(bot, runtime.ensureSteward().name, options.locale), tools, options.provider);
   const boundaryIds = [context.at(-1)!.id, ...(initialUpdates?.events.map(event => event.id) ?? [])];
   let metadata = taskMetadata(bot, context, runtime.store.listLibrary(bot.id).map(ref => ({ id: ref.id, filename: ref.filename })));
@@ -226,6 +227,7 @@ async function runTurnOnce(runtime: Runtime, options: RunTurnOptions): Promise<T
         };
       }
       const outcome = await executeTool(call.name, call.input, {
+        allowSpawn,
         store: runtime.store,
         bot: runtime.store.requireBot(bot.id),
         enqueueKickoff: (job) => options.onKickoff ? options.onKickoff(job) : runtime.enqueueKickoff(job),

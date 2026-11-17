@@ -838,8 +838,8 @@ function startCall(slug: string): void {
   openCall(socketUrl(endpoint), key, session, endpoint.inputRate, endpoint.outputRate, slug, "", {
     onTranscript(who, text) {
       if (who !== "user") return;
-      if (endpoint.family === "moss") return;
       voiceTasks.userText(text);
+      if (endpoint.family === "moss") return;
       const job = voiceTasks.latest();
       live?.updateContext("currentVoiceTask", job ? voiceJobReceipt(job) : "没有已受理的后台任务。");
     },
@@ -889,6 +889,7 @@ function startCall(slug: string): void {
         input = null;
       }
       const outcome = await executeTool(name, input, {
+        allowSpawn: name !== "spawn_bot" || voiceTasks.takeSpawnRequest(),
         store: runtime.store,
         bot,
         enqueueKickoff: job => { jobs.enqueue({ botId: job.botId, task: job.task, channel: "system", display: "conversation" }); },

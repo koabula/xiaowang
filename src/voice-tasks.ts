@@ -9,9 +9,25 @@ export function isQueuedVoiceTask(text: string): boolean {
   return /排队|独立任务|单独.{0,5}任务|separate (?:task|job)|new task|(?:做完|完成|结束).{0,10}(?:再|之后)|另(?:开|起|建).{0,6}任务|queue (?:a |this |the )?(?:new )?task|after (?:this|you finish)/i.test(text);
 }
 
+/** Only the actual user's affirmative request can open another workspace. */
+export function requestsSubbot(text: string): boolean {
+  return text.split(/[，,。！？!?；;]/).some(part => {
+    if (/不要|不必|不用|别|没有|没让|不是|不能|是否|如果|假如|\b(?:not|never|don't|if|unless)\b/i.test(part)) return false;
+    return /(?:开|建|创)(?:建|立|设)?(?:一?个|一个新的|新的|独立的|新|独立|单独的|\s){0,5}(?:sub[ -]?bot|子助手|子任务|工作区|助手)|\b(?:create|open|start|spawn) (?:a |an )?(?:new |separate )?(?:sub[ -]?bot|workspace|assistant)\b/i.test(part);
+  });
+}
+
 /** One accepted user turn owns one durable job, regardless of subsequent tool choices. */
 export class VoiceTasks {
   private turn = 0;
+  private userRequest = "";
+  private spawned = false;
+
+  takeSpawnRequest(): boolean {
+    if (this.spawned || !requestsSubbot(this.userRequest)) return false;
+    this.spawned = true;
+    return true;
+  }
   private accepted: string | null = null;
   private readonly queue: JobQueue;
   private readonly botId: string;
@@ -26,6 +42,8 @@ export class VoiceTasks {
 
   userText(text: string): void {
     this.turn += 1;
+    this.userRequest = text;
+    this.spawned = false;
     const clauses = text.split(/[。！？!?；;]/).map(part => part.trim()).filter(Boolean);
     this.accepted = clauses.length > 0 && clauses.every(isVoiceProgressRequest) ? this.latest()?.id ?? null : null;
   }

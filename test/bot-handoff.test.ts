@@ -70,3 +70,17 @@ for (const failure of ['cancel', 'error', 'step-limit'] as const) test(`unfinish
   if (failure === 'step-limit') await turn; else await assert.rejects(turn);
   assert.equal(dispatched, 0);
 });
+
+test('voice background worker finishes in place even if a provider calls an unadvertised spawn tool', async t => {
+  const { runtime, bot } = fixture(t);
+  let calls = 0;
+  const provider: LlmProvider = { model: 'fixture', async complete(request) {
+    assert.ok(!request.tools.some(tool => tool.name === 'spawn_bot'));
+    if (++calls === 1) return { text: '', toolCalls: [{ id: 'spawn', name: 'spawn_bot', arguments: JSON.stringify(spawn()) }] };
+    assert.ok(request.messages.some(message => message.role === 'tool' && message.content.includes('当前聊天')));
+    return { text: '完整表格', toolCalls: [] };
+  } };
+  const result = await runTurn(runtime, { botId: bot.id, channel: 'voice', input: '你开一个后台任务，然后发给我。', provider });
+  assert.equal(result.finalText, '完整表格');
+  assert.equal(runtime.store.listBots().length, 1);
+});
