@@ -1,11 +1,17 @@
 import type { BrowserWindow, Session, WebContents } from "electron";
+import { fileURLToPath } from "node:url";
 import { assertHttpUrl } from "../../src/stage.ts";
 
 /** Match the application document, never every file URL or every page on the dev origin. */
 export function isAppPage(value: string, entry: string): boolean {
   try {
     const url = new URL(value), app = new URL(entry);
-    return url.protocol === app.protocol && url.host === app.host && url.pathname === app.pathname;
+    if (url.protocol !== app.protocol || url.host !== app.host) return false;
+    // Chromium may render an unreserved character literally (e.g. RUNNER~1),
+    // while Node's pathToFileURL encodes it. Compare the actual file paths.
+    return url.protocol === "file:"
+      ? fileURLToPath(url) === fileURLToPath(app)
+      : url.pathname === app.pathname;
   } catch { return false; }
 }
 
