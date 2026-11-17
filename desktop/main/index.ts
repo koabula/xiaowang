@@ -952,6 +952,17 @@ function openCall(
   let previousPresentation = "";
   let call: LiveCall | MossCall | GeminiCall;
   const handlers: MossHandlers = {
+    fitQwenImage(jpeg) {
+      let image = nativeImage.createFromBuffer(Buffer.from(jpeg, "base64"));
+      if (image.isEmpty()) throw new Error("无法读取共享画面。");
+      let data = image.toJPEG(75).toString("base64");
+      while (data.length > 256 * 1024) {
+        const size = image.getSize();
+        image = image.resize({ width: Math.max(1, Math.round(size.width * 0.75)), height: Math.max(1, Math.round(size.height * 0.75)) });
+        data = image.toJPEG(75).toString("base64");
+      }
+      return data;
+    },
     onVisual(visual) { if (!preview) send("call", { slug, callId: call.id, phase: "visual", visual }); },
     onState(state) {
       liveState = state;

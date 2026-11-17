@@ -32,6 +32,11 @@ export class VisualQueue {
     this.queue = this.queue.filter(item => { if (item.image.refId === refId) { item.resolve(false); return false; } return true; });
   }
   replay(): void { this.sent.clear(); void this.add([...this.retained.values()]); }
+  replayForSpeech(): void {
+    const view = [...this.retained.values()].find(image => image.key.startsWith("view:"));
+    const images = view ? [view] : [...this.retained.values()];
+    void this.add(images.filter(image => this.sent.delete(image.key)));
+  }
   close(): void { this.closed = true; clearTimeout(this.timer); for (const item of this.queue) item.resolve(false); this.queue = []; this.retained.clear(); }
   private flush(): void {
     clearTimeout(this.timer);
