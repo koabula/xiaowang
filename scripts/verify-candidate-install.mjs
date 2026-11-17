@@ -4,10 +4,11 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:http';
 import { createReadStream } from 'node:fs';
-import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, writeFile } from 'node:fs/promises';
+import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 import { Runtime } from '../src/runtime.ts';
 import { launchPackaged, closeTestApp } from '../e2e/launch.mjs';
@@ -87,7 +88,7 @@ function pdf() {
   return Buffer.from(body + 'trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF\n');
 }
 
-let app, restarted, profile, model, feed, activeBinary; let requests = 0, offer = false, download;
+let app, page, restarted, profile, model, feed, activeBinary; let requests = 0, offer = false, download;
 try {
   assert.equal(await exists(home), false, 'Refuse to overwrite an existing profile, even on a CI runner');
   model = createServer(async (request, response) => {
@@ -120,7 +121,7 @@ try {
     const fresh = variant === 'mac' ? await verified(candidateDir, name.replace('.zip', '.dmg')) : candidate;
     activeBinary = await install(fresh, path.join(root, variant + '-fresh'));
     app = await launchPackaged(activeBinary, ['--no-sandbox'], { ...nativeEnv, XIAOWANG_HOME: path.join(root, variant + '-fresh-home'), XIAOWANG_USER_DATA: path.join(root, variant + '-fresh-profile') }, { native: true });
-    let page = await app.firstWindow(); page.setDefaultTimeout(15000); await page.waitForFunction(() => Boolean(window.xiaowang));
+    page = await app.firstWindow(); page.setDefaultTimeout(15000); await page.waitForFunction(() => Boolean(window.xiaowang));
     let state = await page.evaluate(() => window.xiaowang.getState());
     assert.equal(state.version, version); assert.equal(state.settings.ready, false); await page.getByRole('form', { name: '设置', exact: true }).waitFor();
     await closeTestApp(app); app = undefined; checked(variant + ': fresh installation launches with a clean profile');
@@ -189,7 +190,17 @@ try {
     await rm(home, { recursive: true, force: true }); requests = 0;
   }
   report.status = 'passed'; report.stage = 'complete';
-} catch (error) { report.status = 'failed'; report.error = String(error.stack || error); console.error(report.error); process.exitCode = 1; }
+} catch (error) {
+  report.status = 'failed'; report.error = String(error.stack || error);
+  if (page && activeBinary) {
+    const resources = process.platform === 'darwin' ? path.resolve(path.dirname(activeBinary), '../Resources') : path.join(path.dirname(activeBinary), 'resources');
+    report.diagnostic = { renderer: page.url(), executable: activeBinary, canonicalExecutable: await realpath(activeBinary).catch(() => ''),
+      expectedPage: pathToFileURL(path.join(resources, 'app.asar/desktop/dist/renderer/index.html')).href,
+      canonicalPage: pathToFileURL(path.join(await realpath(resources).catch(() => resources), 'app.asar/desktop/dist/renderer/index.html')).href };
+    console.error(JSON.stringify(report.diagnostic));
+  }
+  console.error(report.error); process.exitCode = 1;
+}
 finally {
   if (restarted) await restarted.close().catch(() => {});
   if (app) await closeTestApp(app);

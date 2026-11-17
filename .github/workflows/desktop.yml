@@ -11,6 +11,12 @@ on:
         description: Existing successful build run to verify without rebuilding installers
         required: false
         type: string
+      candidate_target:
+        description: Disposable runner to verify; omit to verify every platform
+        required: false
+        default: all
+        type: choice
+        options: [all, macos-latest, macos-15-intel, windows-latest, ubuntu-latest]
 
 permissions:
   contents: read
@@ -129,7 +135,7 @@ jobs:
             release/SHA256SUMS.txt
 
   candidate-acceptance:
-    name: Accept candidate ${{ matrix.name }}
+    name: Accept candidate ${{ matrix.os }}
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_run_id != '' }}
     permissions:
       contents: read
@@ -137,19 +143,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: macOS-arm64
-            os: macos-latest
-            artifact: macOS
-          - name: macOS-Intel
-            os: macos-15-intel
-            artifact: macOS
-          - name: Windows
-            os: windows-latest
-            artifact: Windows
-          - name: Linux
-            os: ubuntu-latest
-            artifact: Linux
+        os: ${{ fromJSON(inputs.candidate_target != 'all' && inputs.candidate_target != '' && format('["{0}"]', inputs.candidate_target) || '["macos-latest","macos-15-intel","windows-latest","ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
@@ -163,7 +157,7 @@ jobs:
         with:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.candidate_run_id }}
-          pattern: XiaoWang-${{ matrix.artifact }}-*
+          pattern: XiaoWang-${{ startsWith(matrix.os, 'macos') && 'macOS' || startsWith(matrix.os, 'windows') && 'Windows' || 'Linux' }}-*
           merge-multiple: true
           path: candidate
       - name: Download original previous release
@@ -196,7 +190,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: Candidate-acceptance-${{ matrix.name }}-${{ github.run_id }}
+          name: Candidate-acceptance-${{ matrix.os }}-${{ github.run_id }}
           path: qa-report/
           retention-days: 14
 
