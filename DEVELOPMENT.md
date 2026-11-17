@@ -45,6 +45,8 @@ All regular tests import `electron` from `e2e/launch.mjs`, including restarts. T
 
 CI runs both suites under separate Xvfb desktops. Local background results must not be reported as verification of native OS focus, clipboard shortcuts or installer behavior. Use `XIAOWANG_SCREENSHOT_DIR` to retain background UI captures when inspecting rendering.
 
+Linux CI also provides a D-Bus session and an unlocked GNOME keyring. Test mode overrides Playwright's forced `basic_text` password backend with `gnome-libsecret`, so encrypted persistence is exercised without relaxing production credential rules. Background test mode reapplies `webContents.setBackgroundThrottling(false)` after navigation: the constructor preference alone can leave an initially hidden renderer throttled. Native windows remain hidden and non-focusable. The update fixture holds its final download chunk until the progress UI has been inspected, avoiding dependence on runner speed.
+
 ## Realtime provider checks
 
 Doubao Seeduplex uses its native ASR and TTS lifecycle. Audio deltas have no identifiers and are bound to the preceding `response.output_audio.started`; a cancel acknowledgement fences old audio before a new stream is admitted. `response.done` carries usage and must not be treated as OpenAI's generation-completion envelope. ASR completion uses `text`, and an ASR-start alone can be a recognizer reset rather than confirmed speech.

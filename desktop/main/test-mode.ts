@@ -14,6 +14,11 @@ declare global {
 }
 if (backgroundTest) {
   const audit = globalThis.__xwBackgroundAudit = { shown: [] as number[], focused: [] as number[], clipboard: [] as string[] };
+  app.on("web-contents-created", (_event, contents) => {
+    // The constructor option does not reactivate a renderer already hidden at
+    // its first commit. Keep frames running without showing the native window.
+    contents.on("did-finish-load", () => contents.setBackgroundThrottling(false));
+  });
   app.on("browser-window-created", (_event, window) => {
     if (window.isVisible()) audit.shown.push(window.id);
     if (window.isFocused()) audit.focused.push(window.id);

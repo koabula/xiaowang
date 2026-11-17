@@ -15,6 +15,7 @@ const nextVersion = currentVersion.replace(/\d+$/, value => String(Number(value)
 test('desktop updates: version, icon-only offer, verified download, retry and deferral for unsaved settings', { timeout: 60000 }, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'xw-updates-')); const home = path.join(root, 'home'); const profile = path.join(root, 'profile'); await mkdir(profile);
   let release = 'absent'; let attempts = 0;
+  let finishDownload; const downloadGate = new Promise(resolve => { finishDownload = resolve; });
   const platform = process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux';
   const extension = platform === 'mac' ? 'zip' : platform === 'win' ? 'exe' : 'AppImage';
   const filename = `XiaoWang-${nextVersion}-${platform}-${process.arch}.${extension}`;
@@ -28,7 +29,11 @@ test('desktop updates: version, icon-only offer, verified download, retry and de
     if (request.url.split('?')[0].endsWith(filename)) {
       attempts++; response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': bytes.length });
       const payload = Buffer.from(bytes); if (attempts === 1) payload[0] = 0;
-      for (let offset = 0; offset < payload.length; offset += 20_000) { if (response.destroyed) return; response.write(payload.subarray(offset, offset + 20_000)); await sleep(65); }
+      for (let offset = 0; offset < payload.length; offset += 20_000) {
+        if (attempts === 2 && offset + 20_000 >= payload.length) await downloadGate;
+        if (response.destroyed) return;
+        response.write(payload.subarray(offset, offset + 20_000)); await sleep(65);
+      }
       response.end(); return;
     }
     response.writeHead(404); response.end();
@@ -39,7 +44,7 @@ test('desktop updates: version, icon-only offer, verified download, retry and de
   const app = process.env.XIAOWANG_E2E_EXECUTABLE ? await launchPackaged(process.env.XIAOWANG_E2E_EXECUTABLE, ['--no-sandbox'], env) : await electron.launch({ args: ['--no-sandbox', '.'], env });
   const cacheBase = process.platform === 'darwin' ? path.join(os.homedir(), 'Library/Caches') : process.platform === 'win32' ? process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData/Local') : process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache');
   const cache = path.join(cacheBase, `xiaowang-test-${createHash('sha256').update(profile).digest('hex').slice(0, 16)}`);
-  t.after(async () => { await page.evaluate(() => window.xiaowang.settingsDirty(false)).catch(() => {}); await closeTestApp(app); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); await rm(cache, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
+  t.after(async () => { finishDownload(); await page.evaluate(() => window.xiaowang.settingsDirty(false)).catch(() => {}); await closeTestApp(app); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); await rm(cache, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
   const page = await app.firstWindow(); const errors = []; page.on('pageerror', error => errors.push(error.message)); await page.waitForSelector('.composer');
   const state = () => page.evaluate(() => window.xiaowang.getState());
   assert.equal((await state()).version, currentVersion);
@@ -81,6 +86,7 @@ test('desktop updates: version, icon-only offer, verified download, retry and de
   await updatePanel.getByRole('progressbar', { name: '更新进度' }).waitFor();
   await until(async () => (await state()).update.percent > 0);
   assert.match(await updatePanel.getByRole('status').innerText(), /正在下载更新.*%/);
+  finishDownload();
   await until(async () => (await state()).update.phase === 'ready');
   await sleep(2200);
   assert.equal((await state()).update.phase, 'ready', 'Dirty settings block installation after download');
