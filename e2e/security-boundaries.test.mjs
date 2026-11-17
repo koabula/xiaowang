@@ -152,6 +152,7 @@ test('Mac legacy profile opens without decryption and migrates on the first user
     safeStorage.decryptString = () => { throw Error('denied'); };
   });
   await assert.rejects(page.evaluate(() => window.xiaowang.restoreSettings()), /旧密钥/);
+  await assert.rejects(page.evaluate(() => window.xiaowang.saveSettings({ locale: 'en' })), /旧密钥/);
   assert.equal((await readFile(oldFile)).toString('base64'), raw);
   await assert.rejects(readFile(newFile), { code: 'ENOENT' });
   await app.evaluate(({ safeStorage }) => { safeStorage.decryptString = globalThis.restoreDecrypt; });
@@ -164,4 +165,16 @@ test('Mac legacy profile opens without decryption and migrates on the first user
   await closeTestApp(app); app = await launch();
   const restored = await (await app.firstWindow()).evaluate(() => window.xiaowang.getState());
   assert.equal(restored.settings.pendingMigration, false); assert.match(restored.settings.keyHint, /0120/);
+
+  // Return this disposable profile to its pre-migration state and replace the key manually.
+  await closeTestApp(app); await rm(newFile); app = await launch();
+  await app.evaluate(({ safeStorage }) => { safeStorage.decryptString = () => { throw Error('denied'); }; });
+  const replacement = await app.firstWindow();
+  await replacement.locator('button.settings').click();
+  await replacement.getByPlaceholder('deepseek-chat').fill('new-model');
+  await replacement.getByLabel('模型密钥', { exact: true }).fill('replacement-4321');
+  await replacement.getByRole('button', { name: '保存并进入' }).click();
+  await replacement.locator('.settings-modal').waitFor({ state: 'detached' });
+  assert.match((await replacement.evaluate(() => window.xiaowang.getState())).settings.keyHint, /4321/);
+  assert.equal((await readFile(oldFile)).toString('base64'), raw);
 });

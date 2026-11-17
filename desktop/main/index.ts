@@ -636,6 +636,10 @@ function registerIpc(): void {
   });
   handle("settings:restore", () => { useSavedCredentials(); return settingsView(); });
   handle("settings:save", (_event, patch: SecretPatch) => {
+    if (needsKeyMigration() && !patch.apiKey?.trim() && !patch.realtimeKey?.trim()
+      && !Object.values(patch.realtimeProfiles ?? {}).some(profile => profile.key?.trim())) {
+      throw new Error("旧密钥尚未读取。请重新打开设置恢复旧密钥，或填写新密钥后保存。");
+    }
     const draft = mergeSettings(secrets, patch);
     assertRealtimeAvailable(draft.realtimeService);
     savedSecrets = mergeSecrets(savedSecrets, settingsPatchForSave(secrets, patch));
