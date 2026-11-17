@@ -1,0 +1,72 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { Runtime } from "../src/runtime.ts";
+import { JobQueue } from "../src/jobs.ts";
+import { VoiceDelivery, jobPosted } from "../src/voice-delivery.ts";
+
+test("forward the preceding full spoken answer once, including duplicate requests and reopening the store", t => {
+  const directory = mkdtempSync(path.join(tmpdir(), "xw-post-reply-"));
+  let runtime = Runtime.open(directory);
+  t.after(() => { runtime.close(); rmSync(directory, { recursive: true, force: true }); });
+  const botId = runtime.activeBot().id;
+  const queue = new JobQueue(runtime.store, async () => { throw Error("Forwarding must not run an LLM"); });
+  let notifications = 0;
+  const delivery = new VoiceDelivery(runtime.store, queue, botId, () => "call", () => {
+    assert.ok(runtime.store.getEvents(botId).at(-1)?.event.type === "voice_chat_post");
+    notifications++;
+  });
+  const text = "完整的语音回答。".repeat(600);
+  const seal = (body: string) => runtime.store.append(botId, { type: "voice_line", callId: "call", who: "assistant", text: body }).id;
+  const answer = seal(text);
+  delivery.assistantLine(answer);
+  delivery.userLine("发给我一份新的报告。");
+  assert.equal(notifications, 0);
+  assert.match(delivery.userLine("你直接发到我们的聊天对话中就行。")!, /已发到/);
+  delivery.assistantLine(seal("已发送。"));
+  assert.match(delivery.userLine("把刚才的回答发到聊天。")!, /已发到/);
+  assert.match(delivery.post("reply"), /已发到/);
+  assert.equal(notifications, 1);
+  runtime.close();
+  runtime = Runtime.open(directory);
+  assert.equal(runtime.store.postVoiceReply(botId, "call", answer), false);
+  assert.throws(() => runtime.store.postVoiceReply(botId, "another-call", answer));
+  const records = runtime.store.getEvents(botId);
+  assert.equal(records.filter(record => record.event.type === "voice_chat_post").length, 1);
+  assert.deepEqual(records.find(record => record.id === answer)?.event, { type: "voice_line", callId: "call", who: "assistant", text });
+});
+
+test("post a previously completed job by reference; pending, failed and other calls cannot confirm a delivery", async t => {
+  const directory = mkdtempSync(path.join(tmpdir(), "xw-post-result-"));
+  const runtime = Runtime.open(directory);
+  t.after(() => { runtime.close(); rmSync(directory, { recursive: true, force: true }); });
+  const botId = runtime.activeBot().id;
+  const queue = new JobQueue(runtime.store, async job => {
+    if (job.task === "failure") throw Error("资料读取失败");
+    const text = "|数据|数值|\n|---|---|\n|样本|42|\n" + "完整正文".repeat(2000);
+    const result = runtime.store.append(botId, { type: "assistant_turn", channel: "text", text, jobId: job.id, toolCalls: [] });
+    return { text, resultEventId: result.id };
+  });
+  const enqueue = (task: string, call: string) => queue.enqueue({ botId, channel: "voice", task, originCallId: call });
+  const delivery = new VoiceDelivery(runtime.store, queue, botId, () => "call", () => {});
+  const other = enqueue("other", "another-call");
+  const job = enqueue("table", "call");
+  assert.match(delivery.post("job", other.id), /没有找到/);
+  queue.start();
+  assert.equal(jobPosted(await queue.wait(job.id)), false);
+  delivery.userLine("把结果贴到聊天。");
+  assert.match(delivery.post("job", job.id), /已发到/);
+  assert.ok(queue.get(job.id).result.endsWith("完整正文".repeat(2000)));
+  assert.equal(jobPosted(queue.get(job.id)), true);
+  const count = runtime.store.getEvents(botId).length;
+  delivery.post("job", job.id);
+  assert.equal(runtime.store.getEvents(botId).length, count);
+  const failed = enqueue("failure", "call");
+  delivery.userLine("请把任务结果发到聊天。");
+  assert.match(delivery.post("job", failed.id), /完成后/);
+  await queue.wait(failed.id);
+  assert.match(delivery.post("job", failed.id), /资料读取失败/);
+  assert.equal(jobPosted(queue.get(failed.id)), false);
+});

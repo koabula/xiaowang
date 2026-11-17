@@ -29,6 +29,7 @@ export interface TaskJob {
   title?: string;
   originEventId?: number;
   originCallId?: string;
+  deliverToChat?: boolean;
   resultEventId?: number;
   artifacts: string[];
 }
@@ -77,6 +78,7 @@ export type SessionEvent =
   | { type: "baseline"; text: string; fromBotId?: string }
   | { type: "artifact"; path: string; bytes: number }
   | { type: "job"; job: TaskJob }
+  | { type: "voice_chat_post"; sourceEventId: number }
   | { type: "voice_line"; callId: string; who: "user" | "assistant"; text: string; itemId?: string }
   | { type: "voice_tool_output"; callId: string; toolCallId: string }
   | { type: "presentation"; state: import("./presentation.ts").PresentationState }

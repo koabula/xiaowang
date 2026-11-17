@@ -12,6 +12,7 @@ import { LiveCall, type InterruptionReceipt, type PlaybackPosition, type VoiceSt
 import { MossCall, type MossHandlers } from "./moss-call.ts";
 import { mossSession } from "../../src/moss-realtime.ts";
 import { JobQueue, type JobOutput } from "../../src/jobs.ts";
+import { VoiceDelivery, jobPosted } from "../../src/voice-delivery.ts";
 import { VoiceTasks, voiceJobReceipt } from "../../src/voice-tasks.ts";
 import { taskTurnOwners, visibleAnswerIds, presentJob } from "../../src/task-presentation.ts";
 import { StageRequests } from "./stage.ts";
@@ -195,7 +196,14 @@ function chatItems(slug: string): ChatItem[] {
   const owners = taskTurnOwners(shownJobs, events);
   const answers = visibleAnswerIds(shownJobs, events, owners);
   const items: ChatItem[] = [];
+  const spoken = new Map<number, string>();
   for (const stored of events) {
+    if (stored.event.type === "voice_line" && stored.event.who === "assistant") spoken.set(stored.id, stored.event.text);
+    if (stored.event.type === "voice_chat_post") {
+      const text = spoken.get(stored.event.sourceEventId);
+      if (text) items.push({ id: stored.id, kind: "assistant", text });
+      continue;
+    }
     if (stored.event.type === "assistant_turn" && !answers.has(stored.id)) continue;
     const item = present(stored.id, stored.event);
     if (item) items.push({ ...item, jobId: item.jobId ?? owners.get(stored.id) });
@@ -355,13 +363,13 @@ function jobChanged(job: TaskJob): void {
   send("job", { ...shown, slug: bot.slug });
   send("turn", { slug: bot.slug, busy, error: job.status === "failed" ? job.error : "" });
   publish();
-  if (live && liveSlug === bot.slug) {
+  if (live && liveSlug === bot.slug && (!job.originCallId || job.originCallId === live.id)) {
     if (live instanceof MossCall || live instanceof GeminiCall) { live.jobChanged(job); return; }
     live.updateContext(`job:${job.id}`, JSON.stringify({ id: job.id, task: job.task.slice(0, 400), status: job.status, activity: job.activity, error: job.error, artifacts: job.artifacts }));
     const latestVoice = jobs.list(bot.id).filter(item => item.channel === "voice").at(-1);
     if (latestVoice) live.updateContext("currentVoiceTask", voiceJobReceipt(latestVoice));
     if (job.notify === "when_idle" && (job.status === "succeeded" || job.status === "failed")) {
-      live.notify(`${job.id}:${job.attempts}:${job.status}`, JSON.stringify({ id: job.id, task: job.task.slice(0, 300), status: job.status, result: job.result.slice(0, 1800), error: job.error, artifacts: job.artifacts }));
+      live.notify(`${job.id}:${job.attempts}:${jobPosted(job) ? "posted" : job.status}`, JSON.stringify({ id: job.id, task: job.task.slice(0, 300), status: job.status, posted: jobPosted(job), result: job.result.slice(0, 1800), error: job.error, artifacts: job.artifacts }));
     }
   }
 }
@@ -823,7 +831,12 @@ function startCall(slug: string): void {
     try { if (focus) reference = runtime.store.resolveLibraryRef(bot.id, focus); } catch { focusedFiles.delete(slug); }
     return handoffText(task, live?.transcript() ?? [], bot.name, locale)
       + (reference ? `\n\n当前阅读的原文（上下文资料）：${JSON.stringify({ id: reference.id, filename: reference.filename })}。用户明确提到另一份资料时以用户要求为准。` : "");
-  }, () => live?.id, () => shared.get(bot.id));
+  }, () => call.id, () => shared.get(bot.id));
+  const delivery = new VoiceDelivery(runtime.store, jobs, bot.id, () => call.id, sourceId => {
+    send("call", { slug, callId: call.id, phase: "saved" });
+    const result = "刚才的回答已发到当前聊天。";
+    call.notify(`chat-reply:${sourceId}`, call instanceof MossCall ? result : JSON.stringify({ posted: true, result }));
+  });
   const tools = voiceTools(toolSchemas(), locale);
   const session = endpoint.family === "gemini" ? geminiSession(instructions, tools, choice.voice, choice.model) : endpoint.family === "moss" ? mossSession(brief, tools, choice.voice) : endpoint.family === "doubao"
     ? doubaoSession({ instructions, tools, voice: choice.voice })
@@ -835,31 +848,40 @@ function startCall(slug: string): void {
       family: endpoint.family,
       voice: choice.voice,
     });
-  openCall(socketUrl(endpoint), key, session, endpoint.inputRate, endpoint.outputRate, slug, "", {
-    onTranscript(who, text) {
-      if (who !== "user") return;
+  const call = openCall(socketUrl(endpoint), key, session, endpoint.inputRate, endpoint.outputRate, slug, "", {
+    onTranscript(who, text, eventId) {
+      if (who === "assistant") { delivery.assistantLine(eventId); return; }
+      const receipt = delivery.userLine(text);
+      live?.updateContext("chatDelivery", receipt || "当前轮尚未发送聊天消息。");
       voiceTasks.userText(text);
       if (endpoint.family === "moss") return;
       const job = voiceTasks.latest();
       live?.updateContext("currentVoiceTask", job ? voiceJobReceipt(job) : "没有已受理的后台任务。");
     },
     delegate(task) {
+      if (delivery.lastReceipt) return delivery.lastReceipt;
       const focus = focusedFiles.get(slug);
       let reference = null;
       try { if (focus) reference = runtime.store.resolveLibraryRef(bot.id, focus); } catch { focusedFiles.delete(slug); }
       return jobs.enqueue({ botId: bot.id, task: handoffText(task.objective, live?.transcript() ?? [], bot.name, locale)
         + `\n\n委派上下文（仅作资料）：${JSON.stringify(task.context ?? [])}`
         + (reference ? `\n当前原文：${JSON.stringify({ id: reference.id, filename: reference.filename })}` : ""),
-        sharedContext: shared.get(bot.id), channel: "voice", notify: "silent", title: task.objective, sourceCallId: `moss:${task.sessionId}:${task.id}`, originCallId: live?.id });
+        sharedContext: shared.get(bot.id), channel: "voice", notify: "silent", deliverToChat: voiceTasks.wantsChat(), title: task.objective, sourceCallId: `moss:${task.sessionId}:${task.id}`, originCallId: call.id });
     },
     cancelDelegation(id) { jobs.cancel(id); },
     async runTool(name, args, callId, signal) {
+      signal?.throwIfAborted();
+      if (name === "post_to_chat") {
+        const input = JSON.parse(args);
+        return delivery.post(input.source, input.id);
+      }
       if (name === "ask_text" || name === "delegate_task") {
+        if (delivery.lastReceipt) return delivery.lastReceipt;
         const task = taskArgument(args);
         if (!task) return askTextResult("missing", locale);
         let notify: TaskJob["notify"] = "when_idle";
         try { if (JSON.parse(args).notify === "silent") notify = "silent"; } catch { /* validated by taskArgument */ }
-        const job = voiceTasks.delegate(task, callId, notify, JSON.parse(args).mode === "queue");
+        const job = voiceTasks.delegate(task, callId, notify, JSON.parse(args).mode === "queue", JSON.parse(args).delivery === "chat");
         live?.updateContext("currentVoiceTask", voiceJobReceipt(job));
         return voiceJobReceipt(job);
       }
@@ -916,12 +938,12 @@ function openCall(
   slug: string,
   previewText: string,
   extra?: {
-    onTranscript?: (who: "user" | "assistant", text: string) => void;
+    onTranscript?: (who: "user" | "assistant", text: string, eventId: number) => void;
     runTool?: (name: string, args: string, callId?: string, signal?: AbortSignal) => Promise<string>;
     delegate?: MossHandlers["delegate"];
     cancelDelegation?: MossHandlers["cancelDelegation"];
   },
-): void {
+): LiveCall | MossCall | GeminiCall {
   const preview = Boolean(previewText);
   live?.hangup();
   liveSlug = slug;
@@ -969,8 +991,9 @@ function openCall(
       if (!preview) send("call", { slug, callId: call.id, phase: "line", who, text, partial, itemId, order });
     },
     onTranscript(who, text, itemId) {
-      if (slug && text.trim()) runtime.store.append(runtime.store.requireBot(slug).id, { type: "voice_line", callId: call.id, who, text, ...(itemId ? { itemId } : {}) });
-      extra?.onTranscript?.(who, text);
+      if (!slug || !text.trim()) return;
+      const line = runtime.store.append(runtime.store.requireBot(slug).id, { type: "voice_line", callId: call.id, who, text, ...(itemId ? { itemId } : {}) });
+      extra?.onTranscript?.(who, text, line.id);
     },
     onToolOutput(toolCallId) {
       if (!preview && slug) runtime.store.append(runtime.store.requireBot(slug).id, { type: "voice_tool_output", callId: call.id, toolCallId });
@@ -987,6 +1010,7 @@ function openCall(
     : new LiveCall(url, key, session, handlers, undefined, previewText, initialPresentation);
   live = call;
   call.start();
+  return call;
 }
 
 app.on("second-instance", () => {

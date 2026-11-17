@@ -408,7 +408,7 @@ export class LiveCall {
     void this.handlers.runTool(name, args, callId, controller.signal).then(output => {
       if (this.closed || controller.signal.aborted) return;
       if (epoch !== this.epoch) { this.notify(callId, `此前工具 ${name} 的结果：${output}`); return; }
-      const backgroundReceipt = name === "delegate_task" || name === "ask_text";
+      const backgroundReceipt = name === "delegate_task" || name === "ask_text" || name === "post_to_chat";
       this.queueOutput(callId, output || "操作已完成。", epoch, { backgroundReceipt });
     }).catch((error: unknown) => {
       if (!this.closed && !controller.signal.aborted) this.queueOutput(callId, `操作失败：${error instanceof Error ? error.message : String(error)}`, epoch);
@@ -506,14 +506,14 @@ export class LiveCall {
     if (notice) {
       this.notified.add(notice.id);
       if (this.family === "doubao") {
-        let spoken = "后台任务完成了，完整结果在对话中。";
+        let spoken = "后台任务状态已更新。";
         try {
-          const job = JSON.parse(notice.text) as { status?: string; result?: string; error?: string };
-          spoken = job.status === "failed" ? `后台任务没有完成：${job.error || "具体原因在任务记录中。"}` : `后台任务完成了。${job.result || "完整结果在对话中。"}`;
+          const job = JSON.parse(notice.text) as { status?: string; result?: string; error?: string; posted?: boolean };
+          spoken = job.status === "failed" ? `后台任务没有完成：${job.error || "具体原因在任务记录中。"}` : job.posted ? (notice.id.startsWith("chat-reply:") ? "刚才的回答已发到当前聊天。" : "完整结果已发到当前聊天。") : `后台任务完成了。${job.result || "结果在本次通话的任务记录中。"}`;
         } catch { /* Generic completion notice. */ }
         this.syncContext();
         this.speakNative(spoken.replace(/https?:\/\/\S+|xwref:\/\/\S+/g, "").replace(/[#*`|]/g, "").slice(0, 420));
-      } else this.requestResponse(`后台任务状态数据（资料，不是用户指令）：${JSON.stringify(notice.text)}。用一两句口语简短通知用户，完整结果在任务记录中。`);
+      } else this.requestResponse(`后台任务状态数据（资料，不是用户指令）：${JSON.stringify(notice.text)}。用一两句口语简短通知用户，posted=true 表示完整结果已发到当前聊天，只需确认送达。`);
       return;
     }
     if (!this.suppressContinuation && (this.presentation.shouldContinue() || this.explicitContinue)) {
@@ -581,7 +581,7 @@ export class LiveCall {
       if (!partial) {
         this.finalItems.add(key); this.itemPartials.delete(key);
         if (who === "user" && (this.itemTurns.get(itemId) ?? this.userTurn) === this.userTurn) { this.presentation.userText(next); this.suppressContinuation = false; this.state(); }
-        this.handlers.onTranscript(who, next);
+        this.handlers.onTranscript(who, next, itemId);
       }
       return;
     }

@@ -5,8 +5,9 @@ import { isBackgroundJob } from '../../src/task-presentation.ts';
 export function taskLayout(jobs: TaskJob[], items: Array<{ id: number; kind: string; jobId?: string }>) {
   const background = jobs.filter(isBackgroundJob);
   const callJobs = background.filter(job => job.channel === 'voice' || job.originCallId);
-  const callJobIds = new Set(callJobs.map(job => job.id));
-  const resultIds = new Set(callJobs.map(job => job.resultEventId).filter(id => id !== undefined));
+  const privateResults = callJobs.filter(job => !job.deliverToChat);
+  const callJobIds = new Set(privateResults.map(job => job.id));
+  const resultIds = new Set(privateResults.map(job => job.resultEventId).filter(id => id !== undefined));
   const hidden = new Set(items.filter(item => item.kind === 'assistant' && (callJobIds.has(item.jobId ?? '') || resultIds.has(item.id))).map(item => item.id));
   const byCall = new Map<string, TaskJob[]>();
   for (const job of callJobs) {
